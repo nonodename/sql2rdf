@@ -1,6 +1,11 @@
 #include <iostream>
 #include <serd/serd.h>
 
+// r2rml mapping classes (scaffolding)
+#include "r2rml/R2RMLMapping.h"
+#include "r2rml/R2RMLParser.h"
+
+
 int main() {
     std::cout << "Hello SQL2RDF++" << std::endl;
 

@@ -7,6 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Specify source files
 set(SOURCES
     src/main.cpp
+    src/r2rml/r2rml_scaffolding.cpp
+    src/r2rml/SQLValue.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})
