@@ -133,3 +133,25 @@ TEST_CASE("Concrete TermMap derivatives construct/destruct") {
     (void)c; (void)col; (void)tt;
     SUCCEED("constructed concrete term map types");
 }
+
+TEST_CASE("TermMap isValid methods") {
+    // ConstantTermMap valid/invalid
+    ConstantTermMap cnull; // default constructed, constantValue is null
+    REQUIRE_FALSE(cnull.isValid());
+    const uint8_t uri[] = "urn:const";
+    SerdNode node = serd_node_from_string(SERD_URI, uri);
+    ConstantTermMap cvalid(node);
+    REQUIRE(cvalid.isValid());
+
+    // ColumnTermMap valid/invalid
+    ColumnTermMap colvalid("col");
+    ColumnTermMap colinvalid("");
+    REQUIRE(colvalid.isValid());
+    REQUIRE_FALSE(colinvalid.isValid());
+
+    // TemplateTermMap valid/invalid
+    TemplateTermMap ttvalid("{col}");
+    TemplateTermMap ttinvalid("");
+    REQUIRE(ttvalid.isValid());
+    REQUIRE_FALSE(ttinvalid.isValid());
+}

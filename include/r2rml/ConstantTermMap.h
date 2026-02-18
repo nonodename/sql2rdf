@@ -16,6 +16,11 @@ public:
     SerdNode generateRDFTerm(const SQLRow& row,
                              const SerdEnv& env) const override;
 
+    bool isValid() const override {
+        // constantValue must not be a null SerdNode
+        return constantValue.type != 0;
+    }
+
     SerdNode constantValue{0};
 };
 

@@ -29,6 +29,12 @@ public:
     virtual SerdNode generateRDFTerm(const SQLRow& row,
                                      const SerdEnv& env) const = 0;
 
+    /**
+     * Validate that the term map instance has required properties and correct cardinality.
+     * To be overridden by subclasses for specific validation logic.
+     */
+    virtual bool isValid() const { return true; }
+
     TermType termType{TermType::IRI};
     // optional fields are implemented with unique_ptr for C++11
     std::unique_ptr<std::string> languageTag;

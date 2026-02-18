@@ -19,6 +19,11 @@ public:
     SerdNode generateRDFTerm(const SQLRow& row,
                              const SerdEnv& env) const override;
 
+    bool isValid() const override {
+        // templateString must not be empty
+        return !templateString.empty();
+    }
+
     std::string templateString;
 };
 
