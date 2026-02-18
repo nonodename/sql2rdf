@@ -1,19 +1,38 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.5...3.29)
 project(SQL2RDF++ LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+include(FetchContent)
 
-# Specify source files
-set(SOURCES
-    src/main.cpp
-    src/r2rml/r2rml_scaffolding.cpp
-    src/r2rml/SQLValue.cpp
+FetchContent_Declare(
+  Catch2
+  GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+  GIT_TAG v3.13.0 # or latest release
 )
 
-add_executable(${PROJECT_NAME} ${SOURCES})
+FetchContent_MakeAvailable(Catch2)
 
-# Include directories
+# Create your test executable from all tests in the `tests/` folder
+file(GLOB TEST_SOURCES "${CMAKE_SOURCE_DIR}/tests/*.cpp")
+add_executable(tests ${TEST_SOURCES})
+
+# Include headers for tests and link to Catch2 and serd
+target_include_directories(tests PRIVATE include ${CMAKE_SOURCE_DIR}/external/serd/include)
+target_link_libraries(tests PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml serd m)
+
+# Build r2rml implementation as a static library so tests can link it
+set(R2RML_SOURCES
+  src/r2rml/r2rml_scaffolding.cpp
+  src/r2rml/SQLValue.cpp
+)
+add_library(sql2rdf_r2rml STATIC ${R2RML_SOURCES})
+target_include_directories(sql2rdf_r2rml PUBLIC include ${CMAKE_SOURCE_DIR}/external/serd/include)
+target_link_libraries(sql2rdf_r2rml PUBLIC serd m)
+
+# Specify main executable sources and link to the library
+add_executable(${PROJECT_NAME} src/main.cpp)
+target_link_libraries(${PROJECT_NAME} PRIVATE sql2rdf_r2rml)
 target_include_directories(${PROJECT_NAME} PRIVATE include)
 
 # ----------------------------------------------------------------------------
