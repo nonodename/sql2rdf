@@ -182,6 +182,131 @@ static TriplesMap* findById(R2RMLMapping& m, const std::string& fragment) {
 }
 
 // ---------------------------------------------------------------------------
+// Negative tests – invalid Turtle (Serd parse errors)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Invalid Turtle - unclosed string literal: Serd error propagates as null logicalTable") {
+    // Serd reports "line end in short string" to stderr and partially recovers:
+    // the rr:logicalTable triple is emitted (so TriplesMap1 is identified) but
+    // the rr:tableName value inside the blank node is malformed.  The blank node
+    // ends up with no recognised predicates, so buildLogicalTable() returns
+    // nullptr – the Serd error visibly degrades the mapping.
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "invalid_turtle_unclosed_literal.ttl");
+
+    REQUIRE(mapping.triplesMaps.size() == 1);
+    TriplesMap* tm = findById(mapping, "TriplesMap1");
+    REQUIRE(tm != nullptr);
+    REQUIRE(tm->logicalTable == nullptr);
+}
+
+TEST_CASE("Invalid Turtle - undeclared prefix produces empty mapping") {
+    // The rr: prefix is used but never declared with @prefix.  Serd reports an
+    // error; even if it attempts recovery, expandNode() cannot resolve CURIEs
+    // to the full R2RML namespace so no resource is identified as a TriplesMap.
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "invalid_turtle_undeclared_prefix.ttl");
+    REQUIRE(mapping.triplesMaps.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Negative tests – valid RDF, but not valid R2RML
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Valid RDF with no R2RML predicates produces empty mapping") {
+    // The file is syntactically correct Turtle describing an OWL ontology, but
+    // contains no rr:* predicates.  No resource qualifies as a TriplesMap.
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "valid_rdf_no_r2rml_predicates.ttl");
+    REQUIRE(mapping.triplesMaps.empty());
+}
+
+TEST_CASE("Valid R2RML with unrecognised logical table predicate yields null logicalTable") {
+    // The logicalTable blank node uses rr:table (wrong) instead of rr:tableName.
+    // buildLogicalTable() finds neither rr:tableName nor rr:sqlQuery and must
+    // return nullptr.  The TriplesMap itself is still created.
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "valid_r2rml_wrong_logical_table_pred.ttl");
+
+    REQUIRE(mapping.triplesMaps.size() == 1);
+    TriplesMap* tm = findById(mapping, "TriplesMap1");
+    REQUIRE(tm != nullptr);
+    REQUIRE(tm->logicalTable == nullptr);
+
+    // The subject map (rr:template) and POM were otherwise correct.
+    REQUIRE(tm->subjectMap != nullptr);
+    REQUIRE(tm->predicateObjectMaps.size() == 1);
+}
+
+TEST_CASE("Valid R2RML with unresolved parentTriplesMap yields null parent pointer") {
+    // rr:parentTriplesMap references <#GhostTriplesMap> which does not appear
+    // anywhere in the file.  After phase-3 reference resolution the
+    // ReferencingObjectMap must have parentTriplesMap == nullptr.
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "valid_r2rml_unresolved_parent.ttl");
+
+    REQUIRE(mapping.triplesMaps.size() == 1);
+    TriplesMap* tm = findById(mapping, "TriplesMap1");
+    REQUIRE(tm != nullptr);
+
+    REQUIRE(tm->predicateObjectMaps.size() == 1);
+    PredicateObjectMap& pom = *tm->predicateObjectMaps[0];
+    REQUIRE(pom.objectMaps.size() == 1);
+
+    auto* rom = dynamic_cast<ReferencingObjectMap*>(pom.objectMaps[0].get());
+    REQUIRE(rom != nullptr);
+    REQUIRE(rom->parentTriplesMap == nullptr);
+
+    // The join condition was still parsed correctly.
+    REQUIRE(rom->joinConditions.size() == 1);
+    REQUIRE(rom->joinConditions[0].childColumn  == "DEPTNO");
+    REQUIRE(rom->joinConditions[0].parentColumn == "DEPTNO");
+}
+
+TEST_CASE("Valid R2RML with unrecognised objectMap predicate produces empty objectMaps") {
+    // The objectMap blank node has rr:unknownProperty which buildTermMap()
+    // does not recognise.  It returns nullptr; the parser warns and the POM's
+    // objectMaps vector must remain empty.
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "valid_r2rml_empty_object_map.ttl");
+
+    REQUIRE(mapping.triplesMaps.size() == 1);
+    TriplesMap* tm = findById(mapping, "TriplesMap1");
+    REQUIRE(tm != nullptr);
+
+    REQUIRE(tm->predicateObjectMaps.size() == 1);
+    PredicateObjectMap& pom = *tm->predicateObjectMaps[0];
+
+    // The predicate (rr:predicate shortcut) was valid.
+    REQUIRE(pom.predicateMaps.size() == 1);
+    // The object map had no recognised property, so nothing was added.
+    REQUIRE(pom.objectMaps.empty());
+}
+
+TEST_CASE("Valid R2RML with literal rr:predicate value produces empty predicateMaps") {
+    // rr:predicate must have a URI as its object.  The file supplies a plain
+    // string literal instead.  The parser only promotes URI-typed objects, so
+    // the literal is silently ignored and predicateMaps must be empty.
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "valid_r2rml_literal_predicate.ttl");
+
+    REQUIRE(mapping.triplesMaps.size() == 1);
+    TriplesMap* tm = findById(mapping, "TriplesMap1");
+    REQUIRE(tm != nullptr);
+
+    REQUIRE(tm->predicateObjectMaps.size() == 1);
+    PredicateObjectMap& pom = *tm->predicateObjectMaps[0];
+
+    // The literal value must have been dropped.
+    REQUIRE(pom.predicateMaps.empty());
+    // The column object map was valid.
+    REQUIRE(pom.objectMaps.size() == 1);
+    auto* obj = dynamic_cast<ColumnTermMap*>(pom.objectMaps[0].get());
+    REQUIRE(obj != nullptr);
+    REQUIRE(obj->columnName == "ENAME");
+}
+
+// ---------------------------------------------------------------------------
 // Example 1 – basic table mapping with template subject and column object
 // ---------------------------------------------------------------------------
 

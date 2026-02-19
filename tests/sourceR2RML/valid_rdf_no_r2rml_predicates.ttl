@@ -1,0 +1,16 @@
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#>.
+@prefix owl:  <http://www.w3.org/2002/07/owl#>.
+@prefix ex:   <http://example.com/ns#>.
+
+# Perfectly valid RDF/Turtle, but it contains no rr:* predicates whatsoever.
+# The parser must recognise that none of these resources are TriplesMaps and
+# return an empty mapping.
+
+ex:Employee a owl:Class ;
+    rdfs:label "Employee" ;
+    rdfs:comment "Represents an employee in the organisation." .
+
+ex:name a owl:DatatypeProperty ;
+    rdfs:domain ex:Employee ;
+    rdfs:range  rdfs:Literal ;
+    rdfs:label  "name" .

@@ -1,0 +1,17 @@
+@prefix ex: <http://example.com/ns#>.
+
+# The rr: prefix is never declared.  Serd will report an error for every CURIE
+# that uses it.  Even if Serd emits statements, expandNode() cannot expand the
+# CURIEs to the full R2RML namespace URI, so no resource will be identified as
+# a TriplesMap.
+
+<#TriplesMap1>
+    rr:logicalTable [ rr:tableName "EMP" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/employee/{EMPNO}";
+        rr:class ex:Employee;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:name;
+        rr:objectMap [ rr:column "ENAME" ];
+    ].

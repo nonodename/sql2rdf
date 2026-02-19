@@ -1,0 +1,18 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# rr:predicate shortcut must have a URI as its object.  Here its value is a
+# plain string literal instead.  The parser only promotes URI-typed objects to
+# ConstantTermMap predicates, so the literal must be silently ignored and
+# predicateMaps must be empty for this POM.
+
+<#TriplesMap1>
+    rr:logicalTable [ rr:tableName "EMP" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/employee/{EMPNO}";
+        rr:class ex:Employee;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate "not-a-uri";
+        rr:objectMap [ rr:column "ENAME" ];
+    ].
