@@ -2,6 +2,15 @@
 
 #include <serd/serd.h>
 
+#include <algorithm>
+#include <map>
+#include <string>
+
+// Fallback for IDE tooling; CMake overrides this via target_compile_definitions.
+#ifndef SOURCE_R2RML_DIR
+#define SOURCE_R2RML_DIR ""
+#endif
+
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/JoinCondition.h"
 #include "r2rml/TemplateTermMap.h"
@@ -154,4 +163,211 @@ TEST_CASE("TermMap isValid methods") {
     TemplateTermMap ttinvalid("");
     REQUIRE(ttvalid.isValid());
     REQUIRE_FALSE(ttinvalid.isValid());
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for parsed-mapping tests
+// ---------------------------------------------------------------------------
+
+static std::string nodeUri(const SerdNode& n) {
+    return std::string(reinterpret_cast<const char*>(n.buf), n.n_bytes);
+}
+
+static TriplesMap* findById(R2RMLMapping& m, const std::string& fragment) {
+    for (auto& tm : m.triplesMaps) {
+        if (tm->id.find(fragment) != std::string::npos)
+            return tm.get();
+    }
+    return nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// Example 1 – basic table mapping with template subject and column object
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Example 1 - EMP table with template subject and column object") {
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example1.ttl");
+
+    REQUIRE(mapping.triplesMaps.size() == 1);
+
+    TriplesMap* tm = findById(mapping, "TriplesMap1");
+    REQUIRE(tm != nullptr);
+
+    // Logical table: rr:tableName "EMP"
+    auto* table = dynamic_cast<BaseTableOrView*>(tm->logicalTable.get());
+    REQUIRE(table != nullptr);
+    REQUIRE(table->tableName == "EMP");
+
+    // Subject map carries rr:class ex:Employee
+    REQUIRE(tm->subjectMap != nullptr);
+    REQUIRE(tm->subjectMap->classIRIs.size() == 1);
+    REQUIRE(tm->subjectMap->classIRIs[0] == "http://example.com/ns#Employee");
+
+    // One predicate-object map: ex:name -> rr:column "ENAME"
+    REQUIRE(tm->predicateObjectMaps.size() == 1);
+    PredicateObjectMap& pom = *tm->predicateObjectMaps[0];
+    REQUIRE(pom.predicateMaps.size() == 1);
+    REQUIRE(pom.objectMaps.size() == 1);
+
+    auto* pred = dynamic_cast<ConstantTermMap*>(pom.predicateMaps[0].get());
+    REQUIRE(pred != nullptr);
+    REQUIRE(nodeUri(pred->constantValue) == "http://example.com/ns#name");
+
+    auto* obj = dynamic_cast<ColumnTermMap*>(pom.objectMaps[0].get());
+    REQUIRE(obj != nullptr);
+    REQUIRE(obj->columnName == "ENAME");
+}
+
+// ---------------------------------------------------------------------------
+// Example 2 – SQL view with three predicate-object maps
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Example 2 - department SQL view with three predicate-object maps") {
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example2.ttl");
+
+    REQUIRE(mapping.triplesMaps.size() == 1);
+
+    TriplesMap* tm = findById(mapping, "TriplesMap2");
+    REQUIRE(tm != nullptr);
+
+    // Logical table: R2RMLView whose query selects DEPTNO
+    auto* view = dynamic_cast<R2RMLView*>(tm->logicalTable.get());
+    REQUIRE(view != nullptr);
+    REQUIRE(view->sqlQuery.find("SELECT DEPTNO") != std::string::npos);
+
+    // Subject map carries rr:class ex:Department
+    REQUIRE(tm->subjectMap != nullptr);
+    REQUIRE(tm->subjectMap->classIRIs.size() == 1);
+    REQUIRE(tm->subjectMap->classIRIs[0] == "http://example.com/ns#Department");
+
+    // Three predicate-object maps, each with one ColumnTermMap object
+    REQUIRE(tm->predicateObjectMaps.size() == 3);
+
+    std::vector<std::string> colNames;
+    for (auto& pom : tm->predicateObjectMaps) {
+        REQUIRE(pom->objectMaps.size() == 1);
+        auto* col = dynamic_cast<ColumnTermMap*>(pom->objectMaps[0].get());
+        REQUIRE(col != nullptr);
+        colNames.push_back(col->columnName);
+    }
+
+    REQUIRE(std::find(colNames.begin(), colNames.end(), "DNAME") != colNames.end());
+    REQUIRE(std::find(colNames.begin(), colNames.end(), "LOC")   != colNames.end());
+    REQUIRE(std::find(colNames.begin(), colNames.end(), "STAFF") != colNames.end());
+}
+
+// ---------------------------------------------------------------------------
+// Example 3 – referencing object map with join condition
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Example 3 - referencing object map joining employee to department") {
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example3.ttl");
+
+    REQUIRE(mapping.triplesMaps.size() == 2);
+
+    // TriplesMap2: the department view (same structure as example 2)
+    TriplesMap* tm2 = findById(mapping, "TriplesMap2");
+    REQUIRE(tm2 != nullptr);
+    REQUIRE(dynamic_cast<R2RMLView*>(tm2->logicalTable.get()) != nullptr);
+
+    // TriplesMap1: no logical table or subject map of its own;
+    // one POM whose sole object is a ReferencingObjectMap back to TriplesMap2
+    TriplesMap* tm1 = findById(mapping, "TriplesMap1");
+    REQUIRE(tm1 != nullptr);
+    REQUIRE(tm1->logicalTable == nullptr);
+    REQUIRE(tm1->subjectMap == nullptr);
+
+    REQUIRE(tm1->predicateObjectMaps.size() == 1);
+    PredicateObjectMap& pom = *tm1->predicateObjectMaps[0];
+    REQUIRE(pom.predicateMaps.size() == 1);
+    REQUIRE(pom.objectMaps.size() == 1);
+
+    auto* rom = dynamic_cast<ReferencingObjectMap*>(pom.objectMaps[0].get());
+    REQUIRE(rom != nullptr);
+    REQUIRE(rom->parentTriplesMap == tm2);
+    REQUIRE(rom->joinConditions.size() == 1);
+    REQUIRE(rom->joinConditions[0].childColumn  == "DEPTNO");
+    REQUIRE(rom->joinConditions[0].parentColumn == "DEPTNO");
+}
+
+// ---------------------------------------------------------------------------
+// Example 4 – template subjects and objects from a join table
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Example 4 - EMP2DEPT table with template subject and template objects") {
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example4.ttl");
+
+    REQUIRE(mapping.triplesMaps.size() == 1);
+
+    TriplesMap* tm = findById(mapping, "TriplesMap3");
+    REQUIRE(tm != nullptr);
+
+    // Logical table: rr:tableName "EMP2DEPT"
+    auto* table = dynamic_cast<BaseTableOrView*>(tm->logicalTable.get());
+    REQUIRE(table != nullptr);
+    REQUIRE(table->tableName == "EMP2DEPT");
+
+    // Two predicate-object maps, each with a ConstantTermMap predicate
+    // and a TemplateTermMap object
+    REQUIRE(tm->predicateObjectMaps.size() == 2);
+
+    std::map<std::string, std::string> predToTemplate;
+    for (auto& pom : tm->predicateObjectMaps) {
+        REQUIRE(pom->predicateMaps.size() == 1);
+        REQUIRE(pom->objectMaps.size() == 1);
+
+        auto* pred = dynamic_cast<ConstantTermMap*>(pom->predicateMaps[0].get());
+        REQUIRE(pred != nullptr);
+
+        auto* obj = dynamic_cast<TemplateTermMap*>(pom->objectMaps[0].get());
+        REQUIRE(obj != nullptr);
+
+        predToTemplate[nodeUri(pred->constantValue)] = obj->templateString;
+    }
+
+    REQUIRE(predToTemplate["http://example.com/ns#employee"]
+                == "http://data.example.com/employee/{EMPNO}");
+    REQUIRE(predToTemplate["http://example.com/ns#department"]
+                == "http://data.example.com/department/{DEPTNO}");
+}
+
+// ---------------------------------------------------------------------------
+// Example 5 – SQL view with CASE expression mapping to a template object
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Example 5 - CASE SQL view with role template object") {
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example5.ttl");
+
+    REQUIRE(mapping.triplesMaps.size() == 1);
+
+    TriplesMap* tm = findById(mapping, "TriplesMap1");
+    REQUIRE(tm != nullptr);
+
+    // Logical table: R2RMLView with a CASE expression selecting ROLE
+    auto* view = dynamic_cast<R2RMLView*>(tm->logicalTable.get());
+    REQUIRE(view != nullptr);
+    REQUIRE(view->sqlQuery.find("SELECT EMP.*") != std::string::npos);
+
+    // Subject map has no rr:class
+    REQUIRE(tm->subjectMap != nullptr);
+    REQUIRE(tm->subjectMap->classIRIs.empty());
+
+    // One predicate-object map: ex:role -> rr:template "…/roles/{ROLE}"
+    REQUIRE(tm->predicateObjectMaps.size() == 1);
+    PredicateObjectMap& pom = *tm->predicateObjectMaps[0];
+    REQUIRE(pom.predicateMaps.size() == 1);
+    REQUIRE(pom.objectMaps.size() == 1);
+
+    auto* pred = dynamic_cast<ConstantTermMap*>(pom.predicateMaps[0].get());
+    REQUIRE(pred != nullptr);
+    REQUIRE(nodeUri(pred->constantValue) == "http://example.com/ns#role");
+
+    auto* obj = dynamic_cast<TemplateTermMap*>(pom.objectMaps[0].get());
+    REQUIRE(obj != nullptr);
+    REQUIRE(obj->templateString == "http://data.example.com/roles/{ROLE}");
 }

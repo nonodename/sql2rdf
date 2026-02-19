@@ -20,6 +20,7 @@ add_executable(tests ${TEST_SOURCES})
 # Include headers for tests and link to Catch2 and serd
 target_include_directories(tests PRIVATE include ${CMAKE_SOURCE_DIR}/external/serd/include)
 target_link_libraries(tests PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml serd m)
+target_compile_definitions(tests PRIVATE SOURCE_R2RML_DIR="${CMAKE_SOURCE_DIR}/tests/sourceR2RML/")
 
 # Build r2rml implementation as a static library so tests can link it
 set(R2RML_SOURCES
