@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.5...3.29)
 project(SQL2RDF++ LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(FetchContent)
 
@@ -26,6 +26,7 @@ target_compile_definitions(tests PRIVATE SOURCE_R2RML_DIR="${CMAKE_SOURCE_DIR}/t
 set(R2RML_SOURCES
   src/r2rml/r2rml_scaffolding.cpp
   src/r2rml/SQLValue.cpp
+  src/r2rml/R2RMLParser.cpp
 )
 add_library(sql2rdf_r2rml STATIC ${R2RML_SOURCES})
 target_include_directories(sql2rdf_r2rml PUBLIC include ${CMAKE_SOURCE_DIR}/external/serd/include)

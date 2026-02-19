@@ -2,10 +2,15 @@
 
 #include "TermMap.h"
 
+#include <string>
+
 namespace r2rml {
 
 /**
  * A term map which always returns a fixed RDF term.
+ *
+ * The constructor deep-copies the string data from the supplied SerdNode so
+ * that instances remain valid even after the source buffer is freed.
  */
 class ConstantTermMap : public TermMap {
 public:
@@ -22,6 +27,10 @@ public:
     }
 
     SerdNode constantValue{0};
+
+private:
+    /// Owns the string data that constantValue.buf points into (when non-empty).
+    std::string ownedUri_;
 };
 
 } // namespace r2rml

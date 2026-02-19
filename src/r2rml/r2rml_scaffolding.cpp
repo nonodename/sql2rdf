@@ -18,7 +18,6 @@
 #include "r2rml/SQLResultSet.h"
 #include "r2rml/SQLRow.h"
 #include "r2rml/SQLValue.h"
-#include "r2rml/R2RMLParser.h"
 
 namespace r2rml {
 
@@ -80,7 +79,16 @@ void PredicateObjectMap::processRow(const SQLRow& row,
 TermMap::~TermMap() = default;
 
 // ConstantTermMap
-ConstantTermMap::ConstantTermMap(const SerdNode& node) : constantValue(node) {}
+ConstantTermMap::ConstantTermMap(const SerdNode& node) {
+    if (node.type != SERD_NOTHING && node.buf && node.n_bytes > 0) {
+        ownedUri_.assign(reinterpret_cast<const char*>(node.buf), node.n_bytes);
+        constantValue.buf     = reinterpret_cast<const uint8_t*>(ownedUri_.c_str());
+        constantValue.n_bytes = node.n_bytes;
+        constantValue.n_chars = node.n_chars;
+        constantValue.flags   = node.flags;
+        constantValue.type    = node.type;
+    }
+}
 ConstantTermMap::~ConstantTermMap() = default;
 SerdNode ConstantTermMap::generateRDFTerm(const SQLRow&,
                                           const SerdEnv&) const {
@@ -150,13 +158,5 @@ SQLRow::~SQLRow() = default;
 SQLValue SQLRow::getValue(const std::string&) const { return SQLValue(); }
 bool SQLRow::isNull(const std::string&) const { return true; }
 
-// R2RMLParser
-R2RMLParser::R2RMLParser() = default;
-R2RMLParser::~R2RMLParser() = default;
-R2RMLMapping R2RMLParser::parse(const std::string& mappingFilePath) {
-    R2RMLMapping m;
-    (void)mappingFilePath;
-    return m;
-}
 
 } // namespace r2rml
