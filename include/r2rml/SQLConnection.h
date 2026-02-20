@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <memory>
 
 namespace r2rml {
 

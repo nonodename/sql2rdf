@@ -1,6 +1,7 @@
 #pragma once
 
 #include "TermMap.h"
+#include <memory>
 
 namespace r2rml {
 

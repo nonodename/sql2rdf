@@ -2,6 +2,7 @@
 
 #include "SQLValue.h"
 #include <string>
+#include <memory>
 
 namespace r2rml {
 

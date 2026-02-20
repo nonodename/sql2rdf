@@ -1,6 +1,7 @@
 #pragma once
 
 #include "LogicalTable.h"
+#include <memory>
 
 namespace r2rml {
 

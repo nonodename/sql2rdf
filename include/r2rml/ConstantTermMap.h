@@ -3,6 +3,7 @@
 #include "TermMap.h"
 
 #include <string>
+#include <memory>
 
 namespace r2rml {
 

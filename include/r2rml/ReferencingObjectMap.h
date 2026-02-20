@@ -4,6 +4,7 @@
 #include "JoinCondition.h"
 
 #include <vector>
+#include <memory>
 
 namespace r2rml {
 

@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <memory>
 
 namespace r2rml {
 

@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <memory>
 
 #include <serd/serd.h>
 
