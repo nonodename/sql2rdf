@@ -13,18 +13,32 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(Catch2)
 
+enable_testing()
+include(Catch)
+
 # Create your test executable from all tests in the `tests/` folder
 file(GLOB TEST_SOURCES "${CMAKE_SOURCE_DIR}/tests/*.cpp")
-add_executable(tests ${TEST_SOURCES})
+add_executable(test_runner ${TEST_SOURCES})
 
 # Include headers for tests and link to Catch2 and serd
-target_include_directories(tests PRIVATE include ${CMAKE_SOURCE_DIR}/external/serd/include)
+target_include_directories(test_runner PRIVATE include ${CMAKE_SOURCE_DIR}/external/serd/include)
 if(UNIX)
-  target_link_libraries(tests PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml serd m)
+  target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml serd m)
 else()
-  target_link_libraries(tests PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml serd)
+  target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml serd)
 endif()
-target_compile_definitions(tests PRIVATE SOURCE_R2RML_DIR="${CMAKE_SOURCE_DIR}/tests/sourceR2RML/")
+target_compile_definitions(test_runner PRIVATE SOURCE_R2RML_DIR="${CMAKE_SOURCE_DIR}/tests/sourceR2RML/")
+
+# Register individual Catch2 test cases with CTest
+catch_discover_tests(test_runner)
+
+# `make tests` builds and runs the test suite
+add_custom_target(tests
+  COMMAND $<TARGET_FILE:test_runner>
+  DEPENDS test_runner
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+  COMMENT "Running tests..."
+)
 
 # Build r2rml implementation as a static library so tests can link it
 set(R2RML_SOURCES
