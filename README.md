@@ -1,6 +1,8 @@
 # SQL2RDF++
 
-A C++11 project built with CMake. This project will eventually convert SQL data to RDF.
+A project built with CMake that will eventually convert SQL data to RDF.
+
+**Requires a C++11-compliant compiler** (GCC 4.8+, Clang 3.3+, MSVC 2015+).
 
 The repository now includes the [Serd](https://drobilla.net/software/serd/) RDF syntax
 library as a git submodule under `external/serd`. The CMake build system compiles Serd

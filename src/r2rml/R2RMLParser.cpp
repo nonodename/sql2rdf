@@ -252,11 +252,11 @@ buildLogicalTable(const TripleStore& ts, const std::string& ltKey)
 {
     std::string tableName = getFirstLiteral(ts, ltKey, RR + "tableName");
     if (!tableName.empty())
-        return std::make_unique<BaseTableOrView>(tableName);
+        return std::unique_ptr<BaseTableOrView>(new BaseTableOrView(tableName));
 
     std::string sqlQuery = getFirstLiteral(ts, ltKey, RR + "sqlQuery");
     if (!sqlQuery.empty())
-        return std::make_unique<R2RMLView>(sqlQuery);
+        return std::unique_ptr<R2RMLView>(new R2RMLView(sqlQuery));
 
     std::cerr << "R2RML parser: unrecognised logical table <" << ltKey << ">\n";
     return nullptr;
@@ -267,7 +267,7 @@ static std::unique_ptr<ConstantTermMap> makeConstantUri(const std::string& uri)
 {
     SerdNode node = serd_node_from_string(
         SERD_URI, reinterpret_cast<const uint8_t*>(uri.c_str()));
-    return std::make_unique<ConstantTermMap>(node);
+    return std::unique_ptr<ConstantTermMap>(new ConstantTermMap(node));
 }
 
 /// Build a generic TermMap (Column / Template / Constant / ReferencingObjectMap)
@@ -279,12 +279,12 @@ buildTermMap(const TripleStore& ts, const std::string& nodeKey,
     // rr:column
     std::string column = getFirstLiteral(ts, nodeKey, RR + "column");
     if (!column.empty())
-        return std::make_unique<ColumnTermMap>(column);
+        return std::unique_ptr<ColumnTermMap>(new ColumnTermMap(column));
 
     // rr:template
     std::string tmpl = getFirstLiteral(ts, nodeKey, RR + "template");
     if (!tmpl.empty())
-        return std::make_unique<TemplateTermMap>(tmpl);
+        return std::unique_ptr<TemplateTermMap>(new TemplateTermMap(tmpl));
 
     // rr:constant (URI object)
     std::string constant = getFirstUri(ts, nodeKey, RR + "constant");
@@ -294,7 +294,7 @@ buildTermMap(const TripleStore& ts, const std::string& nodeKey,
     // rr:parentTriplesMap → ReferencingObjectMap
     std::string parentUri = getFirstUri(ts, nodeKey, RR + "parentTriplesMap");
     if (!parentUri.empty()) {
-        auto rom = std::make_unique<ConcreteReferencingObjectMap>();
+        auto rom = std::unique_ptr<ConcreteReferencingObjectMap>(new ConcreteReferencingObjectMap());
 
         const auto* jcObjs = getObjects(ts, nodeKey, RR + "joinCondition");
         if (jcObjs) {
@@ -319,7 +319,7 @@ static std::unique_ptr<SubjectMap>
 buildSubjectMap(const TripleStore& ts, const std::string& smKey,
                 std::vector<std::pair<ReferencingObjectMap*, std::string>>& parentRefs)
 {
-    auto sm = std::make_unique<ConcreteSubjectMap>();
+    auto sm = std::unique_ptr<ConcreteSubjectMap>(new ConcreteSubjectMap());
 
     // Value-generation strategy
     std::string tmpl     = getFirstLiteral(ts, smKey, RR + "template");
@@ -327,9 +327,9 @@ buildSubjectMap(const TripleStore& ts, const std::string& smKey,
     std::string constant = getFirstUri(ts, smKey, RR + "constant");
 
     if (!tmpl.empty())
-        sm->valueMap = std::make_unique<TemplateTermMap>(tmpl);
+        sm->valueMap = std::unique_ptr<TemplateTermMap>(new TemplateTermMap(tmpl));
     else if (!column.empty())
-        sm->valueMap = std::make_unique<ColumnTermMap>(column);
+        sm->valueMap = std::unique_ptr<ColumnTermMap>(new ColumnTermMap(column));
     else if (!constant.empty())
         sm->valueMap = makeConstantUri(constant);
 
@@ -349,7 +349,7 @@ static std::unique_ptr<PredicateObjectMap>
 buildPOM(const TripleStore& ts, const std::string& pomKey,
          std::vector<std::pair<ReferencingObjectMap*, std::string>>& parentRefs)
 {
-    auto pom = std::make_unique<PredicateObjectMap>();
+    auto pom = std::unique_ptr<PredicateObjectMap>(new PredicateObjectMap());
 
     // rr:predicate shortcut (constant predicate)
     const auto* predObjs = getObjects(ts, pomKey, RR + "predicate");
@@ -458,7 +458,7 @@ R2RMLMapping R2RMLParser::parse(const std::string& mappingFilePath)
             preds.count(RR + "subject");
         if (!isTriplesMap) continue;
 
-        auto tm = std::make_unique<TriplesMap>();
+        auto tm = std::unique_ptr<TriplesMap>(new TriplesMap());
         tm->id = subj;
 
         // Logical table (inline blank node or named resource)
