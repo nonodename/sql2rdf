@@ -19,7 +19,11 @@ add_executable(tests ${TEST_SOURCES})
 
 # Include headers for tests and link to Catch2 and serd
 target_include_directories(tests PRIVATE include ${CMAKE_SOURCE_DIR}/external/serd/include)
-target_link_libraries(tests PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml serd m)
+if(UNIX)
+  target_link_libraries(tests PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml serd m)
+else()
+  target_link_libraries(tests PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml serd)
+endif()
 target_compile_definitions(tests PRIVATE SOURCE_R2RML_DIR="${CMAKE_SOURCE_DIR}/tests/sourceR2RML/")
 
 # Build r2rml implementation as a static library so tests can link it
@@ -48,7 +52,11 @@ set(R2RML_SOURCES
 )
 add_library(sql2rdf_r2rml STATIC ${R2RML_SOURCES})
 target_include_directories(sql2rdf_r2rml PUBLIC include ${CMAKE_SOURCE_DIR}/external/serd/include)
-target_link_libraries(sql2rdf_r2rml PUBLIC serd m)
+if(UNIX)
+  target_link_libraries(sql2rdf_r2rml PUBLIC serd m)
+else()
+  target_link_libraries(sql2rdf_r2rml PUBLIC serd)
+endif()
 
 # Specify main executable sources and link to the library
 add_executable(${PROJECT_NAME} src/main.cpp)
@@ -72,4 +80,8 @@ target_compile_definitions(serd PUBLIC SERD_STATIC)
 
 # link the serd static library into our executable
 add_dependencies(${PROJECT_NAME} serd)
-target_link_libraries(${PROJECT_NAME} PRIVATE serd m)
+if(UNIX)
+  target_link_libraries(${PROJECT_NAME} PRIVATE serd m)
+else()
+  target_link_libraries(${PROJECT_NAME} PRIVATE serd)
+endif()
