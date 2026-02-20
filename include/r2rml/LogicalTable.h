@@ -30,6 +30,11 @@ public:
     virtual std::vector<std::string> getColumnNames() = 0;
 
     /**
+     * Return true if this logical table has all required properties set.
+     */
+    virtual bool isValid() const = 0;
+
+    /**
      * The SQL text that defines this logical table.  Derived classes may
      * populate this as needed.
      */

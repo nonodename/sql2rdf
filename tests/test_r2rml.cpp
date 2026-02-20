@@ -342,6 +342,11 @@ TEST_CASE("Example 1 - EMP table with template subject and column object") {
     auto* obj = dynamic_cast<ColumnTermMap*>(pom.objectMaps[0].get());
     REQUIRE(obj != nullptr);
     REQUIRE(obj->columnName == "ENAME");
+
+    REQUIRE(table->isValid());
+    REQUIRE(pom.isValid());
+    REQUIRE(tm->isValid());
+    REQUIRE(mapping.isValid());
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +386,10 @@ TEST_CASE("Example 2 - department SQL view with three predicate-object maps") {
     REQUIRE(std::find(colNames.begin(), colNames.end(), "DNAME") != colNames.end());
     REQUIRE(std::find(colNames.begin(), colNames.end(), "LOC")   != colNames.end());
     REQUIRE(std::find(colNames.begin(), colNames.end(), "STAFF") != colNames.end());
+
+    REQUIRE(view->isValid());
+    REQUIRE(tm->isValid());
+    REQUIRE(mapping.isValid());
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +425,13 @@ TEST_CASE("Example 3 - referencing object map joining employee to department") {
     REQUIRE(rom->joinConditions.size() == 1);
     REQUIRE(rom->joinConditions[0].childColumn  == "DEPTNO");
     REQUIRE(rom->joinConditions[0].parentColumn == "DEPTNO");
+
+    // tm2 is fully specified; tm1 lacks logicalTable and subjectMap
+    REQUIRE(tm2->isValid());
+    REQUIRE(rom->isValid());
+    REQUIRE(pom.isValid());
+    REQUIRE_FALSE(tm1->isValid());
+    REQUIRE_FALSE(mapping.isValid());
 }
 
 // ---------------------------------------------------------------------------
@@ -458,6 +474,10 @@ TEST_CASE("Example 4 - EMP2DEPT table with template subject and template objects
                 == "http://data.example.com/employee/{EMPNO}");
     REQUIRE(predToTemplate["http://example.com/ns#department"]
                 == "http://data.example.com/department/{DEPTNO}");
+
+    REQUIRE(table->isValid());
+    REQUIRE(tm->isValid());
+    REQUIRE(mapping.isValid());
 }
 
 // ---------------------------------------------------------------------------
@@ -495,4 +515,9 @@ TEST_CASE("Example 5 - CASE SQL view with role template object") {
     auto* obj = dynamic_cast<TemplateTermMap*>(pom.objectMaps[0].get());
     REQUIRE(obj != nullptr);
     REQUIRE(obj->templateString == "http://data.example.com/roles/{ROLE}");
+
+    REQUIRE(view->isValid());
+    REQUIRE(pom.isValid());
+    REQUIRE(tm->isValid());
+    REQUIRE(mapping.isValid());
 }

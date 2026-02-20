@@ -21,6 +21,8 @@ public:
     ReferencingObjectMap();
     ~ReferencingObjectMap() override;
 
+    bool isValid() const override;
+
     std::unique_ptr<SQLResultSet> getJoinedRows(SQLConnection& dbConnection,
                                                 const SQLRow& childRow) const;
 

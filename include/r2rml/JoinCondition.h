@@ -12,6 +12,8 @@ public:
     JoinCondition() = default;
     JoinCondition(const std::string& childCol, const std::string& parentCol);
 
+    bool isValid() const { return !childColumn.empty() && !parentColumn.empty(); }
+
     std::string childColumn;
     std::string parentColumn;
 };

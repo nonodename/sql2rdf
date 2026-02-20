@@ -1,5 +1,7 @@
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/LogicalTable.h"
+
+#include <algorithm>
 #include "r2rml/BaseTableOrView.h"
 #include "r2rml/R2RMLView.h"
 #include "r2rml/TriplesMap.h"
@@ -35,6 +37,12 @@ void R2RMLMapping::processDatabase(SQLConnection& dbConnection,
                                    SerdWriter& rdfWriter) {
     // stub
 }
+bool R2RMLMapping::isValid() const {
+    return std::all_of(triplesMaps.begin(), triplesMaps.end(),
+                       [](const std::unique_ptr<TriplesMap>& tm) {
+                           return tm && tm->isValid();
+                       });
+}
 
 // LogicalTable
 LogicalTable::~LogicalTable() = default;
@@ -64,6 +72,14 @@ void TriplesMap::generateTriples(const SQLRow& row,
                                  const R2RMLMapping& mapping) const {
     // stub
 }
+bool TriplesMap::isValid() const {
+    if (!logicalTable || !logicalTable->isValid()) return false;
+    if (!subjectMap   || !subjectMap->isValid())   return false;
+    return std::all_of(predicateObjectMaps.begin(), predicateObjectMaps.end(),
+                       [](const std::unique_ptr<PredicateObjectMap>& pom) {
+                           return pom && pom->isValid();
+                       });
+}
 
 // PredicateObjectMap
 PredicateObjectMap::PredicateObjectMap() = default;
@@ -73,6 +89,17 @@ void PredicateObjectMap::processRow(const SQLRow& row,
                                    SerdWriter& rdfWriter,
                                    const R2RMLMapping& mapping) const {
     // stub
+}
+bool PredicateObjectMap::isValid() const {
+    if (predicateMaps.empty() || objectMaps.empty()) return false;
+    return std::all_of(predicateMaps.begin(), predicateMaps.end(),
+                       [](const std::unique_ptr<TermMap>& pm) {
+                           return pm && pm->isValid();
+                       }) &&
+           std::all_of(objectMaps.begin(), objectMaps.end(),
+                       [](const std::unique_ptr<TermMap>& om) {
+                           return om && om->isValid();
+                       });
 }
 
 // TermMap
@@ -115,6 +142,12 @@ SerdNode TemplateTermMap::generateRDFTerm(const SQLRow&,
 
 // SubjectMap
 SubjectMap::~SubjectMap() = default;
+bool SubjectMap::isValid() const {
+    return std::all_of(graphMaps.begin(), graphMaps.end(),
+                       [](const std::unique_ptr<GraphMap>& gm) {
+                           return gm && gm->isValid();
+                       });
+}
 
 // PredicateMap
 PredicateMap::~PredicateMap() = default;
@@ -133,6 +166,11 @@ JoinCondition::JoinCondition(const std::string& childCol,
 // ReferencingObjectMap
 ReferencingObjectMap::ReferencingObjectMap() = default;
 ReferencingObjectMap::~ReferencingObjectMap() = default;
+bool ReferencingObjectMap::isValid() const {
+    if (!parentTriplesMap) return false;
+    return std::all_of(joinConditions.begin(), joinConditions.end(),
+                       [](const JoinCondition& jc) { return jc.isValid(); });
+}
 std::unique_ptr<SQLResultSet>
 ReferencingObjectMap::getJoinedRows(SQLConnection& dbConnection,
                                     const SQLRow& childRow) const {

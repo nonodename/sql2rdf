@@ -30,6 +30,8 @@ public:
                     SerdWriter& rdfWriter,
                     const R2RMLMapping& mapping) const;
 
+    bool isValid() const;
+
     std::vector<std::unique_ptr<TermMap>> predicateMaps;
     std::vector<std::unique_ptr<TermMap>> objectMaps;
     std::vector<std::unique_ptr<GraphMap>> graphMaps;

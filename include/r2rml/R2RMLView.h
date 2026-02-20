@@ -20,6 +20,8 @@ public:
     std::unique_ptr<SQLResultSet> getRows(SQLConnection& dbConnection) override;
     std::vector<std::string> getColumnNames() override;
 
+    bool isValid() const override { return !sqlQuery.empty(); }
+
     std::string sqlQuery;
     std::vector<std::string> sqlVersions;
 };

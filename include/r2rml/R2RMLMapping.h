@@ -41,6 +41,11 @@ public:
      */
     void processDatabase(SQLConnection& dbConnection, SerdWriter& rdfWriter);
 
+    /**
+     * Return true if all contained triples maps are valid.
+     */
+    bool isValid() const;
+
     std::vector<std::unique_ptr<TriplesMap>> triplesMaps;
     SerdEnv* serdEnvironment{nullptr};
 };

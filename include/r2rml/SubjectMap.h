@@ -18,6 +18,8 @@ public:
     SubjectMap() = default;
     ~SubjectMap() override;
 
+    bool isValid() const override;
+
     std::vector<std::string> classIRIs;
     std::vector<std::unique_ptr<GraphMap>> graphMaps;
 };

@@ -18,6 +18,8 @@ public:
 
     std::vector<std::string> getColumnNames() override;
 
+    bool isValid() const override { return !tableName.empty(); }
+
     std::string tableName;
 };
 
