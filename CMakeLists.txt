@@ -24,7 +24,25 @@ target_compile_definitions(tests PRIVATE SOURCE_R2RML_DIR="${CMAKE_SOURCE_DIR}/t
 
 # Build r2rml implementation as a static library so tests can link it
 set(R2RML_SOURCES
-  src/r2rml/r2rml_scaffolding.cpp
+  src/r2rml/R2RMLMapping.cpp
+  src/r2rml/LogicalTable.cpp
+  src/r2rml/BaseTableOrView.cpp
+  src/r2rml/R2RMLView.cpp
+  src/r2rml/TriplesMap.cpp
+  src/r2rml/PredicateObjectMap.cpp
+  src/r2rml/TermMap.cpp
+  src/r2rml/ConstantTermMap.cpp
+  src/r2rml/ColumnTermMap.cpp
+  src/r2rml/TemplateTermMap.cpp
+  src/r2rml/SubjectMap.cpp
+  src/r2rml/PredicateMap.cpp
+  src/r2rml/ObjectMap.cpp
+  src/r2rml/GraphMap.cpp
+  src/r2rml/JoinCondition.cpp
+  src/r2rml/ReferencingObjectMap.cpp
+  src/r2rml/SQLConnection.cpp
+  src/r2rml/SQLResultSet.cpp
+  src/r2rml/SQLRow.cpp
   src/r2rml/SQLValue.cpp
   src/r2rml/R2RMLParser.cpp
 )
