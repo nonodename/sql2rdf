@@ -2,18 +2,18 @@
 
 #include <memory>
 #include <string>
-#include <memory>
 
 namespace r2rml {
 
 class SQLResultSet;
 
 /**
- * Generic interface representing a relational database connection.
+ * Pure abstract interface representing a relational database connection.
+ * Implement this interface to plug in a concrete database backend.
  */
 class SQLConnection {
 public:
-    virtual ~SQLConnection();
+    virtual ~SQLConnection() = default;
 
     /**
      * Execute a query and return a result set.  Caller owns the returned
@@ -22,8 +22,11 @@ public:
     virtual std::unique_ptr<SQLResultSet>
     execute(const std::string& sqlQuery) = 0;
 
-    virtual std::string getDefaultCatalog();
-    virtual std::string getDefaultSchema();
+    /** Returns the default catalog name, or empty string if not applicable. */
+    virtual std::string getDefaultCatalog() { return {}; }
+
+    /** Returns the default schema name, or empty string if not applicable. */
+    virtual std::string getDefaultSchema() { return {}; }
 };
 
 } // namespace r2rml

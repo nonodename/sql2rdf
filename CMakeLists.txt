@@ -21,7 +21,7 @@ file(GLOB TEST_SOURCES "${CMAKE_SOURCE_DIR}/tests/*.cpp")
 add_executable(test_runner ${TEST_SOURCES})
 
 # Include headers for tests and link to Catch2 and serd
-target_include_directories(test_runner PRIVATE include ${CMAKE_SOURCE_DIR}/external/serd/include)
+target_include_directories(test_runner PRIVATE include ${CMAKE_SOURCE_DIR}/external/serd/include ${CMAKE_SOURCE_DIR}/tests)
 if(UNIX)
   target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml serd m)
 else()
@@ -58,8 +58,6 @@ set(R2RML_SOURCES
   src/r2rml/GraphMap.cpp
   src/r2rml/JoinCondition.cpp
   src/r2rml/ReferencingObjectMap.cpp
-  src/r2rml/SQLConnection.cpp
-  src/r2rml/SQLResultSet.cpp
   src/r2rml/SQLRow.cpp
   src/r2rml/SQLValue.cpp
   src/r2rml/R2RMLParser.cpp

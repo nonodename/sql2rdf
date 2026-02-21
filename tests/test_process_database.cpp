@@ -39,68 +39,16 @@
 #include "r2rml/SQLRow.h"
 #include "r2rml/SQLValue.h"
 #include "r2rml/TriplesMap.h"
+#include "MockSQL.h"
 
 using namespace r2rml;
-
-// ---------------------------------------------------------------------------
-// Mock SQL infrastructure
-// ---------------------------------------------------------------------------
-
-namespace {
-
-// Iterates over a fixed vector of SQLRows.
-class MockSQLResultSet : public SQLResultSet {
-public:
-    explicit MockSQLResultSet(std::vector<SQLRow> rows)
-        : rows_(std::move(rows)) {}
-
-    bool next() override {
-        ++cursor_;
-        return cursor_ < static_cast<int>(rows_.size());
-    }
-
-    SQLRow getCurrentRow() const override {
-        return rows_[static_cast<size_t>(cursor_)];
-    }
-
-private:
-    std::vector<SQLRow> rows_;
-    int cursor_{-1};
-};
-
-// Returns pre-registered rows for any query whose text contains a registered
-// key fragment.  When multiple keys match, the longest one wins (so more
-// specific fragments take priority over shorter substrings).
-class MockSQLConnection : public SQLConnection {
-public:
-    void addResult(std::string queryFragment, std::vector<SQLRow> rows) {
-        results_.push_back({std::move(queryFragment), std::move(rows)});
-    }
-
-    std::unique_ptr<SQLResultSet> execute(const std::string& query) override {
-        const std::vector<SQLRow>* best = nullptr;
-        size_t bestLen = 0;
-        for (const auto& kv : results_) {
-            if (query.find(kv.first) != std::string::npos &&
-                    kv.first.size() > bestLen) {
-                bestLen = kv.first.size();
-                best = &kv.second;
-            }
-        }
-        if (best) {
-            return std::unique_ptr<SQLResultSet>(new MockSQLResultSet(*best));
-        }
-        return std::unique_ptr<SQLResultSet>(
-            new MockSQLResultSet(std::vector<SQLRow>{}));
-    }
-
-private:
-    std::vector<std::pair<std::string, std::vector<SQLRow>>> results_;
-};
+using namespace r2rml::testing;
 
 // ---------------------------------------------------------------------------
 // Helper utilities
 // ---------------------------------------------------------------------------
+
+namespace {
 
 // Run processDatabase and capture the NTriples serialisation as a string.
 std::string runProcessDatabase(R2RMLMapping& mapping, MockSQLConnection& conn) {
@@ -121,11 +69,6 @@ std::string runProcessDatabase(R2RMLMapping& mapping, MockSQLConnection& conn) {
     serd_writer_free(writer);
     serd_env_free(env);
     return result;
-}
-
-// Build an SQLRow from an initializer-list of {column, value} pairs.
-SQLRow makeRow(std::initializer_list<std::pair<const std::string, SQLValue>> cols) {
-    return SQLRow(std::map<std::string, SQLValue>(cols));
 }
 
 } // anonymous namespace

@@ -32,8 +32,10 @@
 #include "r2rml/SQLRow.h"
 #include "r2rml/GraphMap.h"
 #include "r2rml/TriplesMap.h"
+#include "MockSQL.h"
 
 using namespace r2rml;
+using namespace r2rml::testing;
 
 TEST_CASE("SQLValue basics") {
     SQLValue def;
@@ -92,9 +94,7 @@ TEST_CASE("Column/Template term maps return default null node") {
 TEST_CASE("BaseTableOrView and R2RMLView defaults") {
     BaseTableOrView b("mytable");
     REQUIRE(b.tableName == "mytable");
-    struct DummyConn : public SQLConnection {
-        std::unique_ptr<SQLResultSet> execute(const std::string&) override { return nullptr; }
-    } conn;
+    MockSQLConnection conn;
     auto rows_b = b.getRows(conn);
     REQUIRE(rows_b == nullptr);
 
