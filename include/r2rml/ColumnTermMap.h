@@ -23,6 +23,10 @@ public:
     }
 
     std::string columnName;
+
+private:
+    /// Buffer for the last column value; keeps buf pointer in returned SerdNode valid.
+    mutable std::string cachedValue_;
 };
 
 } // namespace r2rml

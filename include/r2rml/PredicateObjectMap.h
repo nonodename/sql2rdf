@@ -11,6 +11,7 @@ namespace r2rml {
 class TermMap;
 class GraphMap;
 class SQLRow;
+class SQLConnection;
 class R2RMLMapping;
 
 /**
@@ -29,7 +30,8 @@ public:
     void processRow(const SQLRow& row,
                     const SerdNode& subject,
                     SerdWriter& rdfWriter,
-                    const R2RMLMapping& mapping) const;
+                    const R2RMLMapping& mapping,
+                    SQLConnection& dbConnection) const;
 
     bool isValid() const;
 

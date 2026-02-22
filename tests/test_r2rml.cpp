@@ -96,12 +96,14 @@ TEST_CASE("BaseTableOrView and R2RMLView defaults") {
     REQUIRE(b.tableName == "mytable");
     MockSQLConnection conn;
     auto rows_b = b.getRows(conn);
-    REQUIRE(rows_b == nullptr);
+    // getRows now delegates to the connection; an empty MockSQLConnection
+    // returns a non-null but empty result set (no rows).
+    REQUIRE(rows_b != nullptr);
 
     R2RMLView v("SELECT 1");
     REQUIRE(v.sqlQuery == "SELECT 1");
     auto rows_v = v.getRows(conn);
-    REQUIRE(rows_v == nullptr);
+    REQUIRE(rows_v != nullptr);
 }
 // ReferencingObjectMap and other TermMap-derived classes that do not
 // implement the `generateRDFTerm(const SQLRow&, const SerdEnv&)` signature

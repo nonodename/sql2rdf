@@ -13,6 +13,7 @@ class LogicalTable;
 class SubjectMap;
 class PredicateObjectMap;
 class SQLRow;
+class SQLConnection;
 class R2RMLMapping;
 
 /**
@@ -31,7 +32,8 @@ public:
      */
     void generateTriples(const SQLRow& row,
                          SerdWriter& rdfWriter,
-                         const R2RMLMapping& mapping) const;
+                         const R2RMLMapping& mapping,
+                         SQLConnection& dbConnection) const;
 
     bool isValid() const;
 

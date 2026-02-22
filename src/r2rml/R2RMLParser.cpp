@@ -385,11 +385,16 @@ buildPOM(const TripleStore& ts, const std::string& pomKey,
             std::string omKey = objKey(om);
             if (omKey.empty()) continue;
             auto tm = buildTermMap(ts, omKey, parentRefs);
-            if (tm)
+            if (tm) {
+                // Per R2RML spec: default term type for rr:column in an
+                // objectMap is rr:Literal (not rr:IRI).
+                if (dynamic_cast<ColumnTermMap*>(tm.get()))
+                    tm->termType = TermType::Literal;
                 pom->objectMaps.push_back(std::move(tm));
-            else
+            } else {
                 std::cerr << "R2RML parser: unknown object map type for <"
                           << omKey << ">\n";
+            }
         }
     }
 
