@@ -1,8 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <ostream>
 #include <vector>
-#include <memory>
 
 #include <serd/serd.h>
 
@@ -34,6 +34,8 @@ public:
                     SQLConnection& dbConnection) const;
 
     bool isValid() const;
+
+    friend std::ostream& operator<<(std::ostream& os, const PredicateObjectMap& pom);
 
     std::vector<std::unique_ptr<TermMap>> predicateMaps;
     std::vector<std::unique_ptr<TermMap>> objectMaps;

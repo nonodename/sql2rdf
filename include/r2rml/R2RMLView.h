@@ -23,6 +23,8 @@ public:
 
     bool isValid() const override { return !sqlQuery.empty(); }
 
+    std::ostream& print(std::ostream& os) const override;
+
     std::string sqlQuery;
     std::vector<std::string> sqlVersions;
 };

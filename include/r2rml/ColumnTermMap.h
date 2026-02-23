@@ -22,6 +22,8 @@ public:
         return !columnName.empty();
     }
 
+    std::ostream& print(std::ostream& os) const override;
+
     std::string columnName;
 
 private:

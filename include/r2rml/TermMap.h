@@ -2,6 +2,7 @@
 
 #include <string>
 #include <memory>
+#include <ostream>
 
 #include <serd/serd.h>
 
@@ -34,6 +35,14 @@ public:
      * To be overridden by subclasses for specific validation logic.
      */
     virtual bool isValid() const { return true; }
+
+    /**
+     * Write a human-readable representation to the given stream.
+     * Subclasses should override this and call TermMap::print for base fields.
+     */
+    virtual std::ostream& print(std::ostream& os) const;
+
+    friend std::ostream& operator<<(std::ostream& os, const TermMap& tm);
 
     TermType termType{TermType::IRI};
     // optional fields are implemented with unique_ptr for C++11

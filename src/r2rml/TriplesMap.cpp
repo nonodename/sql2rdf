@@ -7,6 +7,7 @@
 #include "r2rml/SQLRow.h"
 
 #include <algorithm>
+#include <ostream>
 
 namespace r2rml {
 
@@ -65,6 +66,26 @@ bool TriplesMap::isValid() const {
                        [](const std::unique_ptr<PredicateObjectMap>& pom) {
                            return pom && pom->isValid();
                        });
+}
+
+std::ostream& operator<<(std::ostream& os, const TriplesMap& tm) {
+    os << "TriplesMap <" << tm.id << "> {\n";
+    os << "  logicalTable: ";
+    if (tm.logicalTable) os << *tm.logicalTable;
+    else                 os << "(none)";
+    os << "\n";
+    os << "  subjectMap: ";
+    if (tm.subjectMap) os << *tm.subjectMap;
+    else               os << "(none)";
+    os << "\n";
+    for (std::size_t i = 0; i < tm.predicateObjectMaps.size(); ++i) {
+        os << "  predicateObjectMap[" << i << "]: ";
+        if (tm.predicateObjectMaps[i]) os << *tm.predicateObjectMaps[i];
+        else                           os << "(none)";
+        os << "\n";
+    }
+    os << "}";
+    return os;
 }
 
 } // namespace r2rml

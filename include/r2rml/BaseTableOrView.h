@@ -21,6 +21,8 @@ public:
 
     bool isValid() const override { return !tableName.empty(); }
 
+    std::ostream& print(std::ostream& os) const override;
+
     std::string tableName;
 };
 

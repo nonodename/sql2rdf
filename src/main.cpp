@@ -1,24 +1,55 @@
+#include <cstring>
 #include <iostream>
-#include <serd/serd.h>
+#include <string>
 
-// r2rml mapping classes (scaffolding)
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/R2RMLParser.h"
+#include "r2rml/TriplesMap.h"
 
+static void printHelp(const char* programName) {
+    std::cerr << "Usage: " << programName << " [options] <mapping.ttl>\n"
+              << "\n"
+              << "Options:\n"
+              << "  -P    Print the loaded R2RML mapping to stdout\n"
+              << "  -h    Show this help message\n";
+}
 
-int main() {
-    std::cout << "Hello SQL2RDF++" << std::endl;
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        printHelp(argv[0]);
+        return 1;
+    }
 
-    const char* test = "héllo"; // some utf8 text
-    size_t nbytes = 0;
-    SerdNodeFlags flags = 0;
-    size_t nchars = serd_strlen((const uint8_t*)test, &nbytes, &flags);
-    std::cout << "serd_strlen computed " << nchars << " characters (" << nbytes
-              << " bytes)" << std::endl;
+    bool printMapping = false;
+    const char* mappingFile = nullptr;
 
-    // also demonstrate strerror helper
-    const uint8_t* msg = serd_strerror(SERD_ERR_BAD_SYNTAX);
-    std::cout << "serd_strerror(SERD_ERR_BAD_SYNTAX) = " << msg << std::endl;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "-h") == 0 || std::strcmp(argv[i], "--help") == 0) {
+            printHelp(argv[0]);
+            return 0;
+        } else if (std::strcmp(argv[i], "-P") == 0) {
+            printMapping = true;
+        } else if (argv[i][0] != '-') {
+            mappingFile = argv[i];
+        } else {
+            std::cerr << "Unknown option: " << argv[i] << "\n";
+            printHelp(argv[0]);
+            return 1;
+        }
+    }
+
+    if (!mappingFile) {
+        std::cerr << "Error: no mapping file specified.\n";
+        printHelp(argv[0]);
+        return 1;
+    }
+
+    r2rml::R2RMLParser parser;
+    r2rml::R2RMLMapping mapping = parser.parse(mappingFile);
+
+    if (printMapping) {
+        std::cout << mapping << "\n";
+    }
 
     return 0;
 }

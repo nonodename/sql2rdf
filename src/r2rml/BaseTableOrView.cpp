@@ -2,6 +2,8 @@
 #include "r2rml/SQLConnection.h"
 #include "r2rml/SQLResultSet.h"
 
+#include <ostream>
+
 namespace r2rml {
 
 BaseTableOrView::BaseTableOrView(const std::string& table)
@@ -17,5 +19,9 @@ std::unique_ptr<SQLResultSet> BaseTableOrView::getRows(SQLConnection& dbConnecti
 }
 
 std::vector<std::string> BaseTableOrView::getColumnNames() { return {}; }
+
+std::ostream& BaseTableOrView::print(std::ostream& os) const {
+    return os << "BaseTableOrView { tableName=\"" << tableName << "\" }";
+}
 
 } // namespace r2rml

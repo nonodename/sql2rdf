@@ -1,9 +1,9 @@
 #pragma once
 
 #include <memory>
+#include <ostream>
 #include <string>
 #include <vector>
-#include <memory>
 
 namespace r2rml {
 
@@ -34,6 +34,14 @@ public:
      * Return true if this logical table has all required properties set.
      */
     virtual bool isValid() const = 0;
+
+    /**
+     * Write a human-readable representation to the given stream.
+     * Subclasses should override this.
+     */
+    virtual std::ostream& print(std::ostream& os) const;
+
+    friend std::ostream& operator<<(std::ostream& os, const LogicalTable& lt);
 
     /**
      * The SQL text that defines this logical table.  Derived classes may

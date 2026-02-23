@@ -8,7 +8,7 @@
 namespace r2rml {
 
 /**
- * A term map defined by an RFC 6570–style template string.  Placeholders are
+ * A term map defined by an RFC 6570-style template string.  Placeholders are
  * filled with column values from the current row.
  */
 class TemplateTermMap : public TermMap {
@@ -24,6 +24,8 @@ public:
         // templateString must not be empty
         return !templateString.empty();
     }
+
+    std::ostream& print(std::ostream& os) const override;
 
     std::string templateString;
 

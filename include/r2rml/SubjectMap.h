@@ -21,6 +21,8 @@ public:
 
     bool isValid() const override;
 
+    std::ostream& print(std::ostream& os) const override;
+
     std::vector<std::string> classIRIs;
     std::vector<std::unique_ptr<GraphMap>> graphMaps;
 };

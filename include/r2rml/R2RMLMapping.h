@@ -1,9 +1,9 @@
 #pragma once
 
 #include <memory>
+#include <ostream>
 #include <string>
 #include <vector>
-#include <memory>
 
 #include <serd/serd.h>
 
@@ -46,6 +46,8 @@ public:
      * Return true if all contained triples maps are valid.
      */
     bool isValid() const;
+
+    friend std::ostream& operator<<(std::ostream& os, const R2RMLMapping& m);
 
     std::vector<std::unique_ptr<TriplesMap>> triplesMaps;
     SerdEnv* serdEnvironment{nullptr};

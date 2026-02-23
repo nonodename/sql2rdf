@@ -27,6 +27,8 @@ public:
         return constantValue.type != 0;
     }
 
+    std::ostream& print(std::ostream& os) const override;
+
     SerdNode constantValue{0};
 
 private:

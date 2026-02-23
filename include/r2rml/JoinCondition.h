@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ostream>
 #include <string>
 #include <memory>
 
@@ -14,6 +15,8 @@ public:
     JoinCondition(const std::string& childCol, const std::string& parentCol);
 
     bool isValid() const { return !childColumn.empty() && !parentColumn.empty(); }
+
+    friend std::ostream& operator<<(std::ostream& os, const JoinCondition& jc);
 
     std::string childColumn;
     std::string parentColumn;

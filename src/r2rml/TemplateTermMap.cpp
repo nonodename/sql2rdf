@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <ostream>
 #include <string>
 
 namespace r2rml {
@@ -66,6 +67,13 @@ SerdNode TemplateTermMap::generateRDFTerm(const SQLRow& row,
     // Return a URI node whose buf points into expanded_ (no allocation).
     return serd_node_from_string(SERD_URI,
         reinterpret_cast<const uint8_t*>(expanded_.c_str()));
+}
+
+std::ostream& TemplateTermMap::print(std::ostream& os) const {
+    os << "TemplateTermMap { template=\"" << templateString << "\" ";
+    TermMap::print(os);
+    os << " }";
+    return os;
 }
 
 } // namespace r2rml

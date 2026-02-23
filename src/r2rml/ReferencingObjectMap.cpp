@@ -9,6 +9,7 @@
 #include "r2rml/SQLValue.h"
 
 #include <algorithm>
+#include <ostream>
 #include <vector>
 
 namespace r2rml {
@@ -85,6 +86,22 @@ SerdNode ReferencingObjectMap::generateRDFTerm(const SQLRow& /*childRow*/,
         return SERD_NODE_NULL;
 
     return parentTriplesMap->subjectMap->generateRDFTerm(parentRow, env);
+}
+
+std::ostream& ReferencingObjectMap::print(std::ostream& os) const {
+    os << "ReferencingObjectMap { parent=";
+    if (parentTriplesMap) os << "<" << parentTriplesMap->id << ">";
+    else                  os << "(unresolved)";
+    if (!joinConditions.empty()) {
+        os << " joins=[";
+        for (std::size_t i = 0; i < joinConditions.size(); ++i) {
+            if (i) os << ", ";
+            os << joinConditions[i];
+        }
+        os << "]";
+    }
+    os << " }";
+    return os;
 }
 
 } // namespace r2rml

@@ -37,6 +37,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <ostream>
 
 namespace r2rml {
 
@@ -224,6 +225,30 @@ public:
     {
         if (valueMap) return valueMap->generateRDFTerm(row, env);
         return SERD_NODE_NULL;
+    }
+
+    std::ostream& print(std::ostream& os) const override
+    {
+        os << "SubjectMap {";
+        if (valueMap) os << " valueMap=" << *valueMap;
+        if (!classIRIs.empty()) {
+            os << " classes=[";
+            for (std::size_t i = 0; i < classIRIs.size(); ++i) {
+                if (i) os << ", ";
+                os << classIRIs[i];
+            }
+            os << "]";
+        }
+        if (!graphMaps.empty()) {
+            os << " graphMaps=[";
+            for (std::size_t i = 0; i < graphMaps.size(); ++i) {
+                if (i) os << ", ";
+                if (graphMaps[i]) os << *graphMaps[i];
+            }
+            os << "]";
+        }
+        os << " }";
+        return os;
     }
 };
 

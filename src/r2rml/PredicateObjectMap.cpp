@@ -8,6 +8,7 @@
 #include "r2rml/SQLResultSet.h"
 
 #include <algorithm>
+#include <ostream>
 
 namespace r2rml {
 
@@ -82,6 +83,30 @@ bool PredicateObjectMap::isValid() const {
                        [](const std::unique_ptr<TermMap>& om) {
                            return om && om->isValid();
                        });
+}
+
+std::ostream& operator<<(std::ostream& os, const PredicateObjectMap& pom) {
+    os << "PredicateObjectMap { predicates=[";
+    for (std::size_t i = 0; i < pom.predicateMaps.size(); ++i) {
+        if (i) os << ", ";
+        if (pom.predicateMaps[i]) os << *pom.predicateMaps[i];
+    }
+    os << "] objects=[";
+    for (std::size_t i = 0; i < pom.objectMaps.size(); ++i) {
+        if (i) os << ", ";
+        if (pom.objectMaps[i]) os << *pom.objectMaps[i];
+    }
+    os << "]";
+    if (!pom.graphMaps.empty()) {
+        os << " graphMaps=[";
+        for (std::size_t i = 0; i < pom.graphMaps.size(); ++i) {
+            if (i) os << ", ";
+            if (pom.graphMaps[i]) os << *pom.graphMaps[i];
+        }
+        os << "]";
+    }
+    os << " }";
+    return os;
 }
 
 } // namespace r2rml

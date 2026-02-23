@@ -1,9 +1,9 @@
 #pragma once
 
 #include <memory>
+#include <ostream>
 #include <string>
 #include <vector>
-#include <memory>
 
 #include <serd/serd.h>
 
@@ -36,6 +36,8 @@ public:
                          SQLConnection& dbConnection) const;
 
     bool isValid() const;
+
+    friend std::ostream& operator<<(std::ostream& os, const TriplesMap& tm);
 
     std::string id;
     std::unique_ptr<LogicalTable> logicalTable;

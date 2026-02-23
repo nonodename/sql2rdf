@@ -31,6 +31,8 @@ public:
                              const SQLRow& parentRow,
                              const SerdEnv& env) const;
 
+    std::ostream& print(std::ostream& os) const override;
+
     TriplesMap* parentTriplesMap{nullptr};
     std::vector<JoinCondition> joinConditions;
 };
