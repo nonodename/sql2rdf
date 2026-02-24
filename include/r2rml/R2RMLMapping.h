@@ -26,8 +26,8 @@ public:
     R2RMLMapping& operator=(const R2RMLMapping&) = delete;
 
     // allow moves so the mapping can be returned or stored in containers
-    R2RMLMapping(R2RMLMapping&&) noexcept = default;
-    R2RMLMapping& operator=(R2RMLMapping&&) noexcept = default;
+    R2RMLMapping(R2RMLMapping&&) noexcept;
+    R2RMLMapping& operator=(R2RMLMapping&&) noexcept;
 
     /**
      * Load an R2RML mapping from a Turtle (or other RDF) file.  The method

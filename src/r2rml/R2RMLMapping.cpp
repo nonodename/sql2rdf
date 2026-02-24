@@ -7,10 +7,26 @@
 
 #include <algorithm>
 #include <ostream>
+#include <utility>
 
 namespace r2rml {
 
 R2RMLMapping::R2RMLMapping() = default;
+
+R2RMLMapping::R2RMLMapping(R2RMLMapping&& other) noexcept
+    : triplesMaps(std::move(other.triplesMaps))
+    , serdEnvironment(std::exchange(other.serdEnvironment, nullptr))
+{}
+
+R2RMLMapping& R2RMLMapping::operator=(R2RMLMapping&& other) noexcept {
+    if (this != &other) {
+        if (serdEnvironment) serd_env_free(serdEnvironment);
+        triplesMaps     = std::move(other.triplesMaps);
+        serdEnvironment = std::exchange(other.serdEnvironment, nullptr);
+    }
+    return *this;
+}
+
 R2RMLMapping::~R2RMLMapping() {
     if (serdEnvironment) {
         serd_env_free(serdEnvironment);
