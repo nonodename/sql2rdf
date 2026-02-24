@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.5...3.29)
 project(SQL2RDF++ LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(FetchContent)
 
@@ -12,6 +12,24 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(Catch2)
+
+# ----------------------------------------------------------------------------
+# DuckDB dependency - built from the single-file amalgamation
+# ----------------------------------------------------------------------------
+FetchContent_Declare(
+  duckdb_amalgamation
+  URL "https://github.com/duckdb/duckdb/releases/download/v1.1.3/libduckdb-src.zip"
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_GetProperties(duckdb_amalgamation)
+if(NOT duckdb_amalgamation_POPULATED)
+  FetchContent_MakeAvailable(duckdb_amalgamation) 
+endif()
+
+add_library(duckdb_static STATIC "${duckdb_amalgamation_SOURCE_DIR}/duckdb.cpp")
+target_include_directories(duckdb_static PUBLIC "${duckdb_amalgamation_SOURCE_DIR}")
+find_package(Threads REQUIRED)
+target_link_libraries(duckdb_static PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
 
 enable_testing()
 include(Catch)
@@ -61,13 +79,14 @@ set(R2RML_SOURCES
   src/r2rml/SQLRow.cpp
   src/r2rml/SQLValue.cpp
   src/r2rml/R2RMLParser.cpp
+  src/r2rml/DuckDBConnection.cpp
 )
 add_library(sql2rdf_r2rml STATIC ${R2RML_SOURCES})
 target_include_directories(sql2rdf_r2rml PUBLIC include ${CMAKE_SOURCE_DIR}/external/serd/include)
 if(UNIX)
-  target_link_libraries(sql2rdf_r2rml PUBLIC serd m)
+  target_link_libraries(sql2rdf_r2rml PUBLIC serd m duckdb_static)
 else()
-  target_link_libraries(sql2rdf_r2rml PUBLIC serd)
+  target_link_libraries(sql2rdf_r2rml PUBLIC serd duckdb_static)
 endif()
 
 # Specify main executable sources and link to the library
