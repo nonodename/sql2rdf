@@ -5,6 +5,8 @@
 
 #include "duckdb.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -120,7 +122,11 @@ DuckDBConnection::execute(const std::string& sqlQuery) {
         for (duckdb::idx_t row = 0; row < chunk->size(); ++row) {
             std::map<std::string, SQLValue> columns;
             for (duckdb::idx_t col = 0; col < chunk->ColumnCount(); ++col) {
-                columns[result->ColumnName(col)] =
+                std::string colName = result->ColumnName(col);
+                std::transform(colName.begin(), colName.end(),
+                               colName.begin(),
+                               [](unsigned char c){ return std::toupper(c); });
+                columns[colName] =
                     duckValueToSQLValue(chunk->GetValue(col, row));
             }
             rows.emplace_back(std::move(columns));
