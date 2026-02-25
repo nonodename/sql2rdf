@@ -77,11 +77,18 @@ jobs:
     - name: Install DuckDB
       run: |
         if [ "$RUNNER_OS" == "Linux" ]; then
-          curl https://install.duckdb.org | sh
+          wget https://install.duckdb.org/v1.4.4/libduckdb-linux-amd64.zip
+          unzip libduckdb-linux-amd64.zip -d duckdb
+          sudo mv duckdb/libduckdb.so /usr/local/lib/libduckdb.so
+          sudo mv duckdb/duckdb.h /usr/local/include/duckdb.h
+          sudo ldconfig /usr/local/lib
         elif [ "$RUNNER_OS" == "macOS" ]; then
           brew install duckdb
         elif [ "$RUNNER_OS" == "Windows" ]; then
-          choco install duckdb -y
+          Invoke-WebRequest  -Uri "https://install.duckdb.org/v1.4.4/libduckdb-windows-amd64.zip" `-OutFile "libduckdb-windows-amd64.zip"
+          Expand-Archive -Path "libduckdb-windows-amd64.zip" -DestinationPath "libduckdb-windows-amd64" -Force
+          $absPath = (Resolve-Path ".\libduckdb-windows-amd64").Path
+          $env:PATH = "$absPath;$env:PATH"
         fi
       shell: bash
     - name: Configure Environment
