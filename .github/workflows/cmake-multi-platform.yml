@@ -88,12 +88,14 @@ jobs:
         elif [ "$RUNNER_OS" == "Windows" ]; then
           curl -LO  https://install.duckdb.org/v1.4.4/libduckdb-windows-amd64.zip
           unzip libduckdb-windows-amd64.zip -d duckdb
-          mkdir -p /c/duckdb/include
-          mkdir -p /c/duckdb/bin
-          mv duckdb/duckdb.h /c/duckdb/include/
-          mv duckdb/duckdb.hpp /c/duckdb/include/
-          mv duckdb/duckdb.dll /c/duckdb/bin/
-          echo "C:\duckdb\bin" >> $GITHUB_PATH
+          mkdir -p "C:/duckdb/include"
+          mkdir -p "C:/duckdb/lib"
+          mv duckdb_tmp/*.h* "C:/duckdb/include/"
+          mv duckdb_tmp/*.lib "C:/duckdb/lib/"
+          mv duckdb_tmp/*.dll "C:/duckdb/lib/"
+          
+          # Add the DLL to PATH so tests can run later
+          echo "C:\duckdb\lib" >> $GITHUB_PATH
         fi
       shell: bash
     - name: Configure Environment
@@ -103,7 +105,6 @@ jobs:
           # Homebrew on Apple Silicon (Standard for macos-latest)
           echo "CMAKE_PREFIX_PATH=/opt/homebrew" >> $GITHUB_ENV
         elif [ "$RUNNER_OS" == "Windows" ]; then
-          # Chocolatey usually installs to C:\tools or specific dirs
           # DuckDB choco path often needs explicit pointing:
           echo "CMAKE_PREFIX_PATH=C:/duckdb" >> $GITHUB_ENV
         else

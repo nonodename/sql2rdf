@@ -38,11 +38,13 @@ if(USE_EMBEDDED_DUCKDB)
   target_link_libraries(duckdb PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
 else()
   # Try to find system-installed DuckDB (header: duckdb.hpp, library: libduckdb)
-  find_path(DUCKDB_INCLUDE_DIR duckdb.h PATHS /usr/include /usr/local/include NO_DEFAULT_PATH HINTS /opt/homebrew/include /usr/local/include)
-  find_library(DUCKDB_LIBRARY NAMES duckdb PATHS /usr/lib /usr/local/lib NO_DEFAULT_PATH HINTS /opt/homebrew/lib /usr/local/lib)
+  find_path(DUCKDB_INCLUDE_DIR NAMES duckdb.h HINTS /opt/homebrew/include )
+  find_library(DUCKDB_LIBRARY NAMES duckdb)
 
   if(NOT DUCKDB_INCLUDE_DIR OR NOT DUCKDB_LIBRARY)
-    message(FATAL_ERROR "DuckDB not found. Install system libduckdb development package (headers + library) or set -DUSE_EMBEDDED_DUCKDB=ON to build DuckDB from source.")
+    message(STATUS "Debug: DUCKDB_INCLUDE_DIR=${DUCKDB_INCLUDE_DIR}")
+    message(STATUS "Debug: DUCKDB_LIBRARY=${DUCKDB_LIBRARY}")
+    message(FATAL_ERROR "DuckDB not found...")
   endif()
 
   # Create an imported target so the rest of the CMakeLists can link to 'duckdb'
