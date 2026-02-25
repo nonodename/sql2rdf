@@ -85,10 +85,10 @@ jobs:
         elif [ "$RUNNER_OS" == "macOS" ]; then
           brew install duckdb
         elif [ "$RUNNER_OS" == "Windows" ]; then
-          Invoke-WebRequest  -Uri "https://install.duckdb.org/v1.4.4/libduckdb-windows-amd64.zip" -OutFile "libduckdb-windows-amd64.zip"
-          Expand-Archive -Path "libduckdb-windows-amd64.zip" -DestinationPath "libduckdb-windows-amd64" -Force
-          $absPath = (Resolve-Path ".\libduckdb-windows-amd64").Path
-          $env:PATH = "$absPath;$env:PATH"
+          wget https://install.duckdb.org/v1.4.4/libduckdb-windows-amd64.zip
+          unzip libduckdb-windows-amd64.zip -d duckdb
+          mv duckdb\duckdb.dll C:\Windows\System32\duckdb.dll
+          mv duckdb\duckdb.h C:\ProgramData\chocolatey\lib\duckdb\duckdb.h
         fi
       shell: bash
     - name: Configure Environment
