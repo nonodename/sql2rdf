@@ -1,14 +1,16 @@
 # SQL2RDF++
 
-A project built with CMake that will eventually convert SQL data to RDF.
+A command line utility to convert relational database tables to RDF using R2RML syntax.
+
+Utlimately this is intended to prove out implementation of R2RML in C++ so that the code can be lifted into a DuckDB extension to support a `COPY TO` export from Duck.
+
+## Building
 
 **Requires a C++11-compliant compiler** (GCC 4.8+, Clang 3.3+, MSVC 2015+).
 
 The repository now includes the [Serd](https://drobilla.net/software/serd/) RDF syntax
 library as a git submodule under `external/serd`. The CMake build system compiles Serd
 from source and links a static `serd` library into the `SQL2RDF++` executable.
-A simple demonstration of calling `serd_strlen` and `serd_strerror` is used in
-`src/main.cpp` to prove the dependency is working.
 
 To build:
 
@@ -16,15 +18,13 @@ To build:
 mkdir build && cd build
 cmake ..
 make
+make tests
 ./SQL2RDF++
 ```
 
-## Building
-
-```bash
-mkdir build && cd build
-cmake ..
-make
+If you have ninja installed you can also make by saying
+```sh
+GEN=ninja make
 ```
 
 Notes:
@@ -35,5 +35,20 @@ Notes:
 - If you prefer building an embedded DuckDB from source, pass the CMake option
 	`-DUSE_EMBEDDED_DUCKDB=ON` when configuring the build.
 
-The project's GitHub Actions workflow now installs DuckDB on runners before
-configuring CMake, so CI runs will use the system package by default.
+See the GitHub actions for how to configure Duck libraries for your OS and/or the DuckDB (site)[https://duckdb.org/install/?platform=macos&environment=c].
+
+## Usage
+
+```sh
+Usage: ./SQL2RDF++ [options] <mapping.ttl> <database.db> <output.nt>
+
+Arguments:
+  mapping.ttl    R2RML mapping file (Turtle format)
+  database.db    DuckDB database file
+  output.nt      Output RDF file
+
+Options:
+  -f ntriples|turtle   Output format (default: ntriples)
+  -P                   Print the parsed mapping to stderr
+  -h                   Show this help message
+```

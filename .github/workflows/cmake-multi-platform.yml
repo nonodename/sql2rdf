@@ -66,12 +66,16 @@ jobs:
         echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
     - name: Install Ninja
       run: |
-        if [ "$RUNNER_OS" == "Linux" ]; then
-          sudo apt-get install ninja-build
-        elif [ "$RUNNER_OS" == "macOS" ]; then
-          brew install ninja
-        elif [ "$RUNNER_OS" == "Windows" ]; then
-          choco install ninja
+        if command -v ninja >/dev/null 2>&1; then
+          echo "Ninja is installed!"
+        else
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            sudo apt-get install ninja-build
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            brew install ninja
+          elif [ "$RUNNER_OS" == "Windows" ]; then
+            choco install ninja
+          fi
         fi
       shell: bash
     - name: Install DuckDB
