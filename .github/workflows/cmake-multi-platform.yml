@@ -90,9 +90,9 @@ jobs:
           unzip libduckdb-windows-amd64.zip -d duckdb
           mkdir -p "C:/duckdb/include"
           mkdir -p "C:/duckdb/lib"
-          mv duckdb_tmp/*.h* "C:/duckdb/include/"
-          mv duckdb_tmp/*.lib "C:/duckdb/lib/"
-          mv duckdb_tmp/*.dll "C:/duckdb/lib/"
+          mv duckdb/*.h* "C:/duckdb/include/"
+          mv duckdb/*.lib "C:/duckdb/lib/"
+          mv duckdb/*.dll "C:/duckdb/lib/"
           
           # Add the DLL to PATH so tests can run later
           echo "C:\duckdb\lib" >> $GITHUB_PATH
