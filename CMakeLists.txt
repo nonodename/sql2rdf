@@ -110,7 +110,7 @@ target_include_directories(sql2rdf_r2rml PUBLIC include ${CMAKE_SOURCE_DIR}/exte
 if(UNIX)
   target_link_libraries(sql2rdf_r2rml PUBLIC serd m duckdb)
 else()
-  target_link_libraries(sql2rdf_r2rml PUBLIC serd dduckdbc)
+  target_link_libraries(sql2rdf_r2rml PUBLIC serd duckdb)
 endif()
 
 # Specify main executable sources and link to the library
