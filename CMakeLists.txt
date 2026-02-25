@@ -17,19 +17,19 @@ FetchContent_MakeAvailable(Catch2)
 # DuckDB dependency - built from the single-file amalgamation
 # ----------------------------------------------------------------------------
 FetchContent_Declare(
-  duckdb_amalgamation
-  URL "https://github.com/duckdb/duckdb/releases/download/v1.1.3/libduckdb-src.zip"
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  duckdb
+  GIT_REPOSITORY https://github.com/duckdb/duckdb.git
+  GIT_TAG        v1.4.4 # Use the latest stable tag
 )
-FetchContent_GetProperties(duckdb_amalgamation)
-if(NOT duckdb_amalgamation_POPULATED)
-  FetchContent_MakeAvailable(duckdb_amalgamation) 
+FetchContent_GetProperties(duckdb)
+if(NOT duckdbn_POPULATED)
+  FetchContent_MakeAvailable(duckdb) 
 endif()
 
-add_library(duckdb_static STATIC "${duckdb_amalgamation_SOURCE_DIR}/duckdb.cpp")
-target_include_directories(duckdb_static PUBLIC "${duckdb_amalgamation_SOURCE_DIR}")
+#add_library(duckdb_static STATIC "${duckdb_amalgamation_SOURCE_DIR}/duckdb.cpp")
+#target_include_directories(duckdb_static PUBLIC "${duckdb_amalgamation_SOURCE_DIR}")
 find_package(Threads REQUIRED)
-target_link_libraries(duckdb_static PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+target_link_libraries(duckdb PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
 
 enable_testing()
 include(Catch)
@@ -84,9 +84,9 @@ set(R2RML_SOURCES
 add_library(sql2rdf_r2rml STATIC ${R2RML_SOURCES})
 target_include_directories(sql2rdf_r2rml PUBLIC include ${CMAKE_SOURCE_DIR}/external/serd/include)
 if(UNIX)
-  target_link_libraries(sql2rdf_r2rml PUBLIC serd m duckdb_static)
+  target_link_libraries(sql2rdf_r2rml PUBLIC serd m duckdb)
 else()
-  target_link_libraries(sql2rdf_r2rml PUBLIC serd duckdb_static)
+  target_link_libraries(sql2rdf_r2rml PUBLIC serd dduckdbc)
 endif()
 
 # Specify main executable sources and link to the library
