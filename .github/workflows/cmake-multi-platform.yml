@@ -89,6 +89,7 @@ jobs:
           curl -LO  https://install.duckdb.org/v1.4.4/libduckdb-windows-amd64.zip
           unzip libduckdb-windows-amd64.zip -d duckdb
           mkdir -p /c/duckdb/include
+          mkdir -p /c/duckdb/bin
           mv duckdb/duckdb.h /c/duckdb/include/
           mv duckdb/duckdb.hpp /c/duckdb/include/
           mv duckdb/duckdb.dll /c/duckdb/bin/
@@ -104,7 +105,7 @@ jobs:
         elif [ "$RUNNER_OS" == "Windows" ]; then
           # Chocolatey usually installs to C:\tools or specific dirs
           # DuckDB choco path often needs explicit pointing:
-          echo "CMAKE_PREFIX_PATH=C:/ProgramData/chocolatey/lib/duckdb" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=C:/duckdb" >> $GITHUB_ENV
         else
           # Linux usually finds it in /usr via apt, but we can be explicit
           echo "CMAKE_PREFIX_PATH=/usr" >> $GITHUB_ENV
