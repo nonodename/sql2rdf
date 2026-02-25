@@ -81,15 +81,18 @@ jobs:
           unzip libduckdb-linux-amd64.zip -d duckdb
           sudo mv duckdb/libduckdb.so /usr/local/lib/libduckdb.so
           sudo mv duckdb/duckdb.h /usr/local/include/duckdb.h
-          sudo mv duckdb/duckdb.hpp /usr/local/include/duckdb.h
+          sudo mv duckdb/duckdb.hpp /usr/local/include/duckdb.hpp
           sudo ldconfig /usr/local/lib
         elif [ "$RUNNER_OS" == "macOS" ]; then
           brew install duckdb
         elif [ "$RUNNER_OS" == "Windows" ]; then
           curl -LO  https://install.duckdb.org/v1.4.4/libduckdb-windows-amd64.zip
           unzip libduckdb-windows-amd64.zip -d duckdb
-          mv duckdb/duckdb.dll C:/Windows/System32/duckdb.dll
-          mv duckdb/duckdb.h C:/ProgramData/lib/duckdb/duckdb.h
+          mkdir -p /c/duckdb/include
+          mv duckdb/duckdb.h /c/duckdb/include/
+          mv duckdb/duckdb.hpp /c/duckdb/include/
+          mv duckdb/duckdb.dll /c/duckdb/bin/
+          echo "C:\duckdb\bin" >> $GITHUB_PATH
         fi
       shell: bash
     - name: Configure Environment
