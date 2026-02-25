@@ -1,6 +1,6 @@
 # SQL2RDF++
 
-A command line utility to convert relational database tables to RDF using R2RML syntax.
+A command line utility to convert relational database tables to RDF using R2RML syntax. 
 
 Utlimately this is intended to prove out implementation of R2RML in C++ so that the code can be lifted into a DuckDB extension to support a `COPY TO` export from Duck.
 
@@ -36,6 +36,14 @@ Notes:
 	`-DUSE_EMBEDDED_DUCKDB=ON` when configuring the build.
 
 See the GitHub actions for how to configure Duck libraries for your OS and/or the DuckDB (site)[https://duckdb.org/install/?platform=macos&environment=c].
+
+## Testing
+
+There are two testing strategies used here. Both are based on the example tables and mapping configurations in the W3C (spec)[https://www.w3.org/TR/r2rml/]. 
+
+Example files from there are found in tests/sourceR2RML
+
+Against these files are run completely mocked database tables and then a DuckDB database, r2rmltest.db for actual query execution.
 
 ## Usage
 
