@@ -77,8 +77,7 @@ jobs:
     - name: Install DuckDB
       run: |
         if [ "$RUNNER_OS" == "Linux" ]; then
-          sudo apt-get update
-          sudo apt-get install -y libduckdb-dev || sudo apt-get install -y duckdb || true
+          curl https://install.duckdb.org | sh
         elif [ "$RUNNER_OS" == "macOS" ]; then
           brew install duckdb
         elif [ "$RUNNER_OS" == "Windows" ]; then
@@ -99,6 +98,9 @@ jobs:
           # Linux usually finds it in /usr via apt, but we can be explicit
           echo "CMAKE_PREFIX_PATH=/usr" >> $GITHUB_ENV
         fi
+    - name: Set up MSVC
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
