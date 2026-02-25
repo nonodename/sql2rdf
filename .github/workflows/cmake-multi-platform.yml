@@ -74,6 +74,17 @@ jobs:
           choco install ninja
         fi
       shell: bash
+    - name: Install DuckDB
+      run: |
+        if [ "$RUNNER_OS" == "Linux" ]; then
+          sudo apt-get update
+          sudo apt-get install -y libduckdb-dev || sudo apt-get install -y duckdb || true
+        elif [ "$RUNNER_OS" == "macOS" ]; then
+          brew install duckdb
+        elif [ "$RUNNER_OS" == "Windows" ]; then
+          choco install duckdb -y
+        fi
+      shell: bash
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type

@@ -26,3 +26,14 @@ mkdir build && cd build
 cmake ..
 make
 ```
+
+Notes:
+- This project links to DuckDB at runtime. For faster CI builds we assume a
+	system-installed DuckDB (headers + library) is available. On Debian/Ubuntu
+	install the dev package `libduckdb-dev` (or `duckdb`) and on macOS use
+	`brew install duckdb`.
+- If you prefer building an embedded DuckDB from source, pass the CMake option
+	`-DUSE_EMBEDDED_DUCKDB=ON` when configuring the build.
+
+The project's GitHub Actions workflow now installs DuckDB on runners before
+configuring CMake, so CI runs will use the system package by default.

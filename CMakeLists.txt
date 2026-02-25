@@ -14,22 +14,44 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(Catch2)
 
 # ----------------------------------------------------------------------------
-# DuckDB dependency - built from the single-file amalgamation
+# DuckDB dependency - prefer system-installed library; fall back to embedded
 # ----------------------------------------------------------------------------
-FetchContent_Declare(
-  duckdb
-  GIT_REPOSITORY https://github.com/duckdb/duckdb.git
-  GIT_TAG        v1.4.4 # Use the latest stable tag
-)
-FetchContent_GetProperties(duckdb)
-if(NOT duckdbn_POPULATED)
-  FetchContent_MakeAvailable(duckdb) 
-endif()
+# By default we assume a system-installed libduckdb and duckdb.hpp are
+# available (for faster CI builds). Set `-DUSE_EMBEDDED_DUCKDB=ON` to force
+# building DuckDB from source (amalgamation / FetchContent).
+option(USE_EMBEDDED_DUCKDB "Build DuckDB from source (amalgamation). If OFF, find system libduckdb and duckdb.hpp" OFF)
 
-#add_library(duckdb_static STATIC "${duckdb_amalgamation_SOURCE_DIR}/duckdb.cpp")
-#target_include_directories(duckdb_static PUBLIC "${duckdb_amalgamation_SOURCE_DIR}")
 find_package(Threads REQUIRED)
-target_link_libraries(duckdb PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+
+if(USE_EMBEDDED_DUCKDB)
+  FetchContent_Declare(
+    duckdb
+    GIT_REPOSITORY https://github.com/duckdb/duckdb.git
+    GIT_TAG        v1.4.4 # Use the latest stable tag
+  )
+  FetchContent_GetProperties(duckdb)
+  if(NOT duckdb_POPULATED)
+    FetchContent_MakeAvailable(duckdb)
+  endif()
+
+  # when building embedded DuckDB, make sure the target links to threads/dl
+  target_link_libraries(duckdb PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+else()
+  # Try to find system-installed DuckDB (header: duckdb.hpp, library: libduckdb)
+  find_path(DUCKDB_INCLUDE_DIR duckdb.hpp PATHS /usr/include /usr/local/include NO_DEFAULT_PATH)
+  find_library(DUCKDB_LIBRARY NAMES duckdb PATHS /usr/lib /usr/local/lib NO_DEFAULT_PATH)
+
+  if(NOT DUCKDB_INCLUDE_DIR OR NOT DUCKDB_LIBRARY)
+    message(FATAL_ERROR "DuckDB not found. Install system libduckdb development package (headers + library) or set -DUSE_EMBEDDED_DUCKDB=ON to build DuckDB from source.")
+  endif()
+
+  # Create an imported target so the rest of the CMakeLists can link to 'duckdb'
+  add_library(duckdb UNKNOWN IMPORTED)
+  set_target_properties(duckdb PROPERTIES
+    IMPORTED_LOCATION "${DUCKDB_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${DUCKDB_INCLUDE_DIR}"
+  )
+endif()
 
 enable_testing()
 include(Catch)
