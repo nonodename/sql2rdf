@@ -483,6 +483,110 @@ TEST_CASE("Example 4 - EMP2DEPT table with template subject and template objects
 }
 
 // ---------------------------------------------------------------------------
+// isValidInsideOut – positive and negative tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("isValidInsideOut - empty mapping is vacuously valid") {
+    R2RMLMapping m;
+    REQUIRE(m.isValidInsideOut());
+}
+
+TEST_CASE("isValidInsideOut - valid: no logicalTable and no refObjectMap") {
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "inside_out_valid.ttl");
+
+    REQUIRE(mapping.triplesMaps.size() == 1);
+    TriplesMap* tm = findById(mapping, "TriplesMapIO");
+    REQUIRE(tm != nullptr);
+
+    // No logical table was specified in the TTL.
+    REQUIRE(tm->logicalTable == nullptr);
+
+    // Subject map and two predicate-object maps are present.
+    REQUIRE(tm->subjectMap != nullptr);
+    REQUIRE(tm->predicateObjectMaps.size() == 2);
+
+    // Individual and aggregate checks.
+    REQUIRE(tm->isValidInsideOut());
+    REQUIRE(mapping.isValidInsideOut());
+
+    // isValid() is false because there is no logicalTable.
+    REQUIRE_FALSE(tm->isValid());
+    REQUIRE_FALSE(mapping.isValid());
+}
+
+TEST_CASE("isValidInsideOut - invalid: has logicalTable (rr:tableName / BaseTableOrView)") {
+    // example1 uses rr:tableName "EMP" -> BaseTableOrView -> should fail inside-out.
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example1.ttl");
+
+    REQUIRE(mapping.triplesMaps.size() == 1);
+    TriplesMap* tm = findById(mapping, "TriplesMap1");
+    REQUIRE(tm != nullptr);
+    REQUIRE(dynamic_cast<BaseTableOrView*>(tm->logicalTable.get()) != nullptr);
+
+    REQUIRE_FALSE(tm->isValidInsideOut());
+    REQUIRE_FALSE(mapping.isValidInsideOut());
+}
+
+TEST_CASE("isValidInsideOut - invalid: has logicalTable (rr:sqlQuery / R2RMLView)") {
+    // example2 uses rr:sqlQuery -> R2RMLView -> should fail inside-out.
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example2.ttl");
+
+    REQUIRE(mapping.triplesMaps.size() == 1);
+    TriplesMap* tm = findById(mapping, "TriplesMap2");
+    REQUIRE(tm != nullptr);
+    REQUIRE(dynamic_cast<R2RMLView*>(tm->logicalTable.get()) != nullptr);
+
+    REQUIRE_FALSE(tm->isValidInsideOut());
+    REQUIRE_FALSE(mapping.isValidInsideOut());
+}
+
+TEST_CASE("isValidInsideOut - invalid: has refObjectMap and joinCondition") {
+    // inside_out_with_rom.ttl has two TriplesMap nodes with no logicalTable,
+    // but one contains a rr:refObjectMap with a rr:joinCondition.
+    R2RMLParser parser;
+    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "inside_out_with_rom.ttl");
+
+    REQUIRE(mapping.triplesMaps.size() == 2);
+
+    TriplesMap* empTm = findById(mapping, "EmpTriplesMap");
+    REQUIRE(empTm != nullptr);
+    REQUIRE(empTm->logicalTable == nullptr);
+    REQUIRE(empTm->predicateObjectMaps.size() == 1);
+
+    PredicateObjectMap& pom = *empTm->predicateObjectMaps[0];
+    REQUIRE(pom.objectMaps.size() == 1);
+    auto* rom = dynamic_cast<ReferencingObjectMap*>(pom.objectMaps[0].get());
+    REQUIRE(rom != nullptr);
+    REQUIRE(rom->joinConditions.size() == 1);
+
+    // The POM containing the ROM fails inside-out validation.
+    REQUIRE_FALSE(pom.isValidInsideOut());
+    // The TriplesMap therefore also fails.
+    REQUIRE_FALSE(empTm->isValidInsideOut());
+    // The whole mapping fails because at least one TriplesMap is invalid.
+    REQUIRE_FALSE(mapping.isValidInsideOut());
+}
+
+TEST_CASE("isValidInsideOut - PredicateObjectMap with only non-ROM objectMaps is valid") {
+    // Construct a POM programmatically with a ConstantTermMap predicate and
+    // a ColumnTermMap object (no ReferencingObjectMap).
+    const uint8_t predUri[] = "http://example.com/ns#name";
+    SerdNode predNode = serd_node_from_string(SERD_URI, predUri);
+
+    PredicateObjectMap pom;
+    pom.predicateMaps.push_back(
+        std::unique_ptr<ConstantTermMap>(new ConstantTermMap(predNode)));
+    pom.objectMaps.push_back(
+        std::unique_ptr<ColumnTermMap>(new ColumnTermMap("ENAME")));
+
+    REQUIRE(pom.isValid());
+    REQUIRE(pom.isValidInsideOut());
+}
+
+// ---------------------------------------------------------------------------
 // Example 5 – SQL view with CASE expression mapping to a template object
 // ---------------------------------------------------------------------------
 

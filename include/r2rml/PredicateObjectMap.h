@@ -35,6 +35,13 @@ public:
 
     bool isValid() const;
 
+    /**
+     * Return true if this PredicateObjectMap is valid for inside-out execution.
+     * rr:refObjectMap (ReferencingObjectMap) and therefore rr:JoinCondition are
+     * not permitted; all other maps must satisfy their own isValid() checks.
+     */
+    bool isValidInsideOut() const;
+
     friend std::ostream& operator<<(std::ostream& os, const PredicateObjectMap& pom);
 
     std::vector<std::unique_ptr<TermMap>> predicateMaps;

@@ -85,6 +85,22 @@ bool PredicateObjectMap::isValid() const {
                        });
 }
 
+bool PredicateObjectMap::isValidInsideOut() const {
+    if (predicateMaps.empty() || objectMaps.empty()) return false;
+    if (!std::all_of(predicateMaps.begin(), predicateMaps.end(),
+                     [](const std::unique_ptr<TermMap>& pm) {
+                         return pm && pm->isValid();
+                     }))
+        return false;
+    // rr:refObjectMap (ReferencingObjectMap) and rr:JoinCondition are not
+    // supported in inside-out mode.
+    return std::all_of(objectMaps.begin(), objectMaps.end(),
+                       [](const std::unique_ptr<TermMap>& om) {
+                           if (!om || !om->isValid()) return false;
+                           return dynamic_cast<const ReferencingObjectMap*>(om.get()) == nullptr;
+                       });
+}
+
 std::ostream& operator<<(std::ostream& os, const PredicateObjectMap& pom) {
     os << "PredicateObjectMap { predicates=[";
     for (std::size_t i = 0; i < pom.predicateMaps.size(); ++i) {

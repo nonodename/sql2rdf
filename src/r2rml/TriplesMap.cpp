@@ -68,6 +68,16 @@ bool TriplesMap::isValid() const {
                        });
 }
 
+bool TriplesMap::isValidInsideOut() const {
+    // rr:LogicalTable (including rr:sqlQuery) is not supported inside-out.
+    if (logicalTable) return false;
+    if (!subjectMap || !subjectMap->isValid()) return false;
+    return std::all_of(predicateObjectMaps.begin(), predicateObjectMaps.end(),
+                       [](const std::unique_ptr<PredicateObjectMap>& pom) {
+                           return pom && pom->isValidInsideOut();
+                       });
+}
+
 std::ostream& operator<<(std::ostream& os, const TriplesMap& tm) {
     os << "TriplesMap <" << tm.id << "> {\n";
     os << "  logicalTable: ";

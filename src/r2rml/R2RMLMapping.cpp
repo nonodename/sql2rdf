@@ -60,6 +60,13 @@ bool R2RMLMapping::isValid() const {
                        });
 }
 
+bool R2RMLMapping::isValidInsideOut() const {
+    return std::all_of(triplesMaps.begin(), triplesMaps.end(),
+                       [](const std::unique_ptr<TriplesMap>& tm) {
+                           return tm && tm->isValidInsideOut();
+                       });
+}
+
 std::ostream& operator<<(std::ostream& os, const R2RMLMapping& m) {
     os << "R2RMLMapping (" << m.triplesMaps.size() << " TriplesMap(s)):\n";
     for (std::size_t i = 0; i < m.triplesMaps.size(); ++i) {

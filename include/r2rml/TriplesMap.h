@@ -37,6 +37,13 @@ public:
 
     bool isValid() const;
 
+    /**
+     * Return true if this TriplesMap is valid for inside-out (SQL-export)
+     * execution.  Requires no logicalTable, a valid subjectMap, and all
+     * predicate-object maps to also be valid inside-out.
+     */
+    bool isValidInsideOut() const;
+
     friend std::ostream& operator<<(std::ostream& os, const TriplesMap& tm);
 
     std::string id;

@@ -47,6 +47,20 @@ public:
      */
     bool isValid() const;
 
+    /**
+     * Return true if the mapping is valid for "inside-out" execution – i.e.
+     * when used as an export within a SQL query where the row source is
+     * provided by the surrounding SQL context rather than by the mapping.
+     *
+     * In this mode the following R2RML constructs are not supported and must
+     * be absent:
+     *   - rr:LogicalTable  (any LogicalTable, including rr:tableName tables)
+     *   - rr:sqlQuery      (R2RMLView logical tables)
+     *   - rr:refObjectMap  (ReferencingObjectMap)
+     *   - rr:JoinCondition (implicit when refObjectMaps are absent)
+     */
+    bool isValidInsideOut() const;
+
     friend std::ostream& operator<<(std::ostream& os, const R2RMLMapping& m);
 
     std::vector<std::unique_ptr<TriplesMap>> triplesMaps;
