@@ -9,6 +9,44 @@ on:
     branches: [ "main" ]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        submodules: 'true'
+
+    - name: Install tools
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y ninja-build clang clang-format clang-tidy
+
+    - name: Install DuckDB
+      run: |
+        wget -nv https://install.duckdb.org/v1.4.4/libduckdb-linux-amd64.zip
+        unzip libduckdb-linux-amd64.zip -d duckdb
+        sudo mv duckdb/libduckdb.so /usr/local/lib/libduckdb.so
+        sudo mv duckdb/duckdb.h /usr/local/include/duckdb.h
+        sudo mv duckdb/duckdb.hpp /usr/local/include/duckdb.hpp
+        sudo ldconfig /usr/local/lib
+
+    - name: Configure CMake
+      run: |
+        cmake -B build \
+          -DCMAKE_CXX_COMPILER=clang++ \
+          -DCMAKE_C_COMPILER=clang \
+          -DCMAKE_BUILD_TYPE=Release \
+          -G Ninja \
+          -S ${{ github.workspace }}
+
+    - name: Check formatting
+      run: cmake --build build --target format-check
+
+    - name: Run clang-tidy
+      run: cmake --build build --target tidy
+
   build:
     runs-on: ${{ matrix.os }}
 

@@ -3,6 +3,7 @@ project(SQL2RDF++ LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(FetchContent)
 
 FetchContent_Declare(
@@ -138,4 +139,47 @@ if(UNIX)
   target_link_libraries(${PROJECT_NAME} PRIVATE serd m)
 else()
   target_link_libraries(${PROJECT_NAME} PRIVATE serd)
+endif()
+
+# ----------------------------------------------------------------------------
+# clang-format targets
+# ----------------------------------------------------------------------------
+file(GLOB_RECURSE FORMAT_SOURCES
+  "${CMAKE_SOURCE_DIR}/src/*.cpp"
+  "${CMAKE_SOURCE_DIR}/src/*.h"
+  "${CMAKE_SOURCE_DIR}/include/*.h"
+  "${CMAKE_SOURCE_DIR}/tests/*.cpp"
+  "${CMAKE_SOURCE_DIR}/tests/*.h"
+)
+
+find_program(CLANG_FORMAT_EXE NAMES clang-format)
+if(CLANG_FORMAT_EXE)
+  add_custom_target(format
+    COMMAND ${CLANG_FORMAT_EXE} -i ${FORMAT_SOURCES}
+    COMMENT "Formatting C++ sources with clang-format..."
+  )
+  add_custom_target(format-check
+    COMMAND ${CLANG_FORMAT_EXE} --dry-run --Werror ${FORMAT_SOURCES}
+    COMMENT "Checking C++ source formatting..."
+  )
+else()
+  message(STATUS "clang-format not found; 'format' and 'format-check' targets unavailable")
+endif()
+
+# ----------------------------------------------------------------------------
+# clang-tidy target
+# ----------------------------------------------------------------------------
+find_program(CLANG_TIDY_EXE NAMES clang-tidy)
+if(CLANG_TIDY_EXE)
+  file(GLOB_RECURSE TIDY_SOURCES
+    "${CMAKE_SOURCE_DIR}/src/r2rml/*.cpp"
+    "${CMAKE_SOURCE_DIR}/tests/*.cpp"
+  )
+  add_custom_target(tidy
+    COMMAND ${CLANG_TIDY_EXE} -p "${CMAKE_BINARY_DIR}" ${TIDY_SOURCES}
+    COMMENT "Running clang-tidy..."
+    DEPENDS sql2rdf_r2rml
+  )
+else()
+  message(STATUS "clang-tidy not found; 'tidy' target unavailable")
 endif()

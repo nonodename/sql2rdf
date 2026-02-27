@@ -13,6 +13,9 @@ The project is structured as a reusable library plus a thin CLI application:
 | `sql2rdf_r2rml` | static library | none | Core R2RML implementation. Links only [Serd](https://drobilla.net/software/serd/) (embedded). Suitable for use in other projects, including a DuckDB extension. |
 | `SQL2RDF++` | executable | required | CLI application. Compiles the DuckDB adapter (`DuckDBConnection`) and links the system or embedded DuckDB library. |
 | `test_runner` | executable | none | Test suite using [Catch2](https://github.com/catchorg/Catch2). All tests run against a mock SQL backend — no DuckDB required. |
+| `format` | utility | none | Apply `clang-format` to all project C++ sources in-place. |
+| `format-check` | utility | none | Check formatting with `clang-format --dry-run --Werror`; exits non-zero if any file would change. Used in CI. |
+| `tidy` | utility | none | Run `clang-tidy` static analysis using `.clang-tidy`. Builds `sql2rdf_r2rml` first to ensure a fresh compilation database. |
 
 The [Serd](https://drobilla.net/software/serd/) RDF syntax library is included as a git submodule under `external/serd` and compiled from source into the `sql2rdf_r2rml` library.
 
@@ -39,6 +42,16 @@ If you have Ninja installed you can generate a Ninja build instead of Make:
 ```sh
 cmake -B build -G Ninja
 cmake --build build
+```
+
+### Code quality
+
+Requires `clang-format` and `clang-tidy` on `PATH` (e.g. `brew install llvm` or `apt install clang-format clang-tidy`):
+
+```sh
+cmake --build build --target format        # apply formatting in-place
+cmake --build build --target format-check  # check only (non-zero exit if any file would change)
+cmake --build build --target tidy          # run static analysis
 ```
 
 ### DuckDB dependency
