@@ -1,6 +1,6 @@
 #pragma once
 
-#include "SQLConnection.h"
+#include "r2rml/SQLConnection.h"
 #include <memory>
 #include <string>
 

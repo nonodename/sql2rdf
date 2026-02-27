@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.5...3.29)
 project(SQL2RDF++ LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(FetchContent)
 
@@ -103,20 +103,19 @@ set(R2RML_SOURCES
   src/r2rml/SQLRow.cpp
   src/r2rml/SQLValue.cpp
   src/r2rml/R2RMLParser.cpp
-  src/r2rml/DuckDBConnection.cpp
 )
 add_library(sql2rdf_r2rml STATIC ${R2RML_SOURCES})
 target_include_directories(sql2rdf_r2rml PUBLIC include ${CMAKE_SOURCE_DIR}/external/serd/include)
 if(UNIX)
-  target_link_libraries(sql2rdf_r2rml PUBLIC serd m duckdb)
+  target_link_libraries(sql2rdf_r2rml PUBLIC serd m)
 else()
-  target_link_libraries(sql2rdf_r2rml PUBLIC serd duckdb)
+  target_link_libraries(sql2rdf_r2rml PUBLIC serd)
 endif()
 
 # Specify main executable sources and link to the library
-add_executable(${PROJECT_NAME} src/main.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE sql2rdf_r2rml)
-target_include_directories(${PROJECT_NAME} PRIVATE include)
+add_executable(${PROJECT_NAME} src/main.cpp src/DuckDBConnection.cpp)
+target_link_libraries(${PROJECT_NAME} PRIVATE sql2rdf_r2rml duckdb)
+target_include_directories(${PROJECT_NAME} PRIVATE include src)
 
 # ----------------------------------------------------------------------------
 # serd dependency - build as a static library from source tree

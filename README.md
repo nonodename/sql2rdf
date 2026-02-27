@@ -1,49 +1,66 @@
 # SQL2RDF++
 
-A command line utility to convert relational database tables to RDF using R2RML syntax. 
+A command line utility to convert relational database tables to RDF using R2RML syntax.
 
-Utlimately this is intended to prove out implementation of R2RML in C++ so that the code can be lifted into a DuckDB extension to support a `COPY TO` export from Duck.
+Ultimately this is intended to prove out implementation of R2RML in C++ so that the code can be lifted into a DuckDB extension to support a `COPY TO` export from DuckDB.
+
+## Build targets
+
+The project is structured as a reusable library plus a thin CLI application:
+
+| Target | Type | DuckDB dependency | Description |
+|--------|------|-------------------|-------------|
+| `sql2rdf_r2rml` | static library | none | Core R2RML implementation. Links only [Serd](https://drobilla.net/software/serd/) (embedded). Suitable for use in other projects, including a DuckDB extension. |
+| `SQL2RDF++` | executable | required | CLI application. Compiles the DuckDB adapter (`DuckDBConnection`) and links the system or embedded DuckDB library. |
+| `test_runner` | executable | none | Test suite using [Catch2](https://github.com/catchorg/Catch2). All tests run against a mock SQL backend — no DuckDB required. |
+
+The [Serd](https://drobilla.net/software/serd/) RDF syntax library is included as a git submodule under `external/serd` and compiled from source into the `sql2rdf_r2rml` library.
 
 ## Building
 
-**Requires a C++11-compliant compiler** (GCC 4.8+, Clang 3.3+, MSVC 2015+).
-
-The repository now includes the [Serd](https://drobilla.net/software/serd/) RDF syntax
-library as a git submodule under `external/serd`. The CMake build system compiles Serd
-from source and links a static `serd` library into the `SQL2RDF++` executable.
-
-To build:
+**Requires a C++14-compliant compiler** (GCC 5+, Clang 3.4+, MSVC 2015+).
 
 ```sh
-mkdir build && cd build
-cmake ..
-make
-make tests
-./SQL2RDF++
+cmake -B build
+cmake --build build --target sql2rdf_r2rml   # library only
+cmake --build build --target SQL2RDF++        # CLI app (requires DuckDB)
+cmake --build build --target test_runner      # tests (no DuckDB needed)
+cmake --build build                           # all of the above
 ```
 
-If you have ninja installed you can also make by saying
+Run the tests:
 ```sh
-GEN=ninja make
+cmake --build build --target tests   # build + run
+# or
+ctest --test-dir build
 ```
 
-Notes:
-- This project links to DuckDB at runtime. For faster CI builds we assume a
-	system-installed DuckDB (headers + library) is available. On Debian/Ubuntu
-	install the dev package `libduckdb-dev` (or `duckdb`) and on macOS use
-	`brew install duckdb`.
-- If you prefer building an embedded DuckDB from source, pass the CMake option
-	`-DUSE_EMBEDDED_DUCKDB=ON` when configuring the build.
+If you have Ninja installed you can generate a Ninja build instead of Make:
+```sh
+cmake -B build -G Ninja
+cmake --build build
+```
 
-See the GitHub actions for how to configure Duck libraries for your OS and/or the DuckDB (site)[https://duckdb.org/install/?platform=macos&environment=c].
+### DuckDB dependency
+
+The `SQL2RDF++` executable (but not the library or tests) requires DuckDB headers and a shared library. For faster CI builds a system-installed DuckDB is assumed by default:
+
+- **macOS**: `brew install duckdb`
+- **Debian/Ubuntu**: install `libduckdb-dev`
+- **Windows**: download the C/C++ SDK from the [DuckDB install page](https://duckdb.org/install/?platform=windows&environment=c)
+
+To build DuckDB from source instead, pass `-DUSE_EMBEDDED_DUCKDB=ON` at configure time:
+```sh
+cmake -B build -DUSE_EMBEDDED_DUCKDB=ON
+```
+
+See the GitHub Actions workflow for the exact install steps used in CI for each platform.
 
 ## Testing
 
-There are two testing strategies used here. Both are based on the example tables and mapping configurations in the W3C (spec)[https://www.w3.org/TR/r2rml/]. 
+Tests are based on the example tables and mapping configurations from the [W3C R2RML specification](https://www.w3.org/TR/r2rml/). Example mapping files are in `tests/sourceR2RML/`.
 
-Example files from there are found in tests/sourceR2RML
-
-Against these files are run completely mocked database tables and then a DuckDB database, r2rmltest.db for actual query execution.
+All tests run against a mock SQL backend (`MockSQL.h`) — no DuckDB installation is required to run them.
 
 ## Usage
 

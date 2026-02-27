@@ -1,4 +1,4 @@
-#include "r2rml/DuckDBConnection.h"
+#include "DuckDBConnection.h"
 #include "r2rml/SQLResultSet.h"
 #include "r2rml/SQLRow.h"
 #include "r2rml/SQLValue.h"

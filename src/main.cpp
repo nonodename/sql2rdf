@@ -8,7 +8,7 @@
 
 #include <serd/serd.h>
 
-#include "r2rml/DuckDBConnection.h"
+#include "DuckDBConnection.h"
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/R2RMLParser.h"
 #include "r2rml/TriplesMap.h"

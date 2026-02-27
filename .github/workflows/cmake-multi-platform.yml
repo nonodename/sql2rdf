@@ -129,9 +129,17 @@ jobs:
         -G Ninja
         -S ${{ github.workspace }}
 
-    - name: Build
-      # Build your program with the given configuration. Note that --config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
-      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} 
+    - name: Build library (sql2rdf_r2rml)
+      # Core R2RML library - no DuckDB dependency
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} --target sql2rdf_r2rml
+
+    - name: Build application (SQL2RDF++)
+      # CLI app - links DuckDB
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} --target SQL2RDF++
+
+    - name: Build tests (test_runner)
+      # Test suite - no DuckDB dependency (uses mock SQL backend)
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} --target test_runner
 
     - name: Test
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
