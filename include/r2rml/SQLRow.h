@@ -13,15 +13,15 @@ namespace r2rml {
  */
 class SQLRow {
 public:
-    SQLRow();
-    explicit SQLRow(std::map<std::string, SQLValue> columns);
-    ~SQLRow();
+	SQLRow();
+	explicit SQLRow(std::map<std::string, SQLValue> columns);
+	~SQLRow();
 
-    SQLValue getValue(const std::string& columnName) const;
-    bool isNull(const std::string& columnName) const;
+	SQLValue getValue(const std::string &columnName) const;
+	bool isNull(const std::string &columnName) const;
 
 private:
-    std::map<std::string, SQLValue> columns_;
+	std::map<std::string, SQLValue> columns_;
 };
 
 } // namespace r2rml

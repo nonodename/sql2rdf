@@ -6,22 +6,24 @@
 
 namespace r2rml {
 
-BaseTableOrView::BaseTableOrView(const std::string& table)
-    : tableName(table) {}
+BaseTableOrView::BaseTableOrView(const std::string &table) : tableName(table) {
+}
 
 BaseTableOrView::~BaseTableOrView() = default;
 
-std::unique_ptr<SQLResultSet> BaseTableOrView::getRows(SQLConnection& dbConnection) {
-    // Construct the effective SQL query for a base table or view.
-    std::string query = "SELECT * FROM \"" + tableName + "\"";
-    effectiveSqlQuery = query;
-    return dbConnection.execute(query);
+std::unique_ptr<SQLResultSet> BaseTableOrView::getRows(SQLConnection &dbConnection) {
+	// Construct the effective SQL query for a base table or view.
+	std::string query = "SELECT * FROM \"" + tableName + "\"";
+	effectiveSqlQuery = query;
+	return dbConnection.execute(query);
 }
 
-std::vector<std::string> BaseTableOrView::getColumnNames() { return {}; }
+std::vector<std::string> BaseTableOrView::getColumnNames() {
+	return {};
+}
 
-std::ostream& BaseTableOrView::print(std::ostream& os) const {
-    return os << "BaseTableOrView { tableName=\"" << tableName << "\" }";
+std::ostream &BaseTableOrView::print(std::ostream &os) const {
+	return os << "BaseTableOrView { tableName=\"" << tableName << "\" }";
 }
 
 } // namespace r2rml

@@ -11,8 +11,8 @@ namespace r2rml {
  */
 class ObjectMap : public TermMap {
 public:
-    ObjectMap() = default;
-    ~ObjectMap() override;
+	ObjectMap() = default;
+	~ObjectMap() override;
 };
 
 } // namespace r2rml

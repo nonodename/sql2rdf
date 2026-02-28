@@ -13,10 +13,10 @@ class R2RMLMapping;
  */
 class R2RMLParser {
 public:
-    R2RMLParser();
-    ~R2RMLParser();
+	R2RMLParser();
+	~R2RMLParser();
 
-    R2RMLMapping parse(const std::string& mappingFilePath);
+	R2RMLMapping parse(const std::string &mappingFilePath);
 };
 
 } // namespace r2rml

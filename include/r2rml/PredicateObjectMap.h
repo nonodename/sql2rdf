@@ -20,33 +20,30 @@ class R2RMLMapping;
  */
 class PredicateObjectMap {
 public:
-    PredicateObjectMap();
-    ~PredicateObjectMap();
+	PredicateObjectMap();
+	~PredicateObjectMap();
 
-    /**
-     * Process a single row given a subject node and emit one or more triples
-     * by invoking the provided SerdWriter.
-     */
-    void processRow(const SQLRow& row,
-                    const SerdNode& subject,
-                    SerdWriter& rdfWriter,
-                    const R2RMLMapping& mapping,
-                    SQLConnection& dbConnection) const;
+	/**
+	 * Process a single row given a subject node and emit one or more triples
+	 * by invoking the provided SerdWriter.
+	 */
+	void processRow(const SQLRow &row, const SerdNode &subject, SerdWriter &rdfWriter, const R2RMLMapping &mapping,
+	                SQLConnection &dbConnection) const;
 
-    bool isValid() const;
+	bool isValid() const;
 
-    /**
-     * Return true if this PredicateObjectMap is valid for inside-out execution.
-     * rr:refObjectMap (ReferencingObjectMap) and therefore rr:JoinCondition are
-     * not permitted; all other maps must satisfy their own isValid() checks.
-     */
-    bool isValidInsideOut() const;
+	/**
+	 * Return true if this PredicateObjectMap is valid for inside-out execution.
+	 * rr:refObjectMap (ReferencingObjectMap) and therefore rr:JoinCondition are
+	 * not permitted; all other maps must satisfy their own isValid() checks.
+	 */
+	bool isValidInsideOut() const;
 
-    friend std::ostream& operator<<(std::ostream& os, const PredicateObjectMap& pom);
+	friend std::ostream &operator<<(std::ostream &os, const PredicateObjectMap &pom);
 
-    std::vector<std::unique_ptr<TermMap>> predicateMaps;
-    std::vector<std::unique_ptr<TermMap>> objectMaps;
-    std::vector<std::unique_ptr<GraphMap>> graphMaps;
+	std::vector<std::unique_ptr<TermMap>> predicateMaps;
+	std::vector<std::unique_ptr<TermMap>> objectMaps;
+	std::vector<std::unique_ptr<GraphMap>> graphMaps;
 };
 
 } // namespace r2rml

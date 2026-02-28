@@ -19,22 +19,19 @@ class SQLResultSet;
  */
 class ReferencingObjectMap : public TermMap {
 public:
-    ReferencingObjectMap();
-    ~ReferencingObjectMap() override;
+	ReferencingObjectMap();
+	~ReferencingObjectMap() override;
 
-    bool isValid() const override;
+	bool isValid() const override;
 
-    std::unique_ptr<SQLResultSet> getJoinedRows(SQLConnection& dbConnection,
-                                                const SQLRow& childRow) const;
+	std::unique_ptr<SQLResultSet> getJoinedRows(SQLConnection &dbConnection, const SQLRow &childRow) const;
 
-    SerdNode generateRDFTerm(const SQLRow& childRow,
-                             const SQLRow& parentRow,
-                             const SerdEnv& env) const;
+	SerdNode generateRDFTerm(const SQLRow &childRow, const SQLRow &parentRow, const SerdEnv &env) const;
 
-    std::ostream& print(std::ostream& os) const override;
+	std::ostream &print(std::ostream &os) const override;
 
-    TriplesMap* parentTriplesMap{nullptr};
-    std::vector<JoinCondition> joinConditions;
+	TriplesMap *parentTriplesMap {nullptr};
+	std::vector<JoinCondition> joinConditions;
 };
 
 } // namespace r2rml

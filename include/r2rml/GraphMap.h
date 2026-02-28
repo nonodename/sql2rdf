@@ -11,8 +11,8 @@ namespace r2rml {
  */
 class GraphMap : public TermMap {
 public:
-    GraphMap() = default;
-    ~GraphMap() override;
+	GraphMap() = default;
+	~GraphMap() override;
 };
 
 } // namespace r2rml

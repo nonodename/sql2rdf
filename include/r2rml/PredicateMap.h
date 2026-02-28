@@ -11,8 +11,8 @@ namespace r2rml {
  */
 class PredicateMap : public TermMap {
 public:
-    PredicateMap() = default;
-    ~PredicateMap() override;
+	PredicateMap() = default;
+	~PredicateMap() override;
 };
 
 } // namespace r2rml

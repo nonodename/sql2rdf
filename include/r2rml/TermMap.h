@@ -22,33 +22,34 @@ enum class TermType { IRI, BlankNode, Literal };
  */
 class TermMap {
 public:
-    virtual ~TermMap();
+	virtual ~TermMap();
 
-    /**
-     * Given a row and a Serd environment, produce an RDF term as a SerdNode.
-     */
-    virtual SerdNode generateRDFTerm(const SQLRow& row,
-                                     const SerdEnv& env) const = 0;
+	/**
+	 * Given a row and a Serd environment, produce an RDF term as a SerdNode.
+	 */
+	virtual SerdNode generateRDFTerm(const SQLRow &row, const SerdEnv &env) const = 0;
 
-    /**
-     * Validate that the term map instance has required properties and correct cardinality.
-     * To be overridden by subclasses for specific validation logic.
-     */
-    virtual bool isValid() const { return true; }
+	/**
+	 * Validate that the term map instance has required properties and correct cardinality.
+	 * To be overridden by subclasses for specific validation logic.
+	 */
+	virtual bool isValid() const {
+		return true;
+	}
 
-    /**
-     * Write a human-readable representation to the given stream.
-     * Subclasses should override this and call TermMap::print for base fields.
-     */
-    virtual std::ostream& print(std::ostream& os) const;
+	/**
+	 * Write a human-readable representation to the given stream.
+	 * Subclasses should override this and call TermMap::print for base fields.
+	 */
+	virtual std::ostream &print(std::ostream &os) const;
 
-    friend std::ostream& operator<<(std::ostream& os, const TermMap& tm);
+	friend std::ostream &operator<<(std::ostream &os, const TermMap &tm);
 
-    TermType termType{TermType::IRI};
-    // optional fields are implemented with unique_ptr for C++11
-    std::unique_ptr<std::string> languageTag;
-    std::unique_ptr<std::string> datatypeIRI;
-    std::unique_ptr<std::string> inverseExpression;
+	TermType termType {TermType::IRI};
+	// optional fields are implemented with unique_ptr for C++11
+	std::unique_ptr<std::string> languageTag;
+	std::unique_ptr<std::string> datatypeIRI;
+	std::unique_ptr<std::string> inverseExpression;
 };
 
 } // namespace r2rml

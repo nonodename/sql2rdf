@@ -19,21 +19,21 @@ namespace r2rml {
  */
 class DuckDBConnection : public SQLConnection {
 public:
-    /**
-     * Open (or create) the DuckDB database at the given file path.
-     * Pass ":memory:" for a transient in-memory database.
-     */
-    explicit DuckDBConnection(const std::string& path);
-    ~DuckDBConnection() override;
+	/**
+	 * Open (or create) the DuckDB database at the given file path.
+	 * Pass ":memory:" for a transient in-memory database.
+	 */
+	explicit DuckDBConnection(const std::string &path);
+	~DuckDBConnection() override;
 
-    std::unique_ptr<SQLResultSet> execute(const std::string& sqlQuery) override;
+	std::unique_ptr<SQLResultSet> execute(const std::string &sqlQuery) override;
 
-    /** Returns "main", DuckDB's default schema name. */
-    std::string getDefaultSchema() override;
+	/** Returns "main", DuckDB's default schema name. */
+	std::string getDefaultSchema() override;
 
 private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
+	struct Impl;
+	std::unique_ptr<Impl> impl_;
 };
 
 } // namespace r2rml

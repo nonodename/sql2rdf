@@ -51,24 +51,23 @@ using namespace r2rml::testing;
 namespace {
 
 // Run processDatabase and capture the NTriples serialisation as a string.
-std::string runProcessDatabase(R2RMLMapping& mapping, MockSQLConnection& conn) {
-    SerdChunk chunk{NULL, 0};
-    SerdEnv*    env    = serd_env_new(NULL);
-    SerdWriter* writer = serd_writer_new(
-        SERD_NTRIPLES, (SerdStyle)0, env, NULL, serd_chunk_sink, &chunk);
+std::string runProcessDatabase(R2RMLMapping &mapping, MockSQLConnection &conn) {
+	SerdChunk chunk {NULL, 0};
+	SerdEnv *env = serd_env_new(NULL);
+	SerdWriter *writer = serd_writer_new(SERD_NTRIPLES, (SerdStyle)0, env, NULL, serd_chunk_sink, &chunk);
 
-    mapping.processDatabase(conn, *writer);
+	mapping.processDatabase(conn, *writer);
 
-    serd_writer_finish(writer);
-    uint8_t* raw = serd_chunk_sink_finish(&chunk);
-    std::string result;
-    if (raw) {
-        result = std::string(reinterpret_cast<const char*>(raw));
-        serd_free(raw);
-    }
-    serd_writer_free(writer);
-    serd_env_free(env);
-    return result;
+	serd_writer_finish(writer);
+	uint8_t *raw = serd_chunk_sink_finish(&chunk);
+	std::string result;
+	if (raw) {
+		result = std::string(reinterpret_cast<const char *>(raw));
+		serd_free(raw);
+	}
+	serd_writer_free(writer);
+	serd_env_free(env);
+	return result;
 }
 
 } // anonymous namespace
@@ -85,35 +84,31 @@ std::string runProcessDatabase(R2RMLMapping& mapping, MockSQLConnection& conn) {
 //       ex:name  "SMITH" .
 // ---------------------------------------------------------------------------
 TEST_CASE("processDatabase Example1 - EMP table produces rdf:type and name triples") {
-    R2RMLParser  parser;
-    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example1.ttl");
-    REQUIRE(mapping.isValid());
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example1.ttl");
+	REQUIRE(mapping.isValid());
 
-    MockSQLConnection conn;
-    // Key "EMP" matches SELECT * FROM EMP (or the quoted variant "EMP").
-    // It is shorter than "EMP2DEPT" so it won't win over that longer key if
-    // both are registered in the same connection.
-    conn.addResult("EMP", {
-        makeRow({
-            {"EMPNO",  SQLValue(std::string("7369"))},
-            {"ENAME",  SQLValue(std::string("SMITH"))},
-            {"JOB",    SQLValue(std::string("CLERK"))},
-            {"DEPTNO", SQLValue(std::string("10"))}
-        })
-    });
+	MockSQLConnection conn;
+	// Key "EMP" matches SELECT * FROM EMP (or the quoted variant "EMP").
+	// It is shorter than "EMP2DEPT" so it won't win over that longer key if
+	// both are registered in the same connection.
+	conn.addResult("EMP", {makeRow({{"EMPNO", SQLValue(std::string("7369"))},
+	                                {"ENAME", SQLValue(std::string("SMITH"))},
+	                                {"JOB", SQLValue(std::string("CLERK"))},
+	                                {"DEPTNO", SQLValue(std::string("10"))}})});
 
-    std::string out = runProcessDatabase(mapping, conn);
+	std::string out = runProcessDatabase(mapping, conn);
 
-    // Subject URI must appear
-    REQUIRE(out.find("<http://data.example.com/employee/7369>") != std::string::npos);
+	// Subject URI must appear
+	REQUIRE(out.find("<http://data.example.com/employee/7369>") != std::string::npos);
 
-    // rdf:type ex:Employee
-    REQUIRE(out.find("<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>") != std::string::npos);
-    REQUIRE(out.find("<http://example.com/ns#Employee>") != std::string::npos);
+	// rdf:type ex:Employee
+	REQUIRE(out.find("<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>") != std::string::npos);
+	REQUIRE(out.find("<http://example.com/ns#Employee>") != std::string::npos);
 
-    // ex:name "SMITH"
-    REQUIRE(out.find("<http://example.com/ns#name>") != std::string::npos);
-    REQUIRE(out.find("\"SMITH\"") != std::string::npos);
+	// ex:name "SMITH"
+	REQUIRE(out.find("<http://example.com/ns#name>") != std::string::npos);
+	REQUIRE(out.find("\"SMITH\"") != std::string::npos);
 }
 
 // ---------------------------------------------------------------------------
@@ -130,42 +125,38 @@ TEST_CASE("processDatabase Example1 - EMP table produces rdf:type and name tripl
 //       ex:staff    "1" .
 // ---------------------------------------------------------------------------
 TEST_CASE("processDatabase Example2 - DEPT SQL view produces Department triples") {
-    R2RMLParser  parser;
-    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example2.ttl");
-    REQUIRE(mapping.isValid());
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example2.ttl");
+	REQUIRE(mapping.isValid());
 
-    MockSQLConnection conn;
-    // The logical table uses rr:sqlQuery; "DNAME" is a unique fragment of
-    // that SQL text and does not appear in EMP or EMP2DEPT table queries.
-    conn.addResult("DNAME", {
-        makeRow({
-            {"DEPTNO", SQLValue(std::string("10"))},
-            {"DNAME",  SQLValue(std::string("APPSERVER"))},
-            {"LOC",    SQLValue(std::string("NEW YORK"))},
-            {"STAFF",  SQLValue(1)}
-        })
-    });
+	MockSQLConnection conn;
+	// The logical table uses rr:sqlQuery; "DNAME" is a unique fragment of
+	// that SQL text and does not appear in EMP or EMP2DEPT table queries.
+	conn.addResult("DNAME", {makeRow({{"DEPTNO", SQLValue(std::string("10"))},
+	                                  {"DNAME", SQLValue(std::string("APPSERVER"))},
+	                                  {"LOC", SQLValue(std::string("NEW YORK"))},
+	                                  {"STAFF", SQLValue(1)}})});
 
-    std::string out = runProcessDatabase(mapping, conn);
+	std::string out = runProcessDatabase(mapping, conn);
 
-    // Subject URI
-    REQUIRE(out.find("<http://data.example.com/department/10>") != std::string::npos);
+	// Subject URI
+	REQUIRE(out.find("<http://data.example.com/department/10>") != std::string::npos);
 
-    // rdf:type ex:Department
-    REQUIRE(out.find("<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>") != std::string::npos);
-    REQUIRE(out.find("<http://example.com/ns#Department>") != std::string::npos);
+	// rdf:type ex:Department
+	REQUIRE(out.find("<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>") != std::string::npos);
+	REQUIRE(out.find("<http://example.com/ns#Department>") != std::string::npos);
 
-    // ex:name "APPSERVER"
-    REQUIRE(out.find("<http://example.com/ns#name>") != std::string::npos);
-    REQUIRE(out.find("\"APPSERVER\"") != std::string::npos);
+	// ex:name "APPSERVER"
+	REQUIRE(out.find("<http://example.com/ns#name>") != std::string::npos);
+	REQUIRE(out.find("\"APPSERVER\"") != std::string::npos);
 
-    // ex:location "NEW YORK"
-    REQUIRE(out.find("<http://example.com/ns#location>") != std::string::npos);
-    REQUIRE(out.find("\"NEW YORK\"") != std::string::npos);
+	// ex:location "NEW YORK"
+	REQUIRE(out.find("<http://example.com/ns#location>") != std::string::npos);
+	REQUIRE(out.find("\"NEW YORK\"") != std::string::npos);
 
-    // ex:staff "1" (STAFF is an integer column; value serialised as string)
-    REQUIRE(out.find("<http://example.com/ns#staff>") != std::string::npos);
-    REQUIRE(out.find("\"1\"") != std::string::npos);
+	// ex:staff "1" (STAFF is an integer column; value serialised as string)
+	REQUIRE(out.find("<http://example.com/ns#staff>") != std::string::npos);
+	REQUIRE(out.find("\"1\"") != std::string::npos);
 }
 
 // ---------------------------------------------------------------------------
@@ -185,51 +176,42 @@ TEST_CASE("processDatabase Example2 - DEPT SQL view produces Department triples"
 //       ex:name     "APPSERVER" .
 // ---------------------------------------------------------------------------
 TEST_CASE("processDatabase emp+dept join - employee links to department IRI") {
-    R2RMLParser  parser;
-    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
-    REQUIRE(mapping.isValid());
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	REQUIRE(mapping.isValid());
 
-    MockSQLConnection conn;
-    // "EMP" (3 chars) – matched for the EMP base table query.
-    // "DNAME" (5 chars) – matched for the DEPT SQL view query; wins over "EMP"
-    // when the DEPT view SQL is executed (the view text also contains "EMP"
-    // in a subquery, but "DNAME" is longer and therefore selected).
-    conn.addResult("EMP", {
-        makeRow({
-            {"EMPNO",  SQLValue(std::string("7369"))},
-            {"ENAME",  SQLValue(std::string("SMITH"))},
-            {"JOB",    SQLValue(std::string("CLERK"))},
-            {"DEPTNO", SQLValue(std::string("10"))}
-        })
-    });
-    conn.addResult("DNAME", {
-        makeRow({
-            {"DEPTNO", SQLValue(std::string("10"))},
-            {"DNAME",  SQLValue(std::string("APPSERVER"))},
-            {"LOC",    SQLValue(std::string("NEW YORK"))},
-            {"STAFF",  SQLValue(1)}
-        })
-    });
+	MockSQLConnection conn;
+	// "EMP" (3 chars) – matched for the EMP base table query.
+	// "DNAME" (5 chars) – matched for the DEPT SQL view query; wins over "EMP"
+	// when the DEPT view SQL is executed (the view text also contains "EMP"
+	// in a subquery, but "DNAME" is longer and therefore selected).
+	conn.addResult("EMP", {makeRow({{"EMPNO", SQLValue(std::string("7369"))},
+	                                {"ENAME", SQLValue(std::string("SMITH"))},
+	                                {"JOB", SQLValue(std::string("CLERK"))},
+	                                {"DEPTNO", SQLValue(std::string("10"))}})});
+	conn.addResult("DNAME", {makeRow({{"DEPTNO", SQLValue(std::string("10"))},
+	                                  {"DNAME", SQLValue(std::string("APPSERVER"))},
+	                                  {"LOC", SQLValue(std::string("NEW YORK"))},
+	                                  {"STAFF", SQLValue(1)}})});
 
-    std::string out = runProcessDatabase(mapping, conn);
+	std::string out = runProcessDatabase(mapping, conn);
 
-    // Employee subject and class
-    REQUIRE(out.find("<http://data.example.com/employee/7369>") != std::string::npos);
-    REQUIRE(out.find("<http://example.com/ns#Employee>") != std::string::npos);
+	// Employee subject and class
+	REQUIRE(out.find("<http://data.example.com/employee/7369>") != std::string::npos);
+	REQUIRE(out.find("<http://example.com/ns#Employee>") != std::string::npos);
 
-    // Department subject and class
-    REQUIRE(out.find("<http://data.example.com/department/10>") != std::string::npos);
-    REQUIRE(out.find("<http://example.com/ns#Department>") != std::string::npos);
+	// Department subject and class
+	REQUIRE(out.find("<http://data.example.com/department/10>") != std::string::npos);
+	REQUIRE(out.find("<http://example.com/ns#Department>") != std::string::npos);
 
-    // Join result: employee ex:department department
-    REQUIRE(out.find("<http://example.com/ns#department>") != std::string::npos);
+	// Join result: employee ex:department department
+	REQUIRE(out.find("<http://example.com/ns#department>") != std::string::npos);
 
-    // The object of ex:department must be the department IRI (not a literal)
-    const std::string deptLink =
-        "<http://data.example.com/employee/7369> "
-        "<http://example.com/ns#department> "
-        "<http://data.example.com/department/10>";
-    REQUIRE(out.find(deptLink) != std::string::npos);
+	// The object of ex:department must be the department IRI (not a literal)
+	const std::string deptLink = "<http://data.example.com/employee/7369> "
+	                             "<http://example.com/ns#department> "
+	                             "<http://data.example.com/department/10>";
+	REQUIRE(out.find(deptLink) != std::string::npos);
 }
 
 // ---------------------------------------------------------------------------
@@ -250,47 +232,34 @@ TEST_CASE("processDatabase emp+dept join - employee links to department IRI") {
 //       ex:department <http://data.example.com/department/10> .
 // ---------------------------------------------------------------------------
 TEST_CASE("processDatabase Example4 - EMP2DEPT many-to-many produces link triples") {
-    R2RMLParser  parser;
-    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example4.ttl");
-    REQUIRE(mapping.isValid());
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example4.ttl");
+	REQUIRE(mapping.isValid());
 
-    MockSQLConnection conn;
-    // "EMP2DEPT" (8 chars) is longer than "EMP" (3 chars), so it wins when
-    // the EMP2DEPT query is executed even though "EMP" is a substring.
-    conn.addResult("EMP2DEPT", {
-        makeRow({
-            {"EMPNO",  SQLValue(std::string("7369"))},
-            {"DEPTNO", SQLValue(std::string("10"))}
-        }),
-        makeRow({
-            {"EMPNO",  SQLValue(std::string("7369"))},
-            {"DEPTNO", SQLValue(std::string("20"))}
-        }),
-        makeRow({
-            {"EMPNO",  SQLValue(std::string("7400"))},
-            {"DEPTNO", SQLValue(std::string("10"))}
-        })
-    });
+	MockSQLConnection conn;
+	// "EMP2DEPT" (8 chars) is longer than "EMP" (3 chars), so it wins when
+	// the EMP2DEPT query is executed even though "EMP" is a substring.
+	conn.addResult("EMP2DEPT",
+	               {makeRow({{"EMPNO", SQLValue(std::string("7369"))}, {"DEPTNO", SQLValue(std::string("10"))}}),
+	                makeRow({{"EMPNO", SQLValue(std::string("7369"))}, {"DEPTNO", SQLValue(std::string("20"))}}),
+	                makeRow({{"EMPNO", SQLValue(std::string("7400"))}, {"DEPTNO", SQLValue(std::string("10"))}})});
 
-    std::string out = runProcessDatabase(mapping, conn);
+	std::string out = runProcessDatabase(mapping, conn);
 
-    // --- Junction row (7369, 10) ---
-    REQUIRE(out.find("<http://data.example.com/employee=7369/department=10>")
-            != std::string::npos);
-    REQUIRE(out.find("<http://example.com/ns#employee>")   != std::string::npos);
-    REQUIRE(out.find("<http://data.example.com/employee/7369>") != std::string::npos);
-    REQUIRE(out.find("<http://example.com/ns#department>") != std::string::npos);
-    REQUIRE(out.find("<http://data.example.com/department/10>") != std::string::npos);
+	// --- Junction row (7369, 10) ---
+	REQUIRE(out.find("<http://data.example.com/employee=7369/department=10>") != std::string::npos);
+	REQUIRE(out.find("<http://example.com/ns#employee>") != std::string::npos);
+	REQUIRE(out.find("<http://data.example.com/employee/7369>") != std::string::npos);
+	REQUIRE(out.find("<http://example.com/ns#department>") != std::string::npos);
+	REQUIRE(out.find("<http://data.example.com/department/10>") != std::string::npos);
 
-    // --- Junction row (7369, 20) ---
-    REQUIRE(out.find("<http://data.example.com/employee=7369/department=20>")
-            != std::string::npos);
-    REQUIRE(out.find("<http://data.example.com/department/20>") != std::string::npos);
+	// --- Junction row (7369, 20) ---
+	REQUIRE(out.find("<http://data.example.com/employee=7369/department=20>") != std::string::npos);
+	REQUIRE(out.find("<http://data.example.com/department/20>") != std::string::npos);
 
-    // --- Junction row (7400, 10) ---
-    REQUIRE(out.find("<http://data.example.com/employee=7400/department=10>")
-            != std::string::npos);
-    REQUIRE(out.find("<http://data.example.com/employee/7400>") != std::string::npos);
+	// --- Junction row (7400, 10) ---
+	REQUIRE(out.find("<http://data.example.com/employee=7400/department=10>") != std::string::npos);
+	REQUIRE(out.find("<http://data.example.com/employee/7400>") != std::string::npos);
 }
 
 // ---------------------------------------------------------------------------
@@ -306,29 +275,24 @@ TEST_CASE("processDatabase Example4 - EMP2DEPT many-to-many produces link triple
 //       ex:role <http://data.example.com/roles/general-office> .
 // ---------------------------------------------------------------------------
 TEST_CASE("processDatabase Example5 - CASE view maps JOB code to role IRI") {
-    R2RMLParser  parser;
-    R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example5.ttl");
-    REQUIRE(mapping.isValid());
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example5.ttl");
+	REQUIRE(mapping.isValid());
 
-    MockSQLConnection conn;
-    // "ROLE" is the computed column name in the CASE SQL view; it appears in
-    // the rr:sqlQuery text of example5.ttl and is unique to that query.
-    conn.addResult("ROLE", {
-        makeRow({
-            {"EMPNO", SQLValue(std::string("7369"))},
-            {"ENAME", SQLValue(std::string("SMITH"))},
-            {"JOB",   SQLValue(std::string("CLERK"))},
-            {"ROLE",  SQLValue(std::string("general-office"))}
-        })
-    });
+	MockSQLConnection conn;
+	// "ROLE" is the computed column name in the CASE SQL view; it appears in
+	// the rr:sqlQuery text of example5.ttl and is unique to that query.
+	conn.addResult("ROLE", {makeRow({{"EMPNO", SQLValue(std::string("7369"))},
+	                                 {"ENAME", SQLValue(std::string("SMITH"))},
+	                                 {"JOB", SQLValue(std::string("CLERK"))},
+	                                 {"ROLE", SQLValue(std::string("general-office"))}})});
 
-    std::string out = runProcessDatabase(mapping, conn);
+	std::string out = runProcessDatabase(mapping, conn);
 
-    // Employee subject
-    REQUIRE(out.find("<http://data.example.com/employee/7369>") != std::string::npos);
+	// Employee subject
+	REQUIRE(out.find("<http://data.example.com/employee/7369>") != std::string::npos);
 
-    // ex:role <http://data.example.com/roles/general-office>
-    REQUIRE(out.find("<http://example.com/ns#role>") != std::string::npos);
-    REQUIRE(out.find("<http://data.example.com/roles/general-office>")
-            != std::string::npos);
+	// ex:role <http://data.example.com/roles/general-office>
+	REQUIRE(out.find("<http://example.com/ns#role>") != std::string::npos);
+	REQUIRE(out.find("<http://data.example.com/roles/general-office>") != std::string::npos);
 }

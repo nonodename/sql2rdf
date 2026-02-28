@@ -16,15 +16,15 @@ class GraphMap;
  */
 class SubjectMap : public TermMap {
 public:
-    SubjectMap() = default;
-    ~SubjectMap() override;
+	SubjectMap() = default;
+	~SubjectMap() override;
 
-    bool isValid() const override;
+	bool isValid() const override;
 
-    std::ostream& print(std::ostream& os) const override;
+	std::ostream &print(std::ostream &os) const override;
 
-    std::vector<std::string> classIRIs;
-    std::vector<std::unique_ptr<GraphMap>> graphMaps;
+	std::vector<std::string> classIRIs;
+	std::vector<std::unique_ptr<GraphMap>> graphMaps;
 };
 
 } // namespace r2rml

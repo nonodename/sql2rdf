@@ -14,19 +14,21 @@ namespace r2rml {
  */
 class R2RMLView : public LogicalTable {
 public:
-    R2RMLView() = default;
-    explicit R2RMLView(const std::string& query);
-    ~R2RMLView() override;
+	R2RMLView() = default;
+	explicit R2RMLView(const std::string &query);
+	~R2RMLView() override;
 
-    std::unique_ptr<SQLResultSet> getRows(SQLConnection& dbConnection) override;
-    std::vector<std::string> getColumnNames() override;
+	std::unique_ptr<SQLResultSet> getRows(SQLConnection &dbConnection) override;
+	std::vector<std::string> getColumnNames() override;
 
-    bool isValid() const override { return !sqlQuery.empty(); }
+	bool isValid() const override {
+		return !sqlQuery.empty();
+	}
 
-    std::ostream& print(std::ostream& os) const override;
+	std::ostream &print(std::ostream &os) const override;
 
-    std::string sqlQuery;
-    std::vector<std::string> sqlVersions;
+	std::string sqlQuery;
+	std::vector<std::string> sqlVersions;
 };
 
 } // namespace r2rml

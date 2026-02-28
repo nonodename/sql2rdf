@@ -13,25 +13,24 @@ namespace r2rml {
  */
 class TemplateTermMap : public TermMap {
 public:
-    TemplateTermMap() = default;
-    explicit TemplateTermMap(const std::string& templ);
-    ~TemplateTermMap() override;
+	TemplateTermMap() = default;
+	explicit TemplateTermMap(const std::string &templ);
+	~TemplateTermMap() override;
 
-    SerdNode generateRDFTerm(const SQLRow& row,
-                             const SerdEnv& env) const override;
+	SerdNode generateRDFTerm(const SQLRow &row, const SerdEnv &env) const override;
 
-    bool isValid() const override {
-        // templateString must not be empty
-        return !templateString.empty();
-    }
+	bool isValid() const override {
+		// templateString must not be empty
+		return !templateString.empty();
+	}
 
-    std::ostream& print(std::ostream& os) const override;
+	std::ostream &print(std::ostream &os) const override;
 
-    std::string templateString;
+	std::string templateString;
 
 private:
-    /// Buffer for the last expanded URI; keeps buf pointer in returned SerdNode valid.
-    mutable std::string expanded_;
+	/// Buffer for the last expanded URI; keeps buf pointer in returned SerdNode valid.
+	mutable std::string expanded_;
 };
 
 } // namespace r2rml

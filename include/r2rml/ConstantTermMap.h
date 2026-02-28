@@ -15,25 +15,24 @@ namespace r2rml {
  */
 class ConstantTermMap : public TermMap {
 public:
-    ConstantTermMap() = default;
-    explicit ConstantTermMap(const SerdNode& node);
-    ~ConstantTermMap() override;
+	ConstantTermMap() = default;
+	explicit ConstantTermMap(const SerdNode &node);
+	~ConstantTermMap() override;
 
-    SerdNode generateRDFTerm(const SQLRow& row,
-                             const SerdEnv& env) const override;
+	SerdNode generateRDFTerm(const SQLRow &row, const SerdEnv &env) const override;
 
-    bool isValid() const override {
-        // constantValue must not be a null SerdNode
-        return constantValue.type != 0;
-    }
+	bool isValid() const override {
+		// constantValue must not be a null SerdNode
+		return constantValue.type != 0;
+	}
 
-    std::ostream& print(std::ostream& os) const override;
+	std::ostream &print(std::ostream &os) const override;
 
-    SerdNode constantValue{0};
+	SerdNode constantValue {0};
 
 private:
-    /// Owns the string data that constantValue.buf points into (when non-empty).
-    std::string ownedUri_;
+	/// Owns the string data that constantValue.buf points into (when non-empty).
+	std::string ownedUri_;
 };
 
 } // namespace r2rml

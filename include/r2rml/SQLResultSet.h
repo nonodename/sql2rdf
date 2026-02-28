@@ -11,13 +11,13 @@ class SQLRow;
  */
 class SQLResultSet {
 public:
-    virtual ~SQLResultSet() = default;
+	virtual ~SQLResultSet() = default;
 
-    /** Advance the cursor.  Returns true while rows remain. */
-    virtual bool next() = 0;
+	/** Advance the cursor.  Returns true while rows remain. */
+	virtual bool next() = 0;
 
-    /** Return the row at the current cursor position. */
-    virtual SQLRow getCurrentRow() const = 0;
+	/** Return the row at the current cursor position. */
+	virtual SQLRow getCurrentRow() const = 0;
 };
 
 } // namespace r2rml

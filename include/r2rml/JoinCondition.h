@@ -11,15 +11,17 @@ namespace r2rml {
  */
 class JoinCondition {
 public:
-    JoinCondition() = default;
-    JoinCondition(const std::string& childCol, const std::string& parentCol);
+	JoinCondition() = default;
+	JoinCondition(const std::string &childCol, const std::string &parentCol);
 
-    bool isValid() const { return !childColumn.empty() && !parentColumn.empty(); }
+	bool isValid() const {
+		return !childColumn.empty() && !parentColumn.empty();
+	}
 
-    friend std::ostream& operator<<(std::ostream& os, const JoinCondition& jc);
+	friend std::ostream &operator<<(std::ostream &os, const JoinCondition &jc);
 
-    std::string childColumn;
-    std::string parentColumn;
+	std::string childColumn;
+	std::string parentColumn;
 };
 
 } // namespace r2rml

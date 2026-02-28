@@ -12,21 +12,27 @@ namespace r2rml {
  */
 class SQLValue {
 public:
-    enum class Type { Null, Integer, Double, String, Boolean };
+	enum class Type { Null, Integer, Double, String, Boolean };
 
-    SQLValue();
-    explicit SQLValue(const std::string& s);
-    explicit SQLValue(int i);
-    explicit SQLValue(double d);
-    explicit SQLValue(bool b);
+	SQLValue();
+	explicit SQLValue(const std::string &s);
+	explicit SQLValue(int i);
+	explicit SQLValue(double d);
+	explicit SQLValue(bool b);
 
-    Type type() const { return type_; }
-    const std::string& asString() const { return string_; }
-    bool isNull() const { return type_ == Type::Null; }
+	Type type() const {
+		return type_;
+	}
+	const std::string &asString() const {
+		return string_;
+	}
+	bool isNull() const {
+		return type_ == Type::Null;
+	}
 
 private:
-    Type type_{Type::Null};
-    std::string string_;
+	Type type_ {Type::Null};
+	std::string string_;
 };
 
 } // namespace r2rml
