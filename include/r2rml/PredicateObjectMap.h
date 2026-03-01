@@ -21,7 +21,7 @@ class R2RMLMapping;
 class PredicateObjectMap {
 public:
 	PredicateObjectMap();
-	~PredicateObjectMap();
+	~PredicateObjectMap(); // NOLINT(performance-trivially-destructible)
 
 	/**
 	 * Process a single row given a subject node and emit one or more triples

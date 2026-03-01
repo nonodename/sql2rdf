@@ -13,8 +13,9 @@ ColumnTermMap::~ColumnTermMap() = default;
 
 SerdNode ColumnTermMap::generateRDFTerm(const SQLRow &row, const SerdEnv & /*env*/) const {
 	SQLValue val = row.getValue(columnName);
-	if (val.isNull())
+	if (val.isNull()) {
 		return SERD_NODE_NULL;
+	}
 
 	cachedValue_ = val.asString();
 

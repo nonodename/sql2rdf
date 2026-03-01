@@ -14,7 +14,7 @@ class R2RMLMapping;
 class R2RMLParser {
 public:
 	R2RMLParser();
-	~R2RMLParser();
+	~R2RMLParser() = default;
 
 	R2RMLMapping parse(const std::string &mappingFilePath);
 };

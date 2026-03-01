@@ -23,7 +23,7 @@ class R2RMLMapping;
 class TriplesMap {
 public:
 	TriplesMap();
-	~TriplesMap();
+	~TriplesMap(); // NOLINT(performance-trivially-destructible)
 
 	/**
 	 * Process the supplied row, emitting zero or more triples via the

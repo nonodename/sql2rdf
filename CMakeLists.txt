@@ -170,9 +170,11 @@ endif()
 # clang-tidy target
 # ----------------------------------------------------------------------------
 find_program(CLANG_TIDY_EXE NAMES clang-tidy)
+
 if(CLANG_TIDY_EXE)
   file(GLOB_RECURSE TIDY_SOURCES
     "${CMAKE_SOURCE_DIR}/src/r2rml/*.cpp"
+    "${CMAKE_SOURCE_DIR}/include/r2rml/*.h"
     "${CMAKE_SOURCE_DIR}/tests/*.cpp"
   )
   add_custom_target(tidy

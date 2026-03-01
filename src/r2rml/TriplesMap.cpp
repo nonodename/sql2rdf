@@ -18,8 +18,9 @@ TriplesMap::~TriplesMap() = default;
 
 void TriplesMap::generateTriples(const SQLRow &row, SerdWriter &rdfWriter, const R2RMLMapping &mapping,
                                  SQLConnection &dbConnection) const {
-	if (!subjectMap)
+	if (!subjectMap) {
 		return;
+	}
 
 	// Determine the Serd environment to use for term generation.
 	const SerdEnv *env = mapping.serdEnvironment;
@@ -27,15 +28,17 @@ void TriplesMap::generateTriples(const SQLRow &row, SerdWriter &rdfWriter, const
 	// content rarely matters here, but we need a valid reference.
 	static SerdEnv *fallbackEnv = nullptr;
 	if (!env) {
-		if (!fallbackEnv)
+		if (!fallbackEnv) {
 			fallbackEnv = serd_env_new(nullptr);
+		}
 		env = fallbackEnv;
 	}
 
 	// Generate the subject node for this row.
 	SerdNode subject = subjectMap->generateRDFTerm(row, *env);
-	if (subject.type == SERD_NOTHING)
+	if (subject.type == SERD_NOTHING) {
 		return; // null subject – skip row
+	}
 
 	// Emit rdf:type triples for each rr:class.
 	if (!subjectMap->classIRIs.empty()) {
@@ -48,26 +51,31 @@ void TriplesMap::generateTriples(const SQLRow &row, SerdWriter &rdfWriter, const
 
 	// Process each predicate-object map.
 	for (const auto &pom : predicateObjectMaps) {
-		if (pom)
+		if (pom) {
 			pom->processRow(row, subject, rdfWriter, mapping, dbConnection);
+		}
 	}
 }
 
 bool TriplesMap::isValid() const {
-	if (!logicalTable || !logicalTable->isValid())
+	if (!logicalTable || !logicalTable->isValid()) {
 		return false;
-	if (!subjectMap || !subjectMap->isValid())
+	}
+	if (!subjectMap || !subjectMap->isValid()) {
 		return false;
+	}
 	return std::all_of(predicateObjectMaps.begin(), predicateObjectMaps.end(),
 	                   [](const std::unique_ptr<PredicateObjectMap> &pom) { return pom && pom->isValid(); });
 }
 
 bool TriplesMap::isValidInsideOut() const {
 	// rr:LogicalTable (including rr:sqlQuery) is not supported inside-out.
-	if (logicalTable)
+	if (logicalTable) {
 		return false;
-	if (!subjectMap || !subjectMap->isValid())
+	}
+	if (!subjectMap || !subjectMap->isValid()) {
 		return false;
+	}
 	return std::all_of(predicateObjectMaps.begin(), predicateObjectMaps.end(),
 	                   [](const std::unique_ptr<PredicateObjectMap> &pom) { return pom && pom->isValidInsideOut(); });
 }
@@ -75,23 +83,26 @@ bool TriplesMap::isValidInsideOut() const {
 std::ostream &operator<<(std::ostream &os, const TriplesMap &tm) {
 	os << "TriplesMap <" << tm.id << "> {\n";
 	os << "  logicalTable: ";
-	if (tm.logicalTable)
+	if (tm.logicalTable) {
 		os << *tm.logicalTable;
-	else
+	} else {
 		os << "(none)";
+	}
 	os << "\n";
 	os << "  subjectMap: ";
-	if (tm.subjectMap)
+	if (tm.subjectMap) {
 		os << *tm.subjectMap;
-	else
+	} else {
 		os << "(none)";
+	}
 	os << "\n";
 	for (std::size_t i = 0; i < tm.predicateObjectMaps.size(); ++i) {
 		os << "  predicateObjectMap[" << i << "]: ";
-		if (tm.predicateObjectMaps[i])
+		if (tm.predicateObjectMaps[i]) {
 			os << *tm.predicateObjectMaps[i];
-		else
+		} else {
 			os << "(none)";
+		}
 		os << "\n";
 	}
 	os << "}";

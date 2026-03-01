@@ -8,19 +8,19 @@ SQLRow::SQLRow() = default;
 SQLRow::SQLRow(std::map<std::string, SQLValue> columns) : columns_(std::move(columns)) {
 }
 
-SQLRow::~SQLRow() = default;
-
 SQLValue SQLRow::getValue(const std::string &columnName) const {
 	auto it = columns_.find(columnName);
-	if (it == columns_.end())
+	if (it == columns_.end()) {
 		return SQLValue();
+	}
 	return it->second;
 }
 
 bool SQLRow::isNull(const std::string &columnName) const {
 	auto it = columns_.find(columnName);
-	if (it == columns_.end())
+	if (it == columns_.end()) {
 		return true;
+	}
 	return it->second.isNull();
 }
 

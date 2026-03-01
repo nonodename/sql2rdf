@@ -19,8 +19,9 @@ R2RMLMapping::R2RMLMapping(R2RMLMapping &&other) noexcept
 
 R2RMLMapping &R2RMLMapping::operator=(R2RMLMapping &&other) noexcept {
 	if (this != &other) {
-		if (serdEnvironment)
+		if (serdEnvironment) {
 			serd_env_free(serdEnvironment);
+		}
 		triplesMaps = std::move(other.triplesMaps);
 		serdEnvironment = std::exchange(other.serdEnvironment, nullptr);
 	}
@@ -39,12 +40,14 @@ void R2RMLMapping::loadMapping(const std::string & /*mappingFilePath*/) {
 
 void R2RMLMapping::processDatabase(SQLConnection &dbConnection, SerdWriter &rdfWriter) {
 	for (const auto &tm : triplesMaps) {
-		if (!tm || !tm->isValid())
+		if (!tm || !tm->isValid()) {
 			continue;
+		}
 
 		auto rows = tm->logicalTable->getRows(dbConnection);
-		if (!rows)
+		if (!rows) {
 			continue;
+		}
 
 		while (rows->next()) {
 			SQLRow row = rows->getCurrentRow();
@@ -67,10 +70,11 @@ std::ostream &operator<<(std::ostream &os, const R2RMLMapping &m) {
 	os << "R2RMLMapping (" << m.triplesMaps.size() << " TriplesMap(s)):\n";
 	for (std::size_t i = 0; i < m.triplesMaps.size(); ++i) {
 		os << "\nTriplesMap[" << i << "]: ";
-		if (m.triplesMaps[i])
+		if (m.triplesMaps[i]) {
 			os << *m.triplesMaps[i];
-		else
+		} else {
 			os << "(none)";
+		}
 		os << "\n";
 	}
 	return os;

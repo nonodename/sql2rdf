@@ -34,8 +34,20 @@
 #include "r2rml/TriplesMap.h"
 #include "MockSQL.h"
 
-using namespace r2rml;
-using namespace r2rml::testing;
+using r2rml::BaseTableOrView;
+using r2rml::ColumnTermMap;
+using r2rml::ConstantTermMap;
+using r2rml::JoinCondition;
+using r2rml::PredicateObjectMap;
+using r2rml::R2RMLMapping;
+using r2rml::R2RMLParser;
+using r2rml::R2RMLView;
+using r2rml::ReferencingObjectMap;
+using r2rml::SQLRow;
+using r2rml::SQLValue;
+using r2rml::TemplateTermMap;
+using r2rml::TriplesMap;
+using r2rml::testing::MockSQLConnection;
 
 TEST_CASE("SQLValue basics") {
 	SQLValue def;

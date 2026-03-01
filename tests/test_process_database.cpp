@@ -41,8 +41,11 @@
 #include "r2rml/TriplesMap.h"
 #include "MockSQL.h"
 
-using namespace r2rml;
-using namespace r2rml::testing;
+using r2rml::R2RMLMapping;
+using r2rml::R2RMLParser;
+using r2rml::SQLValue;
+using r2rml::testing::makeRow;
+using r2rml::testing::MockSQLConnection;
 
 // ---------------------------------------------------------------------------
 // Helper utilities

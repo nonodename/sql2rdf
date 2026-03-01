@@ -46,12 +46,14 @@ SerdNode TemplateTermMap::generateRDFTerm(const SQLRow &row, const SerdEnv & /*e
 	while (i < n) {
 		if (templateString[i] == '{') {
 			std::size_t end = templateString.find('}', i + 1);
-			if (end == std::string::npos)
+			if (end == std::string::npos) {
 				break; // malformed template – treat rest as literal
+			}
 			std::string colName = templateString.substr(i + 1, end - i - 1);
 			SQLValue val = row.getValue(colName);
-			if (val.isNull())
+			if (val.isNull()) {
 				return SERD_NODE_NULL; // required column is missing/null
+			}
 			expanded_ += percentEncode(val.asString());
 			i = end + 1;
 		} else {

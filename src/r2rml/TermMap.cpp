@@ -20,10 +20,12 @@ static const char *termTypeName(TermType t) {
 
 std::ostream &TermMap::print(std::ostream &os) const {
 	os << "termType=" << termTypeName(termType);
-	if (languageTag)
+	if (languageTag) {
 		os << " lang=\"" << *languageTag << '"';
-	if (datatypeIRI)
+	}
+	if (datatypeIRI) {
 		os << " datatype=\"" << *datatypeIRI << '"';
+	}
 	return os;
 }
 

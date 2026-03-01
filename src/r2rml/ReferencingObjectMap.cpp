@@ -42,21 +42,24 @@ ReferencingObjectMap::ReferencingObjectMap() = default;
 ReferencingObjectMap::~ReferencingObjectMap() = default;
 
 bool ReferencingObjectMap::isValid() const {
-	if (!parentTriplesMap)
+	if (!parentTriplesMap) {
 		return false;
+	}
 	return std::all_of(joinConditions.begin(), joinConditions.end(),
 	                   [](const JoinCondition &jc) { return jc.isValid(); });
 }
 
 std::unique_ptr<SQLResultSet> ReferencingObjectMap::getJoinedRows(SQLConnection &dbConnection,
                                                                   const SQLRow &childRow) const {
-	if (!parentTriplesMap || !parentTriplesMap->logicalTable)
+	if (!parentTriplesMap || !parentTriplesMap->logicalTable) {
 		return nullptr;
+	}
 
 	// Execute the parent's logical table query.
 	auto parentResult = parentTriplesMap->logicalTable->getRows(dbConnection);
-	if (!parentResult)
+	if (!parentResult) {
 		return nullptr;
+	}
 
 	// Collect parent rows that satisfy all join conditions.
 	std::vector<SQLRow> matched;
@@ -71,8 +74,9 @@ std::unique_ptr<SQLResultSet> ReferencingObjectMap::getJoinedRows(SQLConnection 
 				break;
 			}
 		}
-		if (ok)
+		if (ok) {
 			matched.push_back(std::move(parentRow));
+		}
 	}
 
 	return std::unique_ptr<SQLResultSet>(new VectorResultSet(std::move(matched)));
@@ -80,23 +84,26 @@ std::unique_ptr<SQLResultSet> ReferencingObjectMap::getJoinedRows(SQLConnection 
 
 SerdNode ReferencingObjectMap::generateRDFTerm(const SQLRow & /*childRow*/, const SQLRow &parentRow,
                                                const SerdEnv &env) const {
-	if (!parentTriplesMap || !parentTriplesMap->subjectMap)
+	if (!parentTriplesMap || !parentTriplesMap->subjectMap) {
 		return SERD_NODE_NULL;
+	}
 
 	return parentTriplesMap->subjectMap->generateRDFTerm(parentRow, env);
 }
 
 std::ostream &ReferencingObjectMap::print(std::ostream &os) const {
 	os << "ReferencingObjectMap { parent=";
-	if (parentTriplesMap)
+	if (parentTriplesMap) {
 		os << "<" << parentTriplesMap->id << ">";
-	else
+	} else {
 		os << "(unresolved)";
+	}
 	if (!joinConditions.empty()) {
 		os << " joins=[";
 		for (std::size_t i = 0; i < joinConditions.size(); ++i) {
-			if (i)
+			if (i) {
 				os << ", ";
+			}
 			os << joinConditions[i];
 		}
 		os << "]";

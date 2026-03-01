@@ -24,8 +24,9 @@ std::ostream &R2RMLView::print(std::ostream &os) const {
 	if (!sqlVersions.empty()) {
 		os << " versions=[";
 		for (std::size_t i = 0; i < sqlVersions.size(); ++i) {
-			if (i)
+			if (i) {
 				os << ", ";
+			}
 			os << sqlVersions[i];
 		}
 		os << "]";

@@ -17,8 +17,9 @@ std::ostream &SubjectMap::print(std::ostream &os) const {
 	if (!classIRIs.empty()) {
 		os << " classes=[";
 		for (std::size_t i = 0; i < classIRIs.size(); ++i) {
-			if (i)
+			if (i) {
 				os << ", ";
+			}
 			os << classIRIs[i];
 		}
 		os << "]";
@@ -26,10 +27,12 @@ std::ostream &SubjectMap::print(std::ostream &os) const {
 	if (!graphMaps.empty()) {
 		os << " graphMaps=[";
 		for (std::size_t i = 0; i < graphMaps.size(); ++i) {
-			if (i)
+			if (i) {
 				os << ", ";
-			if (graphMaps[i])
+			}
+			if (graphMaps[i]) {
 				os << *graphMaps[i];
+			}
 		}
 		os << "]";
 	}

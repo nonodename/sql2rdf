@@ -23,6 +23,12 @@ The [Serd](https://drobilla.net/software/serd/) RDF syntax library is included a
 
 **Requires a C++14-compliant compiler** (GCC 5+, Clang 3.4+, MSVC 2015+).
 
+To build the extension, first clone this repo. Then in the repo base locally run:
+
+```sh
+git submodule update --init --recursive
+```
+Then (assuming you already have DuckDB installed on your system)
 ```sh
 cmake -B build
 cmake --build build --target sql2rdf_r2rml   # library only

@@ -15,7 +15,7 @@ class SQLRow {
 public:
 	SQLRow();
 	explicit SQLRow(std::map<std::string, SQLValue> columns);
-	~SQLRow();
+	~SQLRow() = default;
 
 	SQLValue getValue(const std::string &columnName) const;
 	bool isNull(const std::string &columnName) const;
