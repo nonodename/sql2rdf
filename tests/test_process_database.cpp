@@ -55,9 +55,9 @@ namespace {
 
 // Run processDatabase and capture the NTriples serialisation as a string.
 std::string runProcessDatabase(R2RMLMapping &mapping, MockSQLConnection &conn) {
-	SerdChunk chunk {NULL, 0};
-	SerdEnv *env = serd_env_new(NULL);
-	SerdWriter *writer = serd_writer_new(SERD_NTRIPLES, (SerdStyle)0, env, NULL, serd_chunk_sink, &chunk);
+	SerdChunk chunk {nullptr, 0};
+	SerdEnv *env = serd_env_new(nullptr);
+	SerdWriter *writer = serd_writer_new(SERD_NTRIPLES, (SerdStyle)0, env, nullptr, serd_chunk_sink, &chunk);
 
 	mapping.processDatabase(conn, *writer);
 

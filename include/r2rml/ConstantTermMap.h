@@ -28,7 +28,7 @@ public:
 
 	std::ostream &print(std::ostream &os) const override;
 
-	SerdNode constantValue {0};
+	SerdNode constantValue {nullptr};
 
 private:
 	/// Owns the string data that constantValue.buf points into (when non-empty).

@@ -83,7 +83,7 @@ TEST_CASE("ConstantTermMap returns given node") {
 	const uint8_t uri[] = "http://example/";
 	SerdNode node = serd_node_from_string(SERD_URI, uri);
 	ConstantTermMap c(node);
-	SerdEnv *env1 = serd_env_new(NULL);
+	SerdEnv *env1 = serd_env_new(nullptr);
 	SerdNode out = c.generateRDFTerm(SQLRow(), *env1);
 	// Use serd_node_equals to compare nodes
 	REQUIRE(serd_node_equals(&node, &out));
@@ -93,7 +93,7 @@ TEST_CASE("ConstantTermMap returns given node") {
 TEST_CASE("Column/Template term maps return default null node") {
 	ColumnTermMap ct("col");
 	TemplateTermMap tt("{col}");
-	SerdEnv *env2 = serd_env_new(NULL);
+	SerdEnv *env2 = serd_env_new(nullptr);
 
 	SerdNode cn = ct.generateRDFTerm(SQLRow(), *env2);
 	SerdNode tn = tt.generateRDFTerm(SQLRow(), *env2);
@@ -191,8 +191,9 @@ static std::string nodeUri(const SerdNode &n) {
 
 static TriplesMap *findById(R2RMLMapping &m, const std::string &fragment) {
 	for (auto &tm : m.triplesMaps) {
-		if (tm->id.find(fragment) != std::string::npos)
+		if (tm->id.find(fragment) != std::string::npos) {
 			return tm.get();
+		}
 	}
 	return nullptr;
 }
