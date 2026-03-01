@@ -14,7 +14,9 @@ namespace r2rml {
 R2RMLMapping::R2RMLMapping() = default;
 
 R2RMLMapping::R2RMLMapping(R2RMLMapping &&other) noexcept
-    : triplesMaps(std::move(other.triplesMaps)), serdEnvironment(std::exchange(other.serdEnvironment, nullptr)) {
+    : triplesMaps(std::move(other.triplesMaps)) {
+    this->serdEnvironment = other.serdEnvironment;
+    other.serdEnvironment = nullptr;
 }
 
 R2RMLMapping &R2RMLMapping::operator=(R2RMLMapping &&other) noexcept {
@@ -23,7 +25,8 @@ R2RMLMapping &R2RMLMapping::operator=(R2RMLMapping &&other) noexcept {
 			serd_env_free(serdEnvironment);
 		}
 		triplesMaps = std::move(other.triplesMaps);
-		serdEnvironment = std::exchange(other.serdEnvironment, nullptr);
+		this->serdEnvironment = other.serdEnvironment;
+        other.serdEnvironment = nullptr;
 	}
 	return *this;
 }
