@@ -151,7 +151,7 @@ static SerdStatus cbError(void * /*handle*/, const SerdError * /*error*/) {
 }
 
 // ---------------------------------------------------------------------------
-// Triple-store query helpers
+// Triple-store query helpers (pure utilities – no build state needed)
 // ---------------------------------------------------------------------------
 
 static const std::vector<ObjValue> *getObjects(const TripleStore &ts, const std::string &subj,
@@ -279,176 +279,192 @@ public:
 };
 
 // ---------------------------------------------------------------------------
-// Build helpers
+// ParseContext – owns build-phase state and exposes the build methods.
+//
+// Holding errors and parentRefs as members eliminates the need to thread them
+// through every build-method signature.
 // ---------------------------------------------------------------------------
+class ParseContext {
+public:
+	const TripleStore &ts;
+	std::vector<std::string> errors;
+	std::vector<std::pair<ReferencingObjectMap *, std::string>> parentRefs;
 
-/// Build a LogicalTable from a blank-node or named-resource key.
-static std::unique_ptr<LogicalTable> buildLogicalTable(const TripleStore &ts, const std::string &ltKey,
-                                                       std::vector<std::string> &errors) {
-	std::string tableName = getFirstLiteral(ts, ltKey, RR + "tableName");
-	if (!tableName.empty()) {
-		return std::unique_ptr<BaseTableOrView>(new BaseTableOrView(tableName));
+	explicit ParseContext(const TripleStore &ts) : ts(ts) {}
+
+	// ------------------------------------------------------------------
+	// Wrap a URI string in a ConstantTermMap.
+	// ------------------------------------------------------------------
+	static std::unique_ptr<ConstantTermMap> makeConstantUri(const std::string &uri) {
+		SerdNode node = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(uri.c_str()));
+		return std::unique_ptr<ConstantTermMap>(new ConstantTermMap(node));
 	}
 
-	std::string sqlQuery = getFirstLiteral(ts, ltKey, RR + "sqlQuery");
-	if (!sqlQuery.empty()) {
-		return std::unique_ptr<R2RMLView>(new R2RMLView(sqlQuery));
+	// ------------------------------------------------------------------
+	// Build a LogicalTable from a blank-node or named-resource key.
+	// ------------------------------------------------------------------
+	std::unique_ptr<LogicalTable> buildLogicalTable(const std::string &ltKey) {
+		std::string tableName = getFirstLiteral(ts, ltKey, RR + "tableName");
+		if (!tableName.empty()) {
+			return std::unique_ptr<BaseTableOrView>(new BaseTableOrView(tableName));
+		}
+
+		std::string sqlQuery = getFirstLiteral(ts, ltKey, RR + "sqlQuery");
+		if (!sqlQuery.empty()) {
+			return std::unique_ptr<R2RMLView>(new R2RMLView(sqlQuery));
+		}
+
+		errors.push_back("R2RML parser: unrecognised logical table <" + ltKey + ">");
+		return nullptr;
 	}
 
-	errors.push_back("R2RML parser: unrecognised logical table <" + ltKey + ">");
-	return nullptr;
-}
+	// ------------------------------------------------------------------
+	// Build a generic TermMap (Column / Template / Constant /
+	// ReferencingObjectMap) from a node key.  Appends to parentRefs for
+	// later resolution.
+	// ------------------------------------------------------------------
+	std::unique_ptr<TermMap> buildTermMap(const std::string &nodeKey) {
+		// rr:column
+		std::string column = getFirstLiteral(ts, nodeKey, RR + "column");
+		if (!column.empty()) {
+			return std::unique_ptr<ColumnTermMap>(new ColumnTermMap(column));
+		}
 
-/// Wrap a URI string in a ConstantTermMap (which will own the string data).
-static std::unique_ptr<ConstantTermMap> makeConstantUri(const std::string &uri) {
-	SerdNode node = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(uri.c_str()));
-	return std::unique_ptr<ConstantTermMap>(new ConstantTermMap(node));
-}
+		// rr:template
+		std::string tmpl = getFirstLiteral(ts, nodeKey, RR + "template");
+		if (!tmpl.empty()) {
+			return std::unique_ptr<TemplateTermMap>(new TemplateTermMap(tmpl));
+		}
 
-/// Build a generic TermMap (Column / Template / Constant / ReferencingObjectMap)
-/// from a node key.  Appends to `parentRefs` for later resolution.
-static std::unique_ptr<TermMap> buildTermMap(const TripleStore &ts, const std::string &nodeKey,
-                                             std::vector<std::pair<ReferencingObjectMap *, std::string>> &parentRefs) {
-	// rr:column
-	std::string column = getFirstLiteral(ts, nodeKey, RR + "column");
-	if (!column.empty()) {
-		return std::unique_ptr<ColumnTermMap>(new ColumnTermMap(column));
+		// rr:constant (URI object)
+		std::string constant = getFirstUri(ts, nodeKey, RR + "constant");
+		if (!constant.empty()) {
+			return makeConstantUri(constant);
+		}
+
+		// rr:parentTriplesMap → ReferencingObjectMap
+		std::string parentUri = getFirstUri(ts, nodeKey, RR + "parentTriplesMap");
+		if (!parentUri.empty()) {
+			auto rom = std::unique_ptr<ConcreteReferencingObjectMap>(new ConcreteReferencingObjectMap());
+
+			const auto *jcObjs = getObjects(ts, nodeKey, RR + "joinCondition");
+			if (jcObjs) {
+				for (const auto &jcObj : *jcObjs) {
+					std::string jcKey = objKey(jcObj);
+					if (jcKey.empty()) {
+						continue;
+					}
+					std::string child = getFirstLiteral(ts, jcKey, RR + "child");
+					std::string parent = getFirstLiteral(ts, jcKey, RR + "parent");
+					rom->joinConditions.emplace_back(child, parent);
+				}
+			}
+
+			parentRefs.emplace_back(rom.get(), parentUri);
+			return rom;
+		}
+
+		return nullptr; // unknown – caller may warn
 	}
 
-	// rr:template
-	std::string tmpl = getFirstLiteral(ts, nodeKey, RR + "template");
-	if (!tmpl.empty()) {
-		return std::unique_ptr<TemplateTermMap>(new TemplateTermMap(tmpl));
+	// ------------------------------------------------------------------
+	// Build a SubjectMap from a node key.
+	// ------------------------------------------------------------------
+	std::unique_ptr<SubjectMap> buildSubjectMap(const std::string &smKey) {
+		auto sm = std::unique_ptr<ConcreteSubjectMap>(new ConcreteSubjectMap());
+
+		// Value-generation strategy
+		std::string tmpl = getFirstLiteral(ts, smKey, RR + "template");
+		std::string column = getFirstLiteral(ts, smKey, RR + "column");
+		std::string constant = getFirstUri(ts, smKey, RR + "constant");
+
+		if (!tmpl.empty()) {
+			sm->valueMap = std::unique_ptr<TemplateTermMap>(new TemplateTermMap(tmpl));
+		} else if (!column.empty()) {
+			sm->valueMap = std::unique_ptr<ColumnTermMap>(new ColumnTermMap(column));
+		} else if (!constant.empty()) {
+			sm->valueMap = makeConstantUri(constant);
+		}
+
+		// rr:class assertions
+		const auto *classObjs = getObjects(ts, smKey, RR + "class");
+		if (classObjs) {
+			for (const auto &cls : *classObjs) {
+				if (cls.type == ObjType::URI) {
+					sm->classIRIs.push_back(cls.value);
+				}
+			}
+		}
+
+		return sm;
 	}
 
-	// rr:constant (URI object)
-	std::string constant = getFirstUri(ts, nodeKey, RR + "constant");
-	if (!constant.empty()) {
-		return makeConstantUri(constant);
-	}
+	// ------------------------------------------------------------------
+	// Build a PredicateObjectMap from a blank-node key.
+	// ------------------------------------------------------------------
+	std::unique_ptr<PredicateObjectMap> buildPOM(const std::string &pomKey) {
+		auto pom = std::unique_ptr<PredicateObjectMap>(new PredicateObjectMap());
 
-	// rr:parentTriplesMap → ReferencingObjectMap
-	std::string parentUri = getFirstUri(ts, nodeKey, RR + "parentTriplesMap");
-	if (!parentUri.empty()) {
-		auto rom = std::unique_ptr<ConcreteReferencingObjectMap>(new ConcreteReferencingObjectMap());
+		// rr:predicate shortcut (constant predicate)
+		const auto *predObjs = getObjects(ts, pomKey, RR + "predicate");
+		if (predObjs) {
+			for (const auto &p : *predObjs) {
+				if (p.type == ObjType::URI) {
+					pom->predicateMaps.push_back(makeConstantUri(p.value));
+				}
+			}
+		}
 
-		const auto *jcObjs = getObjects(ts, nodeKey, RR + "joinCondition");
-		if (jcObjs) {
-			for (const auto &jcObj : *jcObjs) {
-				std::string jcKey = objKey(jcObj);
-				if (jcKey.empty()) {
+		// rr:predicateMap (full predicate map)
+		const auto *predMapObjs = getObjects(ts, pomKey, RR + "predicateMap");
+		if (predMapObjs) {
+			for (const auto &pm : *predMapObjs) {
+				std::string pmKey = objKey(pm);
+				if (pmKey.empty()) {
 					continue;
 				}
-				std::string child = getFirstLiteral(ts, jcKey, RR + "child");
-				std::string parent = getFirstLiteral(ts, jcKey, RR + "parent");
-				rom->joinConditions.emplace_back(child, parent);
-			}
-		}
-
-		parentRefs.emplace_back(rom.get(), parentUri);
-		return rom;
-	}
-
-	return nullptr; // unknown – caller may warn
-}
-
-/// Build a SubjectMap (and its ConcreteSubjectMap wrapper) from a node key.
-static std::unique_ptr<SubjectMap>
-buildSubjectMap(const TripleStore &ts, const std::string &smKey,
-                std::vector<std::pair<ReferencingObjectMap *, std::string>> &parentRefs) {
-	auto sm = std::unique_ptr<ConcreteSubjectMap>(new ConcreteSubjectMap());
-
-	// Value-generation strategy
-	std::string tmpl = getFirstLiteral(ts, smKey, RR + "template");
-	std::string column = getFirstLiteral(ts, smKey, RR + "column");
-	std::string constant = getFirstUri(ts, smKey, RR + "constant");
-
-	if (!tmpl.empty()) {
-		sm->valueMap = std::unique_ptr<TemplateTermMap>(new TemplateTermMap(tmpl));
-	} else if (!column.empty()) {
-		sm->valueMap = std::unique_ptr<ColumnTermMap>(new ColumnTermMap(column));
-	} else if (!constant.empty()) {
-		sm->valueMap = makeConstantUri(constant);
-	}
-
-	// rr:class assertions
-	const auto *classObjs = getObjects(ts, smKey, RR + "class");
-	if (classObjs) {
-		for (const auto &cls : *classObjs) {
-			if (cls.type == ObjType::URI) {
-				sm->classIRIs.push_back(cls.value);
-			}
-		}
-	}
-
-	return sm;
-}
-
-/// Build a PredicateObjectMap from a blank-node key.
-static std::unique_ptr<PredicateObjectMap>
-buildPOM(const TripleStore &ts, const std::string &pomKey,
-         std::vector<std::pair<ReferencingObjectMap *, std::string>> &parentRefs, std::vector<std::string> &errors) {
-	auto pom = std::unique_ptr<PredicateObjectMap>(new PredicateObjectMap());
-
-	// rr:predicate shortcut (constant predicate)
-	const auto *predObjs = getObjects(ts, pomKey, RR + "predicate");
-	if (predObjs) {
-		for (const auto &p : *predObjs) {
-			if (p.type == ObjType::URI) {
-				pom->predicateMaps.push_back(makeConstantUri(p.value));
-			}
-		}
-	}
-
-	// rr:predicateMap (full predicate map)
-	const auto *predMapObjs = getObjects(ts, pomKey, RR + "predicateMap");
-	if (predMapObjs) {
-		for (const auto &pm : *predMapObjs) {
-			std::string pmKey = objKey(pm);
-			if (pmKey.empty()) {
-				continue;
-			}
-			auto tm = buildTermMap(ts, pmKey, parentRefs);
-			if (tm) {
-				pom->predicateMaps.push_back(std::move(tm));
-			}
-		}
-	}
-
-	// rr:object shortcut (constant URI object)
-	const auto *objObjs = getObjects(ts, pomKey, RR + "object");
-	if (objObjs) {
-		for (const auto &o : *objObjs) {
-			if (o.type == ObjType::URI) {
-				pom->objectMaps.push_back(makeConstantUri(o.value));
-			}
-		}
-	}
-
-	// rr:objectMap (full object map)
-	const auto *objMapObjs = getObjects(ts, pomKey, RR + "objectMap");
-	if (objMapObjs) {
-		for (const auto &om : *objMapObjs) {
-			std::string omKey = objKey(om);
-			if (omKey.empty()) {
-				continue;
-			}
-			auto tm = buildTermMap(ts, omKey, parentRefs);
-			if (tm) {
-				// Per R2RML spec: default term type for rr:column in an
-				// objectMap is rr:Literal (not rr:IRI).
-				if (dynamic_cast<ColumnTermMap *>(tm.get())) {
-					tm->termType = TermType::Literal;
+				auto tm = buildTermMap(pmKey);
+				if (tm) {
+					pom->predicateMaps.push_back(std::move(tm));
 				}
-				pom->objectMaps.push_back(std::move(tm));
-			} else {
-				errors.push_back("R2RML parser: unknown object map type for <" + omKey + ">");
 			}
 		}
-	}
 
-	return pom;
-}
+		// rr:object shortcut (constant URI object)
+		const auto *objObjs = getObjects(ts, pomKey, RR + "object");
+		if (objObjs) {
+			for (const auto &o : *objObjs) {
+				if (o.type == ObjType::URI) {
+					pom->objectMaps.push_back(makeConstantUri(o.value));
+				}
+			}
+		}
+
+		// rr:objectMap (full object map)
+		const auto *objMapObjs = getObjects(ts, pomKey, RR + "objectMap");
+		if (objMapObjs) {
+			for (const auto &om : *objMapObjs) {
+				std::string omKey = objKey(om);
+				if (omKey.empty()) {
+					continue;
+				}
+				auto tm = buildTermMap(omKey);
+				if (tm) {
+					// Per R2RML spec: default term type for rr:column in an
+					// objectMap is rr:Literal (not rr:IRI).
+					if (dynamic_cast<ColumnTermMap *>(tm.get())) {
+						tm->termType = TermType::Literal;
+					}
+					pom->objectMaps.push_back(std::move(tm));
+				} else {
+					errors.push_back("R2RML parser: unknown object map type for <" + omKey + ">");
+				}
+			}
+		}
+
+		return pom;
+	}
+};
 
 // ---------------------------------------------------------------------------
 // R2RMLParser implementation
@@ -457,8 +473,6 @@ buildPOM(const TripleStore &ts, const std::string &pomKey,
 R2RMLParser::R2RMLParser() = default;
 
 R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreNonFatalErrors) {
-	std::vector<std::string> errors;
-
 	// -----------------------------------------------------------------------
 	// Phase 1 – collect all triples via Serd
 	// -----------------------------------------------------------------------
@@ -473,12 +487,14 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreN
 	SerdNode fileUriNode = serd_node_new_file_uri(reinterpret_cast<const uint8_t *>(mappingFilePath.c_str()),
 	                                              /*hostname=*/nullptr, /*out=*/nullptr, /*escape=*/true);
 
+	ParseContext ctx(state.triples);
+
 	if (fileUriNode.buf) {
 		serd_env_set_base_uri(state.env, &fileUriNode);
 		serd_reader_read_file(reader, fileUriNode.buf);
 		serd_node_free(&fileUriNode);
 	} else {
-		errors.push_back("R2RML parser: could not build file URI for: " + mappingFilePath);
+		ctx.errors.push_back("R2RML parser: could not build file URI for: " + mappingFilePath);
 	}
 
 	serd_reader_free(reader);
@@ -489,9 +505,6 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreN
 	R2RMLMapping mapping;
 	mapping.serdEnvironment = state.env; // transfer ownership
 	state.env = nullptr;
-
-	// Accumulate (rom*, parentUri) pairs; resolve after all TMs are built.
-	std::vector<std::pair<ReferencingObjectMap *, std::string>> parentRefs;
 
 	// Identify TriplesMap subjects: any non-blank named resource carrying at
 	// least one characteristic R2RML TriplesMap predicate.
@@ -516,13 +529,13 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreN
 		// Logical table (inline blank node or named resource)
 		std::string ltKey = getFirstObjKey(state.triples, subj, RR + "logicalTable");
 		if (!ltKey.empty()) {
-			tm->logicalTable = buildLogicalTable(state.triples, ltKey, errors);
+			tm->logicalTable = ctx.buildLogicalTable(ltKey);
 		}
 
 		// Subject map
 		std::string smKey = getFirstObjKey(state.triples, subj, RR + "subjectMap");
 		if (!smKey.empty()) {
-			tm->subjectMap = buildSubjectMap(state.triples, smKey, parentRefs);
+			tm->subjectMap = ctx.buildSubjectMap(smKey);
 		}
 
 		// Predicate-object maps (there may be several)
@@ -533,7 +546,7 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreN
 				if (pomKey.empty()) {
 					continue;
 				}
-				auto pom = buildPOM(state.triples, pomKey, parentRefs, errors);
+				auto pom = ctx.buildPOM(pomKey);
 				if (pom) {
 					tm->predicateObjectMaps.push_back(std::move(pom));
 				}
@@ -546,7 +559,7 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreN
 	// -----------------------------------------------------------------------
 	// Phase 3 – resolve parentTriplesMap back-references
 	// -----------------------------------------------------------------------
-	for (auto &ref : parentRefs) {
+	for (auto &ref : ctx.parentRefs) {
 		bool found = false;
 		for (const auto &tm : mapping.triplesMaps) {
 			if (tm->id == ref.second) {
@@ -556,19 +569,19 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreN
 			}
 		}
 		if (!found) {
-			errors.push_back("R2RML parser: unresolved parentTriplesMap <" + ref.second + ">");
+			ctx.errors.push_back("R2RML parser: unresolved parentTriplesMap <" + ref.second + ">");
 		}
 	}
 
 	// -----------------------------------------------------------------------
 	// Phase 4 – report any collected errors
 	// -----------------------------------------------------------------------
-	if (!errors.empty()) {
+	if (!ctx.errors.empty()) {
 		if (ignoreNonFatalErrors) {
-			mapping.parseErrors = std::move(errors);
+			mapping.parseErrors = std::move(ctx.errors);
 		} else {
 			std::ostringstream msg;
-			for (const auto &e : errors) {
+			for (const auto &e : ctx.errors) {
 				msg << e << "\n";
 			}
 			throw std::runtime_error(msg.str());
