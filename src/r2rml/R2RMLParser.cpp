@@ -31,13 +31,13 @@
 
 #include <serd/serd.h>
 
-#include <iostream>
 #include <map>
 #include <memory>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
-#include <ostream>
 
 namespace r2rml {
 
@@ -283,7 +283,8 @@ public:
 // ---------------------------------------------------------------------------
 
 /// Build a LogicalTable from a blank-node or named-resource key.
-static std::unique_ptr<LogicalTable> buildLogicalTable(const TripleStore &ts, const std::string &ltKey) {
+static std::unique_ptr<LogicalTable> buildLogicalTable(const TripleStore &ts, const std::string &ltKey,
+                                                       std::vector<std::string> &errors) {
 	std::string tableName = getFirstLiteral(ts, ltKey, RR + "tableName");
 	if (!tableName.empty()) {
 		return std::unique_ptr<BaseTableOrView>(new BaseTableOrView(tableName));
@@ -294,7 +295,7 @@ static std::unique_ptr<LogicalTable> buildLogicalTable(const TripleStore &ts, co
 		return std::unique_ptr<R2RMLView>(new R2RMLView(sqlQuery));
 	}
 
-	std::cerr << "R2RML parser: unrecognised logical table <" << ltKey << ">\n";
+	errors.push_back("R2RML parser: unrecognised logical table <" + ltKey + ">");
 	return nullptr;
 }
 
@@ -386,7 +387,7 @@ buildSubjectMap(const TripleStore &ts, const std::string &smKey,
 /// Build a PredicateObjectMap from a blank-node key.
 static std::unique_ptr<PredicateObjectMap>
 buildPOM(const TripleStore &ts, const std::string &pomKey,
-         std::vector<std::pair<ReferencingObjectMap *, std::string>> &parentRefs) {
+         std::vector<std::pair<ReferencingObjectMap *, std::string>> &parentRefs, std::vector<std::string> &errors) {
 	auto pom = std::unique_ptr<PredicateObjectMap>(new PredicateObjectMap());
 
 	// rr:predicate shortcut (constant predicate)
@@ -441,7 +442,7 @@ buildPOM(const TripleStore &ts, const std::string &pomKey,
 				}
 				pom->objectMaps.push_back(std::move(tm));
 			} else {
-				std::cerr << "R2RML parser: unknown object map type for <" << omKey << ">\n";
+				errors.push_back("R2RML parser: unknown object map type for <" + omKey + ">");
 			}
 		}
 	}
@@ -455,7 +456,9 @@ buildPOM(const TripleStore &ts, const std::string &pomKey,
 
 R2RMLParser::R2RMLParser() = default;
 
-R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath) {
+R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreNonFatalErrors) {
+	std::vector<std::string> errors;
+
 	// -----------------------------------------------------------------------
 	// Phase 1 – collect all triples via Serd
 	// -----------------------------------------------------------------------
@@ -475,7 +478,7 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath) {
 		serd_reader_read_file(reader, fileUriNode.buf);
 		serd_node_free(&fileUriNode);
 	} else {
-		std::cerr << "R2RML parser: could not build file URI for: " << mappingFilePath << "\n";
+		errors.push_back("R2RML parser: could not build file URI for: " + mappingFilePath);
 	}
 
 	serd_reader_free(reader);
@@ -513,7 +516,7 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath) {
 		// Logical table (inline blank node or named resource)
 		std::string ltKey = getFirstObjKey(state.triples, subj, RR + "logicalTable");
 		if (!ltKey.empty()) {
-			tm->logicalTable = buildLogicalTable(state.triples, ltKey);
+			tm->logicalTable = buildLogicalTable(state.triples, ltKey, errors);
 		}
 
 		// Subject map
@@ -530,7 +533,7 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath) {
 				if (pomKey.empty()) {
 					continue;
 				}
-				auto pom = buildPOM(state.triples, pomKey, parentRefs);
+				auto pom = buildPOM(state.triples, pomKey, parentRefs, errors);
 				if (pom) {
 					tm->predicateObjectMaps.push_back(std::move(pom));
 				}
@@ -553,7 +556,22 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath) {
 			}
 		}
 		if (!found) {
-			std::cerr << "R2RML parser: unresolved parentTriplesMap <" << ref.second << ">\n";
+			errors.push_back("R2RML parser: unresolved parentTriplesMap <" + ref.second + ">");
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Phase 4 – report any collected errors
+	// -----------------------------------------------------------------------
+	if (!errors.empty()) {
+		if (ignoreNonFatalErrors) {
+			mapping.parseErrors = std::move(errors);
+		} else {
+			std::ostringstream msg;
+			for (const auto &e : errors) {
+				msg << e << "\n";
+			}
+			throw std::runtime_error(msg.str());
 		}
 	}
 

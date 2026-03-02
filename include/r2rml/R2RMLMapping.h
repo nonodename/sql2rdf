@@ -65,6 +65,13 @@ public:
 
 	std::vector<std::unique_ptr<TriplesMap>> triplesMaps;
 	SerdEnv *serdEnvironment {nullptr};
+
+	/**
+	 * Non-fatal parse errors collected when ignoreNonFatalErrors=true was
+	 * passed to R2RMLParser::parse().  Empty when no errors occurred or when
+	 * the parser was run in strict (throwing) mode.
+	 */
+	std::vector<std::string> parseErrors;
 };
 
 } // namespace r2rml

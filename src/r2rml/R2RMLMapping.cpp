@@ -13,7 +13,8 @@ namespace r2rml {
 
 R2RMLMapping::R2RMLMapping() = default;
 
-R2RMLMapping::R2RMLMapping(R2RMLMapping &&other) noexcept : triplesMaps(std::move(other.triplesMaps)) {
+R2RMLMapping::R2RMLMapping(R2RMLMapping &&other) noexcept
+    : triplesMaps(std::move(other.triplesMaps)), parseErrors(std::move(other.parseErrors)) {
 	this->serdEnvironment = other.serdEnvironment;
 	other.serdEnvironment = nullptr;
 }
@@ -24,6 +25,7 @@ R2RMLMapping &R2RMLMapping::operator=(R2RMLMapping &&other) noexcept {
 			serd_env_free(serdEnvironment);
 		}
 		triplesMaps = std::move(other.triplesMaps);
+		parseErrors = std::move(other.parseErrors);
 		this->serdEnvironment = other.serdEnvironment;
 		other.serdEnvironment = nullptr;
 	}
@@ -78,6 +80,12 @@ std::ostream &operator<<(std::ostream &os, const R2RMLMapping &m) {
 			os << "(none)";
 		}
 		os << "\n";
+	}
+	if (!m.parseErrors.empty()) {
+		os << "\nParse errors (" << m.parseErrors.size() << "):\n";
+		for (const auto &e : m.parseErrors) {
+			os << "  - " << e << "\n";
+		}
 	}
 	return os;
 }

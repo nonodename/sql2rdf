@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <map>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 
 // Fallback for IDE tooling; CMake overrides this via target_compile_definitions.
@@ -637,4 +639,93 @@ TEST_CASE("Example 5 - CASE SQL view with role template object") {
 	REQUIRE(pom.isValid());
 	REQUIRE(tm->isValid());
 	REQUIRE(mapping.isValid());
+}
+
+// ---------------------------------------------------------------------------
+// ignoreNonFatalErrors parameter – lenient mode (true, the default)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ignoreNonFatalErrors=true: no errors on a valid mapping") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example1.ttl");
+	REQUIRE(mapping.parseErrors.empty());
+}
+
+TEST_CASE("ignoreNonFatalErrors=true: unrecognised logical table stored in parseErrors") {
+	// valid_r2rml_wrong_logical_table_pred.ttl has rr:table (wrong) instead of
+	// rr:tableName – buildLogicalTable() records the error rather than printing it.
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "valid_r2rml_wrong_logical_table_pred.ttl", true);
+	REQUIRE(mapping.parseErrors.size() == 1);
+	REQUIRE(mapping.parseErrors[0].find("unrecognised logical table") != std::string::npos);
+}
+
+TEST_CASE("ignoreNonFatalErrors=true: unknown objectMap type stored in parseErrors") {
+	// valid_r2rml_empty_object_map.ttl has rr:unknownProperty in the objectMap
+	// blank node – buildPOM() records the error rather than printing it.
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "valid_r2rml_empty_object_map.ttl", true);
+	REQUIRE(mapping.parseErrors.size() == 1);
+	REQUIRE(mapping.parseErrors[0].find("unknown object map type") != std::string::npos);
+}
+
+TEST_CASE("ignoreNonFatalErrors=true: unresolved parentTriplesMap stored in parseErrors") {
+	// valid_r2rml_unresolved_parent.ttl references <#GhostTriplesMap> which does
+	// not exist – phase 3 records the error rather than printing it.
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "valid_r2rml_unresolved_parent.ttl", true);
+	REQUIRE(mapping.parseErrors.size() == 1);
+	REQUIRE(mapping.parseErrors[0].find("unresolved parentTriplesMap") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// ignoreNonFatalErrors parameter – strict mode (false)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ignoreNonFatalErrors=false: throws on unrecognised logical table") {
+	R2RMLParser parser;
+	REQUIRE_THROWS_AS(parser.parse(SOURCE_R2RML_DIR "valid_r2rml_wrong_logical_table_pred.ttl", false),
+	                  std::runtime_error);
+}
+
+TEST_CASE("ignoreNonFatalErrors=false: throws on unknown objectMap type") {
+	R2RMLParser parser;
+	REQUIRE_THROWS_AS(parser.parse(SOURCE_R2RML_DIR "valid_r2rml_empty_object_map.ttl", false), std::runtime_error);
+}
+
+TEST_CASE("ignoreNonFatalErrors=false: throws on unresolved parentTriplesMap") {
+	R2RMLParser parser;
+	REQUIRE_THROWS_AS(parser.parse(SOURCE_R2RML_DIR "valid_r2rml_unresolved_parent.ttl", false), std::runtime_error);
+}
+
+TEST_CASE("ignoreNonFatalErrors=false: no throw on a valid mapping") {
+	R2RMLParser parser;
+	REQUIRE_NOTHROW(parser.parse(SOURCE_R2RML_DIR "example1.ttl", false));
+}
+
+// ---------------------------------------------------------------------------
+// operator<< reports stored parse errors
+// ---------------------------------------------------------------------------
+
+TEST_CASE("operator<< includes parse errors section when errors are present") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "valid_r2rml_unresolved_parent.ttl", true);
+	REQUIRE_FALSE(mapping.parseErrors.empty());
+
+	std::ostringstream oss;
+	oss << mapping;
+	const std::string output = oss.str();
+
+	REQUIRE(output.find("Parse errors") != std::string::npos);
+	REQUIRE(output.find("unresolved parentTriplesMap") != std::string::npos);
+}
+
+TEST_CASE("operator<< omits parse errors section when there are none") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example1.ttl");
+	REQUIRE(mapping.parseErrors.empty());
+
+	std::ostringstream oss;
+	oss << mapping;
+	REQUIRE(oss.str().find("Parse errors") == std::string::npos);
 }
