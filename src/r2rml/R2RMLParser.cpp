@@ -146,8 +146,7 @@ static SerdStatus cbStatement(void *handle, SerdStatementFlags /*flags*/, const 
 	return SERD_SUCCESS;
 }
 
-static SerdStatus cbError(void * /*handle*/, const SerdError *error) {
-	vfprintf(stderr, error->fmt, *error->args);
+static SerdStatus cbError(void * /*handle*/, const SerdError * /*error*/) {
 	return SERD_SUCCESS; // non-fatal: keep going
 }
 
