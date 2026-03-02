@@ -290,7 +290,8 @@ public:
 	std::vector<std::string> errors;
 	std::vector<std::pair<ReferencingObjectMap *, std::string>> parentRefs;
 
-	explicit ParseContext(const TripleStore &ts) : ts(ts) {}
+	explicit ParseContext(const TripleStore &ts) : ts(ts) {
+	}
 
 	// ------------------------------------------------------------------
 	// Wrap a URI string in a ConstantTermMap.
