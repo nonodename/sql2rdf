@@ -17,7 +17,7 @@ class SQLRow {
 public:
 	virtual ~SQLRow() = default;
 
-	virtual SQLValue getValue(const std::string &columnName) const = 0;
+	virtual std::unique_ptr<SQLValue> getValue(const std::string &columnName) const = 0;
 	virtual bool isNull(const std::string &columnName) const = 0;
 
 	/** Deep-copy this row.  Used internally when rows must be cached (e.g.

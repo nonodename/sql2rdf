@@ -1,38 +1,27 @@
 #pragma once
 
-#include <string>
 #include <memory>
+#include <string>
 
 namespace r2rml {
 
 /**
- * Lightweight container for a SQL value.  Designed to be used with C++11
- * environments as a replacement for std::any/variant.  Internally stores
- * textual representation; numeric conversions can be added later.
+ * Abstract interface for a single SQL value.  Implement this interface to
+ * provide backend-specific value representations (e.g. lazy DuckDB conversion
+ * or a simple string-backed value for tests).
  */
 class SQLValue {
 public:
 	enum class Type { Null, Integer, Double, String, Boolean };
 
-	SQLValue();
-	explicit SQLValue(const std::string &s);
-	explicit SQLValue(int i);
-	explicit SQLValue(double d);
-	explicit SQLValue(bool b);
+	virtual ~SQLValue() = default;
 
-	Type type() const {
-		return type_;
-	}
-	const std::string &asString() const {
-		return string_;
-	}
-	bool isNull() const {
-		return type_ == Type::Null;
-	}
+	virtual Type type() const = 0;
+	virtual const std::string &asString() const = 0;
+	virtual bool isNull() const = 0;
 
-private:
-	Type type_ {Type::Null};
-	std::string string_;
+	/** Deep-copy this value. */
+	virtual std::unique_ptr<SQLValue> clone() const = 0;
 };
 
 } // namespace r2rml

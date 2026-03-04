@@ -67,9 +67,9 @@ std::unique_ptr<SQLResultSet> ReferencingObjectMap::getJoinedRows(SQLConnection 
 		const SQLRow &parentRow = parentResult->getCurrentRow();
 		bool ok = true;
 		for (const JoinCondition &jc : joinConditions) {
-			SQLValue childVal = childRow.getValue(jc.childColumn);
-			SQLValue parentVal = parentRow.getValue(jc.parentColumn);
-			if (childVal.isNull() || parentVal.isNull() || childVal.asString() != parentVal.asString()) {
+			auto childVal = childRow.getValue(jc.childColumn);
+			auto parentVal = parentRow.getValue(jc.parentColumn);
+			if (childVal->isNull() || parentVal->isNull() || childVal->asString() != parentVal->asString()) {
 				ok = false;
 				break;
 			}

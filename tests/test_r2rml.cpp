@@ -21,6 +21,7 @@
 #include "r2rml/ColumnTermMap.h"
 #include "r2rml/SubjectMap.h"
 #include "r2rml/SQLValue.h"
+#include "r2rml/StringSQLValue.h"
 #include "r2rml/SQLConnection.h"
 #include "r2rml/PredicateObjectMap.h"
 #include "r2rml/BaseTableOrView.h"
@@ -41,33 +42,34 @@ using r2rml::BaseTableOrView;
 using r2rml::ColumnTermMap;
 using r2rml::ConstantTermMap;
 using r2rml::JoinCondition;
+using r2rml::MapSQLRow;
 using r2rml::PredicateObjectMap;
 using r2rml::R2RMLMapping;
 using r2rml::R2RMLParser;
 using r2rml::R2RMLView;
 using r2rml::ReferencingObjectMap;
-using r2rml::MapSQLRow;
 using r2rml::SQLRow;
 using r2rml::SQLValue;
+using r2rml::StringSQLValue;
 using r2rml::TemplateTermMap;
 using r2rml::TriplesMap;
 using r2rml::testing::MockSQLConnection;
 
 TEST_CASE("SQLValue basics") {
-	SQLValue def;
+	StringSQLValue def;
 	REQUIRE(def.isNull());
 
-	SQLValue s(std::string("hello"));
+	StringSQLValue s(std::string("hello"));
 	REQUIRE(s.type() == SQLValue::Type::String);
 	REQUIRE(s.asString() == "hello");
 
-	SQLValue i(42);
+	StringSQLValue i(42);
 	REQUIRE(i.type() == SQLValue::Type::Integer);
 
-	SQLValue d(3.14);
+	StringSQLValue d(3.14);
 	REQUIRE(d.type() == SQLValue::Type::Double);
 
-	SQLValue b(true);
+	StringSQLValue b(true);
 	REQUIRE(b.type() == SQLValue::Type::Boolean);
 }
 
@@ -140,8 +142,8 @@ TEST_CASE("PredicateObjectMap and TriplesMap defaults") {
 
 TEST_CASE("SQLRow default behaviour") {
 	MapSQLRow r;
-	SQLValue v = r.getValue("nope");
-	REQUIRE(v.isNull());
+	auto v = r.getValue("nope");
+	REQUIRE(v->isNull());
 	REQUIRE(r.isNull("nope") == true);
 }
 

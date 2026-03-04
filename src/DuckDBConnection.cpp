@@ -16,6 +16,101 @@
 namespace r2rml {
 
 // ---------------------------------------------------------------------------
+// DuckDBSQLValue
+//
+// Lazily wraps a duckdb::Value, computing type and string representation on
+// first access.  This is the DuckDB-specific concrete SQLValue implementation.
+// ---------------------------------------------------------------------------
+class DuckDBSQLValue : public SQLValue {
+public:
+	explicit DuckDBSQLValue(duckdb::Value val) : val_(std::move(val)) {
+	}
+
+	bool isNull() const override {
+		return val_.IsNull();
+	}
+
+	Type type() const override {
+		ensureConverted();
+		return type_;
+	}
+
+	const std::string &asString() const override {
+		ensureConverted();
+		return string_;
+	}
+
+	std::unique_ptr<SQLValue> clone() const override {
+		return std::unique_ptr<SQLValue>(new DuckDBSQLValue(val_));
+	}
+
+private:
+	duckdb::Value val_;
+	mutable Type type_ {Type::Null};
+	mutable std::string string_;
+	mutable bool converted_ {false};
+
+	void ensureConverted() const {
+		if (converted_) {
+			return;
+		}
+		converted_ = true;
+
+		if (val_.IsNull()) {
+			type_ = Type::Null;
+			return;
+		}
+
+		switch (val_.type().id()) {
+		case duckdb::LogicalTypeId::BOOLEAN:
+			type_ = Type::Boolean;
+			string_ = val_.GetValue<bool>() ? "true" : "false";
+			break;
+
+		case duckdb::LogicalTypeId::TINYINT:
+		case duckdb::LogicalTypeId::SMALLINT:
+		case duckdb::LogicalTypeId::INTEGER:
+		case duckdb::LogicalTypeId::UTINYINT:
+		case duckdb::LogicalTypeId::USMALLINT:
+		case duckdb::LogicalTypeId::UINTEGER:
+			type_ = Type::Integer;
+			string_ = std::to_string(val_.GetValue<int32_t>());
+			break;
+
+		// BIGINT and larger: store as string to avoid precision loss
+		case duckdb::LogicalTypeId::BIGINT:
+		case duckdb::LogicalTypeId::UBIGINT:
+		case duckdb::LogicalTypeId::HUGEINT:
+			type_ = Type::String;
+			string_ = val_.ToString();
+			break;
+
+		case duckdb::LogicalTypeId::FLOAT:
+			type_ = Type::Double;
+			string_ = std::to_string(static_cast<double>(val_.GetValue<float>()));
+			break;
+
+		case duckdb::LogicalTypeId::DOUBLE:
+			type_ = Type::Double;
+			string_ = std::to_string(val_.GetValue<double>());
+			break;
+
+		case duckdb::LogicalTypeId::VARCHAR:
+		case duckdb::LogicalTypeId::BLOB:
+			type_ = Type::String;
+			string_ = val_.GetValue<std::string>();
+			break;
+
+		default:
+			// Dates, timestamps, decimals, etc.: use string representation
+			type_ = Type::String;
+			string_ = val_.ToString();
+			break;
+		}
+	}
+};
+
+// ---------------------------------------------------------------------------
 // DuckDBResultSet
 //
 // Materialises all rows from a query result into memory, then iterates
@@ -52,48 +147,6 @@ struct DuckDBConnection::Impl {
 };
 
 // ---------------------------------------------------------------------------
-// Type conversion helper
-// ---------------------------------------------------------------------------
-static SQLValue duckValueToSQLValue(const duckdb::Value &val) {
-	if (val.IsNull()) {
-		return SQLValue();
-	}
-
-	switch (val.type().id()) {
-	case duckdb::LogicalTypeId::BOOLEAN:
-		return SQLValue(val.GetValue<bool>());
-
-	case duckdb::LogicalTypeId::TINYINT:
-	case duckdb::LogicalTypeId::SMALLINT:
-	case duckdb::LogicalTypeId::INTEGER:
-	case duckdb::LogicalTypeId::UTINYINT:
-	case duckdb::LogicalTypeId::USMALLINT:
-	case duckdb::LogicalTypeId::UINTEGER:
-		return SQLValue(val.GetValue<int32_t>());
-
-	// BIGINT and larger: store as string to avoid precision loss
-	case duckdb::LogicalTypeId::BIGINT:
-	case duckdb::LogicalTypeId::UBIGINT:
-	case duckdb::LogicalTypeId::HUGEINT:
-		return SQLValue(val.ToString());
-
-	case duckdb::LogicalTypeId::FLOAT:
-		return SQLValue(static_cast<double>(val.GetValue<float>()));
-
-	case duckdb::LogicalTypeId::DOUBLE:
-		return SQLValue(val.GetValue<double>());
-
-	case duckdb::LogicalTypeId::VARCHAR:
-	case duckdb::LogicalTypeId::BLOB:
-		return SQLValue(val.GetValue<std::string>());
-
-	default:
-		// Dates, timestamps, decimals, etc.: use string representation
-		return SQLValue(val.ToString());
-	}
-}
-
-// ---------------------------------------------------------------------------
 // DuckDBConnection
 // ---------------------------------------------------------------------------
 DuckDBConnection::DuckDBConnection(const std::string &path) : impl_(new Impl(path)) {
@@ -121,12 +174,12 @@ std::unique_ptr<SQLResultSet> DuckDBConnection::execute(const std::string &sqlQu
 		}
 
 		for (duckdb::idx_t row = 0; row < chunk->size(); ++row) {
-			std::map<std::string, SQLValue> columns;
+			std::map<std::string, std::unique_ptr<SQLValue>> columns;
 			for (duckdb::idx_t col = 0; col < chunk->ColumnCount(); ++col) {
 				std::string colName = result->ColumnName(col);
 				std::transform(colName.begin(), colName.end(), colName.begin(),
 				               [](unsigned char c) { return std::toupper(c); });
-				columns[colName] = duckValueToSQLValue(chunk->GetValue(col, row));
+				columns[colName] = std::unique_ptr<SQLValue>(new DuckDBSQLValue(chunk->GetValue(col, row)));
 			}
 			rows.emplace_back(std::move(columns));
 		}

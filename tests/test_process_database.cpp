@@ -38,12 +38,14 @@
 #include "r2rml/SQLResultSet.h"
 #include "r2rml/SQLRow.h"
 #include "r2rml/SQLValue.h"
+#include "r2rml/StringSQLValue.h"
 #include "r2rml/TriplesMap.h"
 #include "MockSQL.h"
 
 using r2rml::R2RMLMapping;
 using r2rml::R2RMLParser;
 using r2rml::SQLValue;
+using r2rml::StringSQLValue;
 using r2rml::testing::makeRow;
 using r2rml::testing::MockSQLConnection;
 
@@ -95,10 +97,10 @@ TEST_CASE("processDatabase Example1 - EMP table produces rdf:type and name tripl
 	// Key "EMP" matches SELECT * FROM EMP (or the quoted variant "EMP").
 	// It is shorter than "EMP2DEPT" so it won't win over that longer key if
 	// both are registered in the same connection.
-	conn.addResult("EMP", {makeRow({{"EMPNO", SQLValue(std::string("7369"))},
-	                                {"ENAME", SQLValue(std::string("SMITH"))},
-	                                {"JOB", SQLValue(std::string("CLERK"))},
-	                                {"DEPTNO", SQLValue(std::string("10"))}})});
+	conn.addResult("EMP", {makeRow({{"EMPNO", StringSQLValue(std::string("7369"))},
+	                                {"ENAME", StringSQLValue(std::string("SMITH"))},
+	                                {"JOB", StringSQLValue(std::string("CLERK"))},
+	                                {"DEPTNO", StringSQLValue(std::string("10"))}})});
 
 	std::string out = runProcessDatabase(mapping, conn);
 
@@ -135,10 +137,10 @@ TEST_CASE("processDatabase Example2 - DEPT SQL view produces Department triples"
 	MockSQLConnection conn;
 	// The logical table uses rr:sqlQuery; "DNAME" is a unique fragment of
 	// that SQL text and does not appear in EMP or EMP2DEPT table queries.
-	conn.addResult("DNAME", {makeRow({{"DEPTNO", SQLValue(std::string("10"))},
-	                                  {"DNAME", SQLValue(std::string("APPSERVER"))},
-	                                  {"LOC", SQLValue(std::string("NEW YORK"))},
-	                                  {"STAFF", SQLValue(1)}})});
+	conn.addResult("DNAME", {makeRow({{"DEPTNO", StringSQLValue(std::string("10"))},
+	                                  {"DNAME", StringSQLValue(std::string("APPSERVER"))},
+	                                  {"LOC", StringSQLValue(std::string("NEW YORK"))},
+	                                  {"STAFF", StringSQLValue(1)}})});
 
 	std::string out = runProcessDatabase(mapping, conn);
 
@@ -188,14 +190,14 @@ TEST_CASE("processDatabase emp+dept join - employee links to department IRI") {
 	// "DNAME" (5 chars) – matched for the DEPT SQL view query; wins over "EMP"
 	// when the DEPT view SQL is executed (the view text also contains "EMP"
 	// in a subquery, but "DNAME" is longer and therefore selected).
-	conn.addResult("EMP", {makeRow({{"EMPNO", SQLValue(std::string("7369"))},
-	                                {"ENAME", SQLValue(std::string("SMITH"))},
-	                                {"JOB", SQLValue(std::string("CLERK"))},
-	                                {"DEPTNO", SQLValue(std::string("10"))}})});
-	conn.addResult("DNAME", {makeRow({{"DEPTNO", SQLValue(std::string("10"))},
-	                                  {"DNAME", SQLValue(std::string("APPSERVER"))},
-	                                  {"LOC", SQLValue(std::string("NEW YORK"))},
-	                                  {"STAFF", SQLValue(1)}})});
+	conn.addResult("EMP", {makeRow({{"EMPNO", StringSQLValue(std::string("7369"))},
+	                                {"ENAME", StringSQLValue(std::string("SMITH"))},
+	                                {"JOB", StringSQLValue(std::string("CLERK"))},
+	                                {"DEPTNO", StringSQLValue(std::string("10"))}})});
+	conn.addResult("DNAME", {makeRow({{"DEPTNO", StringSQLValue(std::string("10"))},
+	                                  {"DNAME", StringSQLValue(std::string("APPSERVER"))},
+	                                  {"LOC", StringSQLValue(std::string("NEW YORK"))},
+	                                  {"STAFF", StringSQLValue(1)}})});
 
 	std::string out = runProcessDatabase(mapping, conn);
 
@@ -242,10 +244,11 @@ TEST_CASE("processDatabase Example4 - EMP2DEPT many-to-many produces link triple
 	MockSQLConnection conn;
 	// "EMP2DEPT" (8 chars) is longer than "EMP" (3 chars), so it wins when
 	// the EMP2DEPT query is executed even though "EMP" is a substring.
-	conn.addResult("EMP2DEPT",
-	               {makeRow({{"EMPNO", SQLValue(std::string("7369"))}, {"DEPTNO", SQLValue(std::string("10"))}}),
-	                makeRow({{"EMPNO", SQLValue(std::string("7369"))}, {"DEPTNO", SQLValue(std::string("20"))}}),
-	                makeRow({{"EMPNO", SQLValue(std::string("7400"))}, {"DEPTNO", SQLValue(std::string("10"))}})});
+	conn.addResult(
+	    "EMP2DEPT",
+	    {makeRow({{"EMPNO", StringSQLValue(std::string("7369"))}, {"DEPTNO", StringSQLValue(std::string("10"))}}),
+	     makeRow({{"EMPNO", StringSQLValue(std::string("7369"))}, {"DEPTNO", StringSQLValue(std::string("20"))}}),
+	     makeRow({{"EMPNO", StringSQLValue(std::string("7400"))}, {"DEPTNO", StringSQLValue(std::string("10"))}})});
 
 	std::string out = runProcessDatabase(mapping, conn);
 
@@ -285,10 +288,10 @@ TEST_CASE("processDatabase Example5 - CASE view maps JOB code to role IRI") {
 	MockSQLConnection conn;
 	// "ROLE" is the computed column name in the CASE SQL view; it appears in
 	// the rr:sqlQuery text of example5.ttl and is unique to that query.
-	conn.addResult("ROLE", {makeRow({{"EMPNO", SQLValue(std::string("7369"))},
-	                                 {"ENAME", SQLValue(std::string("SMITH"))},
-	                                 {"JOB", SQLValue(std::string("CLERK"))},
-	                                 {"ROLE", SQLValue(std::string("general-office"))}})});
+	conn.addResult("ROLE", {makeRow({{"EMPNO", StringSQLValue(std::string("7369"))},
+	                                 {"ENAME", StringSQLValue(std::string("SMITH"))},
+	                                 {"JOB", StringSQLValue(std::string("CLERK"))},
+	                                 {"ROLE", StringSQLValue(std::string("general-office"))}})});
 
 	std::string out = runProcessDatabase(mapping, conn);
 

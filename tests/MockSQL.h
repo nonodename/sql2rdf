@@ -11,6 +11,7 @@
 #include "r2rml/SQLResultSet.h"
 #include "r2rml/SQLRow.h"
 #include "r2rml/SQLValue.h"
+#include "r2rml/StringSQLValue.h"
 
 #include <memory>
 #include <string>
@@ -52,7 +53,7 @@ private:
 //
 // Usage:
 //   MockSQLConnection conn;
-//   conn.addResult("EMP", { makeRow({{"EMPNO", SQLValue(42)}}) });
+//   conn.addResult("EMP", { makeRow({{"EMPNO", StringSQLValue(42)}}) });
 // ---------------------------------------------------------------------------
 class MockSQLConnection : public SQLConnection {
 public:
@@ -84,8 +85,12 @@ private:
 //
 // Build a MapSQLRow from an initializer-list of {column, value} pairs.
 // ---------------------------------------------------------------------------
-inline MapSQLRow makeRow(std::initializer_list<std::pair<const std::string, SQLValue>> cols) {
-	return MapSQLRow(std::map<std::string, SQLValue>(cols));
+inline MapSQLRow makeRow(std::initializer_list<std::pair<const std::string, StringSQLValue>> cols) {
+	std::map<std::string, std::unique_ptr<SQLValue>> m;
+	for (const auto &p : cols) {
+		m[p.first] = std::unique_ptr<SQLValue>(new StringSQLValue(p.second));
+	}
+	return MapSQLRow(std::move(m));
 }
 
 } // namespace testing
