@@ -102,6 +102,7 @@ set(R2RML_SOURCES
   src/r2rml/JoinCondition.cpp
   src/r2rml/ReferencingObjectMap.cpp
   src/r2rml/SQLRow.cpp
+  src/r2rml/MapSQLRow.cpp
   src/r2rml/SQLValue.cpp
   src/r2rml/R2RMLParser.cpp
 )

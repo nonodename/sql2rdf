@@ -51,7 +51,7 @@ void PredicateObjectMap::processRow(const SQLRow &row, const SerdNode &subject, 
 					continue;
 				}
 				while (parentRows->next()) {
-					SQLRow parentRow = parentRows->getCurrentRow();
+					const SQLRow &parentRow = parentRows->getCurrentRow();
 					SerdNode object = rom->generateRDFTerm(row, parentRow, *env);
 					if (object.type == SERD_NOTHING) {
 						continue;

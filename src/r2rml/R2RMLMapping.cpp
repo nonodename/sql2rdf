@@ -54,7 +54,7 @@ void R2RMLMapping::processDatabase(SQLConnection &dbConnection, SerdWriter &rdfW
 		}
 
 		while (rows->next()) {
-			SQLRow row = rows->getCurrentRow();
+			const SQLRow &row = rows->getCurrentRow();
 			tm->generateTriples(row, rdfWriter, *this, dbConnection);
 		}
 	}

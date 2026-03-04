@@ -31,6 +31,7 @@
 #include "r2rml/PredicateMap.h"
 #include "r2rml/LogicalTable.h"
 #include "r2rml/ConstantTermMap.h"
+#include "r2rml/MapSQLRow.h"
 #include "r2rml/SQLRow.h"
 #include "r2rml/GraphMap.h"
 #include "r2rml/TriplesMap.h"
@@ -45,6 +46,7 @@ using r2rml::R2RMLMapping;
 using r2rml::R2RMLParser;
 using r2rml::R2RMLView;
 using r2rml::ReferencingObjectMap;
+using r2rml::MapSQLRow;
 using r2rml::SQLRow;
 using r2rml::SQLValue;
 using r2rml::TemplateTermMap;
@@ -86,7 +88,7 @@ TEST_CASE("ConstantTermMap returns given node") {
 	SerdNode node = serd_node_from_string(SERD_URI, uri);
 	ConstantTermMap c(node);
 	SerdEnv *env1 = serd_env_new(nullptr);
-	SerdNode out = c.generateRDFTerm(SQLRow(), *env1);
+	SerdNode out = c.generateRDFTerm(MapSQLRow(), *env1);
 	// Use serd_node_equals to compare nodes
 	REQUIRE(serd_node_equals(&node, &out));
 	serd_env_free(env1);
@@ -97,8 +99,8 @@ TEST_CASE("Column/Template term maps return default null node") {
 	TemplateTermMap tt("{col}");
 	SerdEnv *env2 = serd_env_new(nullptr);
 
-	SerdNode cn = ct.generateRDFTerm(SQLRow(), *env2);
-	SerdNode tn = tt.generateRDFTerm(SQLRow(), *env2);
+	SerdNode cn = ct.generateRDFTerm(MapSQLRow(), *env2);
+	SerdNode tn = tt.generateRDFTerm(MapSQLRow(), *env2);
 
 	REQUIRE(serd_node_equals(&cn, &SERD_NODE_NULL));
 	REQUIRE(serd_node_equals(&tn, &SERD_NODE_NULL));
@@ -137,7 +139,7 @@ TEST_CASE("PredicateObjectMap and TriplesMap defaults") {
 }
 
 TEST_CASE("SQLRow default behaviour") {
-	SQLRow r;
+	MapSQLRow r;
 	SQLValue v = r.getValue("nope");
 	REQUIRE(v.isNull());
 	REQUIRE(r.isNull("nope") == true);

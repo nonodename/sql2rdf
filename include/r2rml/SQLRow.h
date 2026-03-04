@@ -1,27 +1,28 @@
 #pragma once
 
 #include "SQLValue.h"
-#include <map>
-#include <string>
 #include <memory>
+#include <string>
 
 namespace r2rml {
 
 /**
- * Represents a single row of SQL results.  Values may be of various types and
- * are accessed by column name.
+ * Abstract interface for a single row of SQL results.  Values may be of
+ * various types and are accessed by column name.
+ *
+ * Implement this interface to proxy rows from a custom backend without going
+ * through the map-based MapSQLRow.
  */
 class SQLRow {
 public:
-	SQLRow();
-	explicit SQLRow(std::map<std::string, SQLValue> columns);
-	~SQLRow() = default;
+	virtual ~SQLRow() = default;
 
-	SQLValue getValue(const std::string &columnName) const;
-	bool isNull(const std::string &columnName) const;
+	virtual SQLValue getValue(const std::string &columnName) const = 0;
+	virtual bool isNull(const std::string &columnName) const = 0;
 
-private:
-	std::map<std::string, SQLValue> columns_;
+	/** Deep-copy this row.  Used internally when rows must be cached (e.g.
+	 *  join evaluation). */
+	virtual std::unique_ptr<SQLRow> clone() const = 0;
 };
 
 } // namespace r2rml

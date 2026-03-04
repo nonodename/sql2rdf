@@ -1,4 +1,5 @@
 #include "DuckDBConnection.h"
+#include "r2rml/MapSQLRow.h"
 #include "r2rml/SQLResultSet.h"
 #include "r2rml/SQLRow.h"
 #include "r2rml/SQLValue.h"
@@ -23,19 +24,19 @@ namespace r2rml {
 // ---------------------------------------------------------------------------
 class DuckDBResultSet : public SQLResultSet {
 public:
-	explicit DuckDBResultSet(std::vector<SQLRow> rows) : rows_(std::move(rows)) {
+	explicit DuckDBResultSet(std::vector<MapSQLRow> rows) : rows_(std::move(rows)) {
 	}
 
 	bool next() override {
 		return ++cursor_ < static_cast<int>(rows_.size());
 	}
 
-	SQLRow getCurrentRow() const override {
+	const SQLRow &getCurrentRow() const override {
 		return rows_[static_cast<size_t>(cursor_)];
 	}
 
 private:
-	std::vector<SQLRow> rows_;
+	std::vector<MapSQLRow> rows_;
 	int cursor_ {-1};
 };
 
@@ -111,7 +112,7 @@ std::unique_ptr<SQLResultSet> DuckDBConnection::execute(const std::string &sqlQu
 		throw std::runtime_error("DuckDB query error: " + result->GetError());
 	}
 
-	std::vector<SQLRow> rows;
+	std::vector<MapSQLRow> rows;
 
 	while (true) {
 		auto chunk = result->Fetch();

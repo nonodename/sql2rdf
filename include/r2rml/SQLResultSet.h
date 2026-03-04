@@ -17,7 +17,7 @@ public:
 	virtual bool next() = 0;
 
 	/** Return the row at the current cursor position. */
-	virtual SQLRow getCurrentRow() const = 0;
+	virtual const SQLRow &getCurrentRow() const = 0;
 };
 
 } // namespace r2rml

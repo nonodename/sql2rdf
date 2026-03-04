@@ -6,6 +6,7 @@
  * connection without a real backend.
  */
 
+#include "r2rml/MapSQLRow.h"
 #include "r2rml/SQLConnection.h"
 #include "r2rml/SQLResultSet.h"
 #include "r2rml/SQLRow.h"
@@ -21,11 +22,11 @@ namespace testing {
 // ---------------------------------------------------------------------------
 // MockSQLResultSet
 //
-// Iterates over a fixed, in-memory vector of SQLRows.
+// Iterates over a fixed, in-memory vector of MapSQLRows.
 // ---------------------------------------------------------------------------
 class MockSQLResultSet : public SQLResultSet {
 public:
-	explicit MockSQLResultSet(std::vector<SQLRow> rows) : rows_(std::move(rows)) {
+	explicit MockSQLResultSet(std::vector<MapSQLRow> rows) : rows_(std::move(rows)) {
 	}
 
 	bool next() override {
@@ -33,12 +34,12 @@ public:
 		return cursor_ < static_cast<int>(rows_.size());
 	}
 
-	SQLRow getCurrentRow() const override {
+	const SQLRow &getCurrentRow() const override {
 		return rows_[static_cast<size_t>(cursor_)];
 	}
 
 private:
-	std::vector<SQLRow> rows_;
+	std::vector<MapSQLRow> rows_;
 	int cursor_ {-1};
 };
 
@@ -55,12 +56,12 @@ private:
 // ---------------------------------------------------------------------------
 class MockSQLConnection : public SQLConnection {
 public:
-	void addResult(std::string queryFragment, std::vector<SQLRow> rows) {
+	void addResult(std::string queryFragment, std::vector<MapSQLRow> rows) {
 		results_.push_back({std::move(queryFragment), std::move(rows)});
 	}
 
 	std::unique_ptr<SQLResultSet> execute(const std::string &query) override {
-		const std::vector<SQLRow> *best = nullptr;
+		const std::vector<MapSQLRow> *best = nullptr;
 		size_t bestLen = 0;
 		for (const auto &kv : results_) {
 			if (query.find(kv.first) != std::string::npos && kv.first.size() > bestLen) {
@@ -71,20 +72,20 @@ public:
 		if (best) {
 			return std::unique_ptr<SQLResultSet>(new MockSQLResultSet(*best));
 		}
-		return std::unique_ptr<SQLResultSet>(new MockSQLResultSet(std::vector<SQLRow> {}));
+		return std::unique_ptr<SQLResultSet>(new MockSQLResultSet(std::vector<MapSQLRow> {}));
 	}
 
 private:
-	std::vector<std::pair<std::string, std::vector<SQLRow>>> results_;
+	std::vector<std::pair<std::string, std::vector<MapSQLRow>>> results_;
 };
 
 // ---------------------------------------------------------------------------
 // makeRow helper
 //
-// Build an SQLRow from an initializer-list of {column, value} pairs.
+// Build a MapSQLRow from an initializer-list of {column, value} pairs.
 // ---------------------------------------------------------------------------
-inline SQLRow makeRow(std::initializer_list<std::pair<const std::string, SQLValue>> cols) {
-	return SQLRow(std::map<std::string, SQLValue>(cols));
+inline MapSQLRow makeRow(std::initializer_list<std::pair<const std::string, SQLValue>> cols) {
+	return MapSQLRow(std::map<std::string, SQLValue>(cols));
 }
 
 } // namespace testing

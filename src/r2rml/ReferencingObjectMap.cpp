@@ -20,7 +20,7 @@ namespace r2rml {
 namespace {
 class VectorResultSet : public SQLResultSet {
 public:
-	explicit VectorResultSet(std::vector<SQLRow> rows) : rows_(std::move(rows)) {
+	explicit VectorResultSet(std::vector<std::unique_ptr<SQLRow>> rows) : rows_(std::move(rows)) {
 	}
 
 	bool next() override {
@@ -28,12 +28,12 @@ public:
 		return cursor_ < static_cast<int>(rows_.size());
 	}
 
-	SQLRow getCurrentRow() const override {
-		return rows_[static_cast<std::size_t>(cursor_)];
+	const SQLRow &getCurrentRow() const override {
+		return *rows_[static_cast<std::size_t>(cursor_)];
 	}
 
 private:
-	std::vector<SQLRow> rows_;
+	std::vector<std::unique_ptr<SQLRow>> rows_;
 	int cursor_ {-1};
 };
 } // anonymous namespace
@@ -62,9 +62,9 @@ std::unique_ptr<SQLResultSet> ReferencingObjectMap::getJoinedRows(SQLConnection 
 	}
 
 	// Collect parent rows that satisfy all join conditions.
-	std::vector<SQLRow> matched;
+	std::vector<std::unique_ptr<SQLRow>> matched;
 	while (parentResult->next()) {
-		SQLRow parentRow = parentResult->getCurrentRow();
+		const SQLRow &parentRow = parentResult->getCurrentRow();
 		bool ok = true;
 		for (const JoinCondition &jc : joinConditions) {
 			SQLValue childVal = childRow.getValue(jc.childColumn);
@@ -75,7 +75,7 @@ std::unique_ptr<SQLResultSet> ReferencingObjectMap::getJoinedRows(SQLConnection 
 			}
 		}
 		if (ok) {
-			matched.push_back(std::move(parentRow));
+			matched.push_back(parentRow.clone());
 		}
 	}
 
