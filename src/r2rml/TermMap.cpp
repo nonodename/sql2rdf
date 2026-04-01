@@ -1,10 +1,18 @@
 #include "r2rml/TermMap.h"
+#include "r2rml/SQLRow.h"
 
 #include <ostream>
 
 namespace r2rml {
 
 TermMap::~TermMap() = default;
+
+std::string TermMap::computeDatatypeIRI(const SQLRow & /*row*/) const {
+	if (datatypeIRI) {
+		return *datatypeIRI;
+	}
+	return std::string();
+}
 
 static const char *termTypeName(TermType t) {
 	switch (t) {

@@ -17,4 +17,17 @@ std::unique_ptr<SQLValue> StringSQLValue::clone() const {
 	return std::unique_ptr<SQLValue>(new StringSQLValue(*this));
 }
 
+std::string StringSQLValue::datatypeIRI() const {
+	switch (type_) {
+	case Type::Integer:
+		return "http://www.w3.org/2001/XMLSchema#integer";
+	case Type::Double:
+		return "http://www.w3.org/2001/XMLSchema#double";
+	case Type::Boolean:
+		return "http://www.w3.org/2001/XMLSchema#boolean";
+	default:
+		return std::string();
+	}
+}
+
 } // namespace r2rml

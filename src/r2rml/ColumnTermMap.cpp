@@ -23,6 +23,18 @@ SerdNode ColumnTermMap::generateRDFTerm(const SQLRow &row, const SerdEnv & /*env
 	return serd_node_from_string(nodeType, reinterpret_cast<const uint8_t *>(cachedValue_.c_str()));
 }
 
+std::string ColumnTermMap::computeDatatypeIRI(const SQLRow &row) const {
+	// Static rr:datatype in the mapping takes priority over inferred types.
+	if (datatypeIRI) {
+		return *datatypeIRI;
+	}
+	auto val = row.getValue(columnName);
+	if (!val || val->isNull()) {
+		return std::string();
+	}
+	return val->datatypeIRI();
+}
+
 std::ostream &ColumnTermMap::print(std::ostream &os) const {
 	os << "ColumnTermMap { column=\"" << columnName << "\" ";
 	TermMap::print(os);

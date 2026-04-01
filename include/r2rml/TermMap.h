@@ -38,6 +38,15 @@ public:
 	}
 
 	/**
+	 * Returns the effective XSD datatype IRI for a literal value derived from
+	 * the given row.  If a static rr:datatype is set on this term map it takes
+	 * priority; otherwise the base implementation returns empty string.
+	 * ColumnTermMap overrides this to fall back to the column value's own
+	 * datatype when no static mapping is present.
+	 */
+	virtual std::string computeDatatypeIRI(const SQLRow &row) const;
+
+	/**
 	 * Write a human-readable representation to the given stream.
 	 * Subclasses should override this and call TermMap::print for base fields.
 	 */

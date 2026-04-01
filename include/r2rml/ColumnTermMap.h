@@ -16,6 +16,8 @@ public:
 
 	SerdNode generateRDFTerm(const SQLRow &row, const SerdEnv &env) const override;
 
+	std::string computeDatatypeIRI(const SQLRow &row) const override;
+
 	bool isValid() const override {
 		// columnName must not be empty
 		return !columnName.empty();
