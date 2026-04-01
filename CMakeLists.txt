@@ -45,7 +45,10 @@ else()
   if(NOT DUCKDB_INCLUDE_DIR OR NOT DUCKDB_LIBRARY)
     message(STATUS "Debug: DUCKDB_INCLUDE_DIR=${DUCKDB_INCLUDE_DIR}")
     message(STATUS "Debug: DUCKDB_LIBRARY=${DUCKDB_LIBRARY}")
-    message(FATAL_ERROR "DuckDB not found...")
+    message(WARNING "DuckDB not found; the main sql2rdf executable will not be built. Tests can still be built and run.")
+    set(DUCKDB_FOUND FALSE)
+  else()
+    set(DUCKDB_FOUND TRUE)
   endif()
 
   # Create an imported target so the rest of the CMakeLists can link to 'duckdb'
@@ -115,10 +118,12 @@ else()
   target_link_libraries(sql2rdf_r2rml PUBLIC serd)
 endif()
 
-# Specify main executable sources and link to the library
-add_executable(${PROJECT_NAME} src/main.cpp src/DuckDBConnection.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE sql2rdf_r2rml duckdb)
-target_include_directories(${PROJECT_NAME} PRIVATE include src)
+# Specify main executable sources and link to the library (requires DuckDB)
+if(DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB)
+  add_executable(${PROJECT_NAME} src/main.cpp src/DuckDBConnection.cpp)
+  target_link_libraries(${PROJECT_NAME} PRIVATE sql2rdf_r2rml duckdb)
+  target_include_directories(${PROJECT_NAME} PRIVATE include src)
+endif()
 
 # ----------------------------------------------------------------------------
 # serd dependency - build as a static library from source tree
@@ -135,12 +140,14 @@ target_include_directories(serd PUBLIC
 # Build as a static library (no shared/dll)
 target_compile_definitions(serd PUBLIC SERD_STATIC)
 
-# link the serd static library into our executable
-add_dependencies(${PROJECT_NAME} serd)
-if(UNIX)
-  target_link_libraries(${PROJECT_NAME} PRIVATE serd m)
-else()
-  target_link_libraries(${PROJECT_NAME} PRIVATE serd)
+# link the serd static library into our executable (only when it was created)
+if(DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB)
+  add_dependencies(${PROJECT_NAME} serd)
+  if(UNIX)
+    target_link_libraries(${PROJECT_NAME} PRIVATE serd m)
+  else()
+    target_link_libraries(${PROJECT_NAME} PRIVATE serd)
+  endif()
 endif()
 
 # ----------------------------------------------------------------------------

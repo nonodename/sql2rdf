@@ -73,6 +73,70 @@ TEST_CASE("SQLValue basics") {
 	REQUIRE(b.type() == SQLValue::Type::Boolean);
 }
 
+TEST_CASE("StringSQLValue datatypeIRI") {
+	// Null and plain strings carry no datatype annotation.
+	StringSQLValue null_v;
+	REQUIRE(null_v.datatypeIRI().empty());
+
+	StringSQLValue str_v(std::string("hello"));
+	REQUIRE(str_v.datatypeIRI().empty());
+
+	// Typed values map to the corresponding XSD IRI.
+	StringSQLValue int_v(42);
+	REQUIRE(int_v.datatypeIRI() == "http://www.w3.org/2001/XMLSchema#integer");
+
+	StringSQLValue dbl_v(3.14);
+	REQUIRE(dbl_v.datatypeIRI() == "http://www.w3.org/2001/XMLSchema#double");
+
+	StringSQLValue bool_v(true);
+	REQUIRE(bool_v.datatypeIRI() == "http://www.w3.org/2001/XMLSchema#boolean");
+}
+
+TEST_CASE("ColumnTermMap computeDatatypeIRI from SQL value type") {
+	using r2rml::testing::makeRow;
+	ColumnTermMap col("VAL");
+
+	// Integer value → xsd:integer
+	{
+		auto row = makeRow({{"VAL", StringSQLValue(99)}});
+		REQUIRE(col.computeDatatypeIRI(row) == "http://www.w3.org/2001/XMLSchema#integer");
+	}
+
+	// Double value → xsd:double
+	{
+		auto row = makeRow({{"VAL", StringSQLValue(1.5)}});
+		REQUIRE(col.computeDatatypeIRI(row) == "http://www.w3.org/2001/XMLSchema#double");
+	}
+
+	// Boolean value → xsd:boolean
+	{
+		auto row = makeRow({{"VAL", StringSQLValue(false)}});
+		REQUIRE(col.computeDatatypeIRI(row) == "http://www.w3.org/2001/XMLSchema#boolean");
+	}
+
+	// Plain string value → no annotation
+	{
+		auto row = makeRow({{"VAL", StringSQLValue(std::string("text"))}});
+		REQUIRE(col.computeDatatypeIRI(row).empty());
+	}
+
+	// Missing / null column → no annotation
+	{
+		MapSQLRow empty;
+		REQUIRE(col.computeDatatypeIRI(empty).empty());
+	}
+}
+
+TEST_CASE("ColumnTermMap computeDatatypeIRI static rr:datatype takes priority") {
+	using r2rml::testing::makeRow;
+	ColumnTermMap col("VAL");
+	col.datatypeIRI = std::unique_ptr<std::string>(new std::string("http://example.com/mytype"));
+
+	// Even though the SQL value is an integer, the static mapping wins.
+	auto row = makeRow({{"VAL", StringSQLValue(42)}});
+	REQUIRE(col.computeDatatypeIRI(row) == "http://example.com/mytype");
+}
+
 TEST_CASE("JoinCondition stores columns") {
 	JoinCondition jc("child_col", "parent_col");
 	REQUIRE(jc.childColumn == "child_col");

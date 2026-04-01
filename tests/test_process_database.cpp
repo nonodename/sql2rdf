@@ -302,3 +302,73 @@ TEST_CASE("processDatabase Example5 - CASE view maps JOB code to role IRI") {
 	REQUIRE(out.find("<http://example.com/ns#role>") != std::string::npos);
 	REQUIRE(out.find("<http://data.example.com/roles/general-office>") != std::string::npos);
 }
+
+// ---------------------------------------------------------------------------
+// Datatyped IRIs – value-inferred XSD datatypes
+//
+// Mapping:  typed_columns.ttl  (no rr:datatype annotations)
+// Input:    MEASUREMENTS row with integer, double, boolean, and string columns
+//
+// Expected RDF (selected fragments):
+//   ex:count  "42"^^<xsd:integer>
+//   ex:ratio  "1.500000"^^<xsd:double>
+//   ex:active "true"^^<xsd:boolean>
+//   ex:label  "hello"               (plain literal, no datatype)
+// ---------------------------------------------------------------------------
+TEST_CASE("processDatabase typed columns - value types produce XSD datatype annotations") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "typed_columns.ttl");
+	REQUIRE(mapping.isValid());
+
+	MockSQLConnection conn;
+	conn.addResult("MEASUREMENTS",
+	               {makeRow({{"ID", StringSQLValue(std::string("1"))},
+	                         {"COUNT", StringSQLValue(42)},
+	                         {"RATIO", StringSQLValue(1.5)},
+	                         {"ACTIVE", StringSQLValue(true)},
+	                         {"LABEL", StringSQLValue(std::string("hello"))}})});
+
+	std::string out = runProcessDatabase(mapping, conn);
+
+	// Subject URI
+	REQUIRE(out.find("<http://data.example.com/measurement/1>") != std::string::npos);
+
+	// Integer column: value annotated with xsd:integer
+	REQUIRE(out.find("\"42\"^^<http://www.w3.org/2001/XMLSchema#integer>") != std::string::npos);
+
+	// Double column: value annotated with xsd:double (std::to_string uses 6 decimal places)
+	REQUIRE(out.find("\"1.500000\"^^<http://www.w3.org/2001/XMLSchema#double>") != std::string::npos);
+
+	// Boolean column: value annotated with xsd:boolean
+	REQUIRE(out.find("\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>") != std::string::npos);
+
+	// String column: plain literal with no datatype annotation
+	REQUIRE(out.find("\"hello\"") != std::string::npos);
+	REQUIRE(out.find("\"hello\"^^") == std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// Datatyped IRIs – static rr:datatype overrides the inferred type
+//
+// Mapping:  typed_columns_with_static_datatype.ttl
+//           COUNT column has rr:datatype xsd:string
+// Input:    MEASUREMENTS row with COUNT=42 (Integer SQL value)
+//
+// Expected RDF:
+//   ex:count "42"^^<xsd:string>   (static annotation wins over xsd:integer)
+// ---------------------------------------------------------------------------
+TEST_CASE("processDatabase typed columns - static rr:datatype overrides inferred type") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "typed_columns_with_static_datatype.ttl");
+	REQUIRE(mapping.isValid());
+
+	MockSQLConnection conn;
+	conn.addResult("MEASUREMENTS", {makeRow({{"ID", StringSQLValue(std::string("1"))},
+	                                         {"COUNT", StringSQLValue(42)}})});
+
+	std::string out = runProcessDatabase(mapping, conn);
+
+	// The static rr:datatype xsd:string must win over the inferred xsd:integer.
+	REQUIRE(out.find("\"42\"^^<http://www.w3.org/2001/XMLSchema#string>") != std::string::npos);
+	REQUIRE(out.find("\"42\"^^<http://www.w3.org/2001/XMLSchema#integer>") == std::string::npos);
+}
