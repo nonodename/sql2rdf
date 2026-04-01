@@ -1,0 +1,24 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+<#TriplesMapM>
+    rr:logicalTable [ rr:tableName "MEASUREMENTS" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/measurement/{ID}";
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:count;
+        rr:objectMap [ rr:column "COUNT" ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:ratio;
+        rr:objectMap [ rr:column "RATIO" ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:active;
+        rr:objectMap [ rr:column "ACTIVE" ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:label;
+        rr:objectMap [ rr:column "LABEL" ];
+    ].

@@ -28,6 +28,7 @@ public:
 		return type_ == Type::Null;
 	}
 	std::unique_ptr<SQLValue> clone() const override;
+	std::string datatypeIRI() const override;
 
 private:
 	Type type_ {Type::Null};

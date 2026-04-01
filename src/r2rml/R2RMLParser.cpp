@@ -328,13 +328,23 @@ public:
 		// rr:column
 		std::string column = getFirstLiteral(ts, nodeKey, RR + "column");
 		if (!column.empty()) {
-			return std::unique_ptr<ColumnTermMap>(new ColumnTermMap(column));
+			auto tm = std::unique_ptr<ColumnTermMap>(new ColumnTermMap(column));
+			std::string dt = getFirstUri(ts, nodeKey, RR + "datatype");
+			if (!dt.empty()) {
+				tm->datatypeIRI = std::unique_ptr<std::string>(new std::string(dt));
+			}
+			return tm;
 		}
 
 		// rr:template
 		std::string tmpl = getFirstLiteral(ts, nodeKey, RR + "template");
 		if (!tmpl.empty()) {
-			return std::unique_ptr<TemplateTermMap>(new TemplateTermMap(tmpl));
+			auto tm = std::unique_ptr<TemplateTermMap>(new TemplateTermMap(tmpl));
+			std::string dt = getFirstUri(ts, nodeKey, RR + "datatype");
+			if (!dt.empty()) {
+				tm->datatypeIRI = std::unique_ptr<std::string>(new std::string(dt));
+			}
+			return tm;
 		}
 
 		// rr:constant (URI object)
