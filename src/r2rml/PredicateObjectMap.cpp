@@ -66,10 +66,20 @@ void PredicateObjectMap::processRow(const SQLRow &row, const SerdNode &subject, 
 					continue; // null object – skip
 				}
 
-				// Determine whether to pass datatype/lang for literals.
+				SerdNode datatypeNode = SERD_NODE_NULL;
 				const SerdNode *datatype = nullptr;
 				const SerdNode *lang = nullptr;
-				// (Language tags and datatypes not exercised by current tests.)
+				// dtIRI must outlive datatypeNode (whose buf points into it).
+				std::string dtIRI;
+
+				if (object.type == SERD_LITERAL && !objMap->languageTag) {
+					dtIRI = objMap->computeDatatypeIRI(row);
+					if (!dtIRI.empty()) {
+						datatypeNode =
+						    serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(dtIRI.c_str()));
+						datatype = &datatypeNode;
+					}
+				}
 
 				serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &predicate, &object, datatype, lang);
 			}

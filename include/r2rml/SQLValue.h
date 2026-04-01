@@ -22,6 +22,17 @@ public:
 
 	/** Deep-copy this value. */
 	virtual std::unique_ptr<SQLValue> clone() const = 0;
+
+	/**
+	 * Returns the XSD datatype URI for this value (e.g.
+	 * "http://www.w3.org/2001/XMLSchema#integer"), or an empty string when the
+	 * value should be serialised as a plain string literal with no datatype
+	 * annotation.  The default implementation returns empty string; backends
+	 * with richer type information (e.g. DuckDB) should override this.
+	 */
+	virtual std::string datatypeIRI() const {
+		return std::string();
+	}
 };
 
 } // namespace r2rml
