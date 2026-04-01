@@ -321,12 +321,11 @@ TEST_CASE("processDatabase typed columns - value types produce XSD datatype anno
 	REQUIRE(mapping.isValid());
 
 	MockSQLConnection conn;
-	conn.addResult("MEASUREMENTS",
-	               {makeRow({{"ID", StringSQLValue(std::string("1"))},
-	                         {"COUNT", StringSQLValue(42)},
-	                         {"RATIO", StringSQLValue(1.5)},
-	                         {"ACTIVE", StringSQLValue(true)},
-	                         {"LABEL", StringSQLValue(std::string("hello"))}})});
+	conn.addResult("MEASUREMENTS", {makeRow({{"ID", StringSQLValue(std::string("1"))},
+	                                         {"COUNT", StringSQLValue(42)},
+	                                         {"RATIO", StringSQLValue(1.5)},
+	                                         {"ACTIVE", StringSQLValue(true)},
+	                                         {"LABEL", StringSQLValue(std::string("hello"))}})});
 
 	std::string out = runProcessDatabase(mapping, conn);
 
@@ -363,8 +362,8 @@ TEST_CASE("processDatabase typed columns - static rr:datatype overrides inferred
 	REQUIRE(mapping.isValid());
 
 	MockSQLConnection conn;
-	conn.addResult("MEASUREMENTS", {makeRow({{"ID", StringSQLValue(std::string("1"))},
-	                                         {"COUNT", StringSQLValue(42)}})});
+	conn.addResult("MEASUREMENTS",
+	               {makeRow({{"ID", StringSQLValue(std::string("1"))}, {"COUNT", StringSQLValue(42)}})});
 
 	std::string out = runProcessDatabase(mapping, conn);
 
