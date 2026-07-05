@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5...3.29)
+cmake_minimum_required(VERSION 3.10...3.29)
 project(SQL2RDF++ LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 11)
@@ -9,7 +9,7 @@ include(FetchContent)
 FetchContent_Declare(
   Catch2
   GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-  GIT_TAG v3.13.0 # or latest release
+  GIT_TAG v3.15.1 # or latest release
 )
 
 FetchContent_MakeAvailable(Catch2)
@@ -28,7 +28,7 @@ set(YAML_CPP_FORMAT_SOURCE OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
   yaml-cpp
   GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
-  GIT_TAG 0.8.0
+  GIT_TAG yaml-cpp-0.9.0
 )
 
 FetchContent_MakeAvailable(yaml-cpp)
