@@ -127,6 +127,10 @@ public:
 // Mirrors R2RMLParser.cpp's private ConcreteReferencingObjectMap.
 class TestReferencingObjectMap : public ReferencingObjectMap {
 public:
+	// Keep the base's two-row generateRDFTerm(child,parent) visible alongside
+	// the single-row override below (which would otherwise hide it).
+	using ReferencingObjectMap::generateRDFTerm;
+
 	SerdNode generateRDFTerm(const SQLRow & /*row*/, const SerdEnv & /*env*/) const override {
 		return SERD_NODE_NULL;
 	}
@@ -420,7 +424,9 @@ TEST_CASE("PredicateObjectMap::processRow falls back to an internal Serd environ
 	const uint8_t predUri[] = "http://example.com/ns#name";
 	SerdNode predNode = serd_node_from_string(SERD_URI, predUri);
 	pom.predicateMaps.push_back(std::unique_ptr<ConstantTermMap>(new ConstantTermMap(predNode)));
-	pom.objectMaps.push_back(std::unique_ptr<ColumnTermMap>(new ColumnTermMap("NAME")));
+	auto nameCol = std::unique_ptr<ColumnTermMap>(new ColumnTermMap("NAME"));
+	nameCol->termType = TermType::Literal; // same default the parser applies to objectMap columns
+	pom.objectMaps.push_back(std::move(nameCol));
 
 	auto row = makeRow({{"NAME", StringSQLValue(std::string("SMITH"))}});
 	MockSQLConnection conn;
@@ -788,4 +794,463 @@ TEST_CASE("Parser: a literal rr:predicateObjectMap value is skipped, other POMs 
 	// Only the well-formed predicateObjectMap survives.
 	REQUIRE(tm->predicateObjectMaps.size() == 1);
 	REQUIRE(tm->predicateObjectMaps[0]->predicateMaps.size() == 1);
+}
+
+// ---------------------------------------------------------------------------
+// R2RMLParser::parseString – the in-memory Turtle entry point.  Relative
+// references like <#TriplesMap1> must resolve against the supplied base URI.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("parseString: parses in-memory Turtle and resolves ids against the base URI") {
+	const std::string turtle = "@prefix rr: <http://www.w3.org/ns/r2rml#>.\n"
+	                           "@prefix ex: <http://example.com/ns#>.\n"
+	                           "<#TriplesMap1>\n"
+	                           "    rr:logicalTable [ rr:tableName \"EMP\" ];\n"
+	                           "    rr:subjectMap [ rr:template \"http://data.example.com/employee/{EMPNO}\" ];\n"
+	                           "    rr:predicateObjectMap [\n"
+	                           "        rr:predicate ex:name;\n"
+	                           "        rr:objectMap [ rr:column \"ENAME\" ];\n"
+	                           "    ].\n";
+
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parseString(turtle, "http://example.com/mapping/");
+
+	REQUIRE(mapping.triplesMaps.size() == 1);
+	REQUIRE(mapping.parseErrors.empty());
+	TriplesMap *tm = mapping.triplesMaps[0].get();
+	// The relative <#TriplesMap1> reference resolves against the base URI.
+	REQUIRE(tm->id == "http://example.com/mapping/#TriplesMap1");
+	REQUIRE(tm->isValid());
+
+	auto *table = dynamic_cast<BaseTableOrView *>(tm->logicalTable.get());
+	REQUIRE(table != nullptr);
+	REQUIRE(table->tableName == "EMP");
+}
+
+TEST_CASE("parseString: strict mode throws on non-fatal errors, lenient mode records them") {
+	// The logicalTable blank node has no recognised predicate at all.
+	const std::string turtle = "@prefix rr: <http://www.w3.org/ns/r2rml#>.\n"
+	                           "<#TriplesMapBad>\n"
+	                           "    rr:logicalTable [ rr:notATableName \"EMP\" ];\n"
+	                           "    rr:subjectMap [ rr:template \"http://data.example.com/x/{ID}\" ].\n";
+
+	R2RMLParser parser;
+
+	R2RMLMapping lenient = parser.parseString(turtle, "http://example.com/mapping/", true);
+	REQUIRE(lenient.parseErrors.size() == 1);
+	REQUIRE(lenient.parseErrors[0].find("unrecognised logical table") != std::string::npos);
+
+	REQUIRE_THROWS_AS(parser.parseString(turtle, "http://example.com/mapping/", false), std::runtime_error);
+}
+
+TEST_CASE("parseString: rr:constant literal object becomes a Literal-typed ConstantTermMap") {
+	// rr:constant with a literal object (as opposed to a URI object) must
+	// produce a ConstantTermMap whose termType is Literal.
+	const std::string turtle = "@prefix rr: <http://www.w3.org/ns/r2rml#>.\n"
+	                           "@prefix ex: <http://example.com/ns#>.\n"
+	                           "<#TriplesMapC>\n"
+	                           "    rr:logicalTable [ rr:tableName \"EMP\" ];\n"
+	                           "    rr:subjectMap [ rr:template \"http://data.example.com/employee/{EMPNO}\" ];\n"
+	                           "    rr:predicateObjectMap [\n"
+	                           "        rr:predicate ex:status;\n"
+	                           "        rr:objectMap [ rr:constant \"active\" ];\n"
+	                           "    ].\n";
+
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parseString(turtle, "http://example.com/mapping/");
+
+	REQUIRE(mapping.triplesMaps.size() == 1);
+	PredicateObjectMap &pom = *mapping.triplesMaps[0]->predicateObjectMaps[0];
+	REQUIRE(pom.objectMaps.size() == 1);
+
+	auto *constant = dynamic_cast<ConstantTermMap *>(pom.objectMaps[0].get());
+	REQUIRE(constant != nullptr);
+	REQUIRE(constant->termType == TermType::Literal);
+	REQUIRE(nodeUri(constant->constantValue) == "active");
+}
+
+TEST_CASE("parseString: explicit rr:termType overrides the objectMap column default") {
+	// An rr:column in an objectMap normally defaults to rr:Literal, but an
+	// explicit rr:termType rr:IRI must win.  rr:BlankNode and rr:Literal are
+	// exercised on template object maps.
+	const std::string turtle = "@prefix rr: <http://www.w3.org/ns/r2rml#>.\n"
+	                           "@prefix ex: <http://example.com/ns#>.\n"
+	                           "<#TriplesMapT>\n"
+	                           "    rr:logicalTable [ rr:tableName \"EMP\" ];\n"
+	                           "    rr:subjectMap [ rr:template \"http://data.example.com/employee/{EMPNO}\" ];\n"
+	                           "    rr:predicateObjectMap [\n"
+	                           "        rr:predicate ex:homepage;\n"
+	                           "        rr:objectMap [ rr:column \"HOMEPAGE\"; rr:termType rr:IRI ];\n"
+	                           "    ];\n"
+	                           "    rr:predicateObjectMap [\n"
+	                           "        rr:predicate ex:node;\n"
+	                           "        rr:objectMap [ rr:template \"node{EMPNO}\"; rr:termType rr:BlankNode ];\n"
+	                           "    ];\n"
+	                           "    rr:predicateObjectMap [\n"
+	                           "        rr:predicate ex:code;\n"
+	                           "        rr:objectMap [ rr:template \"code-{EMPNO}\"; rr:termType rr:Literal ];\n"
+	                           "    ].\n";
+
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parseString(turtle, "http://example.com/mapping/");
+
+	REQUIRE(mapping.triplesMaps.size() == 1);
+	TriplesMap *tm = mapping.triplesMaps[0].get();
+	REQUIRE(tm->predicateObjectMaps.size() == 3);
+
+	bool sawIriColumn = false, sawBlankTemplate = false, sawLiteralTemplate = false;
+	for (auto &pom : tm->predicateObjectMaps) {
+		REQUIRE(pom->objectMaps.size() == 1);
+		TermMap *om = pom->objectMaps[0].get();
+		if (auto *col = dynamic_cast<ColumnTermMap *>(om)) {
+			REQUIRE(col->columnName == "HOMEPAGE");
+			REQUIRE(col->termType == TermType::IRI);
+			sawIriColumn = true;
+		} else if (auto *tt = dynamic_cast<TemplateTermMap *>(om)) {
+			if (tt->templateString == "node{EMPNO}") {
+				REQUIRE(tt->termType == TermType::BlankNode);
+				sawBlankTemplate = true;
+			} else if (tt->templateString == "code-{EMPNO}") {
+				REQUIRE(tt->termType == TermType::Literal);
+				sawLiteralTemplate = true;
+			}
+		}
+	}
+	REQUIRE(sawIriColumn);
+	REQUIRE(sawBlankTemplate);
+	REQUIRE(sawLiteralTemplate);
+}
+
+TEST_CASE("parseString: rr:language sets the languageTag and end-to-end output is language-tagged") {
+	const std::string turtle = "@prefix rr: <http://www.w3.org/ns/r2rml#>.\n"
+	                           "@prefix ex: <http://example.com/ns#>.\n"
+	                           "<#TriplesMapL>\n"
+	                           "    rr:logicalTable [ rr:tableName \"EMP\" ];\n"
+	                           "    rr:subjectMap [ rr:template \"http://data.example.com/employee/{EMPNO}\" ];\n"
+	                           "    rr:predicateObjectMap [\n"
+	                           "        rr:predicate ex:name;\n"
+	                           "        rr:objectMap [ rr:column \"ENAME\"; rr:language \"en\" ];\n"
+	                           "    ].\n";
+
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parseString(turtle, "http://example.com/mapping/");
+	REQUIRE(mapping.isValid());
+
+	PredicateObjectMap &pom = *mapping.triplesMaps[0]->predicateObjectMaps[0];
+	REQUIRE(pom.objectMaps.size() == 1);
+	REQUIRE(pom.objectMaps[0]->languageTag != nullptr);
+	REQUIRE(*pom.objectMaps[0]->languageTag == "en");
+
+	// End-to-end: the literal must carry @en and no datatype annotation.
+	MockSQLConnection conn;
+	conn.addResult("EMP", {makeRow({{"EMPNO", StringSQLValue(std::string("7369"))},
+	                                {"ENAME", StringSQLValue(std::string("SMITH"))}})});
+	std::string out = captureNTriples([&](SerdWriter &writer) { mapping.processDatabase(conn, writer); });
+
+	REQUIRE(out.find("\"SMITH\"@en") != std::string::npos);
+	REQUIRE(out.find("\"SMITH\"^^") == std::string::npos);
+}
+
+TEST_CASE("parseString: literal rr:predicateMap/rr:objectMap/rr:joinCondition values are skipped") {
+	// Literals cannot be resolved back to subject keys (objKey() -> empty),
+	// so each of these must be skipped without aborting the parse.  The
+	// objectMap literal reaches the objKey() continue before buildTermMap, so
+	// no "unknown object map type" error is recorded either.
+	const std::string turtle = "@prefix rr: <http://www.w3.org/ns/r2rml#>.\n"
+	                           "@prefix ex: <http://example.com/ns#>.\n"
+	                           "<#Parent>\n"
+	                           "    rr:logicalTable [ rr:tableName \"DEPT\" ];\n"
+	                           "    rr:subjectMap [ rr:template \"http://data.example.com/department/{DEPTNO}\" ].\n"
+	                           "<#TriplesMapS>\n"
+	                           "    rr:logicalTable [ rr:tableName \"EMP\" ];\n"
+	                           "    rr:subjectMap [ rr:template \"http://data.example.com/employee/{EMPNO}\" ];\n"
+	                           "    rr:predicateObjectMap [\n"
+	                           "        rr:predicateMap \"not-a-node\";\n"
+	                           "        rr:objectMap \"also-not-a-node\";\n"
+	                           "    ];\n"
+	                           "    rr:predicateObjectMap [\n"
+	                           "        rr:predicate ex:department;\n"
+	                           "        rr:objectMap [ rr:parentTriplesMap <#Parent>; rr:joinCondition \"bogus\" ];\n"
+	                           "    ].\n";
+
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parseString(turtle, "http://example.com/mapping/");
+
+	REQUIRE(mapping.triplesMaps.size() == 2);
+	TriplesMap *tm = nullptr;
+	for (auto &t : mapping.triplesMaps) {
+		if (t->id.find("TriplesMapS") != std::string::npos) {
+			tm = t.get();
+		}
+	}
+	REQUIRE(tm != nullptr);
+	REQUIRE(tm->predicateObjectMaps.size() == 2);
+
+	// First POM: both the literal predicateMap and literal objectMap were skipped.
+	PredicateObjectMap *emptyPom = nullptr;
+	PredicateObjectMap *romPom = nullptr;
+	for (auto &pom : tm->predicateObjectMaps) {
+		if (pom->predicateMaps.empty()) {
+			emptyPom = pom.get();
+		} else {
+			romPom = pom.get();
+		}
+	}
+	REQUIRE(emptyPom != nullptr);
+	REQUIRE(emptyPom->objectMaps.empty());
+
+	// Second POM: the ROM was built and resolved, but the literal
+	// rr:joinCondition value was skipped -> no join conditions.
+	REQUIRE(romPom != nullptr);
+	REQUIRE(romPom->objectMaps.size() == 1);
+	auto *rom = dynamic_cast<ReferencingObjectMap *>(romPom->objectMaps[0].get());
+	REQUIRE(rom != nullptr);
+	REQUIRE(rom->parentTriplesMap != nullptr);
+	REQUIRE(rom->joinConditions.empty());
+}
+
+TEST_CASE("Parsed ReferencingObjectMap's single-row generateRDFTerm returns the null node") {
+	// The parser's private concrete ROM implements TermMap's single-row
+	// generateRDFTerm by returning SERD_NODE_NULL (resolution requires both
+	// child and parent rows, via the two-row overload).
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "example3.ttl");
+
+	TriplesMap *tm1 = nullptr;
+	for (auto &t : mapping.triplesMaps) {
+		if (t->id.find("TriplesMap1") != std::string::npos) {
+			tm1 = t.get();
+		}
+	}
+	REQUIRE(tm1 != nullptr);
+	TermMap *rom = tm1->predicateObjectMaps[0]->objectMaps[0].get();
+	REQUIRE(dynamic_cast<ReferencingObjectMap *>(rom) != nullptr);
+
+	SerdEnv *env = serd_env_new(nullptr);
+	SerdNode result = rom->generateRDFTerm(MapSQLRow(), *env);
+	REQUIRE(serd_node_equals(&result, &SERD_NODE_NULL));
+	serd_env_free(env);
+}
+
+// ---------------------------------------------------------------------------
+// PredicateObjectMap::processRow null-term skips, and isValid false paths for
+// invalid (as opposed to missing) constituent maps.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("PredicateObjectMap::processRow skips rows whose predicate or object term is null") {
+	R2RMLMapping mapping;
+
+	// POM #1: predicate template references a missing column -> null predicate.
+	{
+		PredicateObjectMap pom;
+		pom.predicateMaps.push_back(
+		    std::unique_ptr<TemplateTermMap>(new TemplateTermMap("http://example.com/ns#{MISSING}")));
+		auto obj = std::unique_ptr<ColumnTermMap>(new ColumnTermMap("NAME"));
+		obj->termType = TermType::Literal;
+		pom.objectMaps.push_back(std::move(obj));
+
+		auto row = makeRow({{"NAME", StringSQLValue(std::string("SMITH"))}});
+		MockSQLConnection conn;
+		const uint8_t subjUri[] = "http://example.com/subj/1";
+		SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
+
+		std::string out =
+		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn); });
+		REQUIRE(out.empty());
+	}
+
+	// POM #2: object column is missing from the row -> null object.
+	{
+		PredicateObjectMap pom;
+		const uint8_t predUri[] = "http://example.com/ns#name";
+		SerdNode predNode = serd_node_from_string(SERD_URI, predUri);
+		pom.predicateMaps.push_back(std::unique_ptr<ConstantTermMap>(new ConstantTermMap(predNode)));
+		pom.objectMaps.push_back(std::unique_ptr<ColumnTermMap>(new ColumnTermMap("MISSING")));
+
+		MapSQLRow row;
+		MockSQLConnection conn;
+		const uint8_t subjUri[] = "http://example.com/subj/1";
+		SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
+
+		std::string out =
+		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn); });
+		REQUIRE(out.empty());
+	}
+}
+
+TEST_CASE("PredicateObjectMap isValidInsideOut is false when a constituent map is invalid") {
+	// Invalid predicate map (empty column name).
+	{
+		PredicateObjectMap pom;
+		pom.predicateMaps.push_back(std::unique_ptr<ColumnTermMap>(new ColumnTermMap("")));
+		pom.objectMaps.push_back(std::unique_ptr<ColumnTermMap>(new ColumnTermMap("ENAME")));
+		REQUIRE_FALSE(pom.isValid());
+		REQUIRE_FALSE(pom.isValidInsideOut());
+	}
+
+	// Invalid object map (empty template string).
+	{
+		PredicateObjectMap pom;
+		const uint8_t predUri[] = "http://example.com/ns#name";
+		SerdNode predNode = serd_node_from_string(SERD_URI, predUri);
+		pom.predicateMaps.push_back(std::unique_ptr<ConstantTermMap>(new ConstantTermMap(predNode)));
+		pom.objectMaps.push_back(std::unique_ptr<TemplateTermMap>(new TemplateTermMap("")));
+		REQUIRE_FALSE(pom.isValid());
+		REQUIRE_FALSE(pom.isValidInsideOut());
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TriplesMap isValid false paths and operator<< "(none)" placeholders.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("TriplesMap isValid/isValidInsideOut are false when subjectMap is missing") {
+	// Valid logical table, but no subject map at all.
+	TriplesMap tm;
+	tm.logicalTable = std::unique_ptr<BaseTableOrView>(new BaseTableOrView("EMP"));
+	REQUIRE_FALSE(tm.isValid());
+
+	// Inside-out: no logicalTable (as required) but still no subjectMap.
+	TriplesMap tmIO;
+	REQUIRE_FALSE(tmIO.isValidInsideOut());
+}
+
+TEST_CASE("TriplesMap::operator<< prints (none) placeholders for missing parts") {
+	TriplesMap tm;
+	tm.id = "#Empty";
+	tm.predicateObjectMaps.push_back(nullptr); // null POM entry
+
+	std::ostringstream oss;
+	oss << tm;
+	const std::string out = oss.str();
+
+	REQUIRE(out.find("TriplesMap <#Empty>") != std::string::npos);
+	// logicalTable, subjectMap, and predicateObjectMap[0] all print "(none)".
+	REQUIRE(out.find("logicalTable: (none)") != std::string::npos);
+	REQUIRE(out.find("subjectMap: (none)") != std::string::npos);
+	REQUIRE(out.find("predicateObjectMap[0]: (none)") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// R2RMLMapping: operator<< "(none)" for a null TriplesMap entry, move
+// assignment over a mapping that already owns a Serd environment, and the
+// loadMapping() stub.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("R2RMLMapping::operator<< prints (none) for a null TriplesMap entry") {
+	R2RMLMapping mapping;
+	mapping.triplesMaps.push_back(nullptr);
+
+	std::ostringstream oss;
+	oss << mapping;
+	REQUIRE(oss.str().find("(none)") != std::string::npos);
+}
+
+TEST_CASE("R2RMLMapping move assignment frees the target's existing Serd environment") {
+	R2RMLParser parser;
+	R2RMLMapping target = parser.parse(SOURCE_R2RML_DIR "example1.ttl");
+	R2RMLMapping source = parser.parse(SOURCE_R2RML_DIR "example2.ttl");
+	REQUIRE(target.serdEnvironment != nullptr);
+	SerdEnv *sourceEnv = source.serdEnvironment;
+
+	target = std::move(source); // must serd_env_free target's old environment
+	REQUIRE(target.serdEnvironment == sourceEnv);
+	REQUIRE(source.serdEnvironment == nullptr);
+	REQUIRE(target.triplesMaps.size() == 1);
+	REQUIRE(target.triplesMaps[0]->id.find("TriplesMap2") != std::string::npos);
+}
+
+TEST_CASE("R2RMLMapping::loadMapping is a documented no-op stub") {
+	// Callers are directed to R2RMLParser::parse() instead; loadMapping()
+	// must leave the mapping untouched.
+	R2RMLMapping mapping;
+	mapping.loadMapping("anything.ttl");
+	REQUIRE(mapping.triplesMaps.empty());
+	REQUIRE(mapping.serdEnvironment == nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Separator branches in SubjectMap::print and PredicateObjectMap::operator<<
+// graphMaps listing require at least two graph maps.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SubjectMap::print separates multiple graph maps with commas") {
+	TestValueSubjectMap sm;
+	sm.graphMaps.push_back(std::unique_ptr<TestGraphMap>(new TestGraphMap()));
+	sm.graphMaps.push_back(std::unique_ptr<TestGraphMap>(new TestGraphMap()));
+
+	std::ostringstream oss;
+	oss << sm;
+	const std::string out = oss.str();
+	REQUIRE(out.find("graphMaps=[") != std::string::npos);
+	REQUIRE(out.find(", ") != std::string::npos);
+}
+
+TEST_CASE("PredicateObjectMap::operator<< separates multiple graph maps with commas") {
+	PredicateObjectMap pom;
+	pom.graphMaps.push_back(std::unique_ptr<TestGraphMap>(new TestGraphMap()));
+	pom.graphMaps.push_back(std::unique_ptr<TestGraphMap>(new TestGraphMap()));
+
+	std::ostringstream oss;
+	oss << pom;
+	const std::string out = oss.str();
+	REQUIRE(out.find("graphMaps=[") != std::string::npos);
+	REQUIRE(out.find(", ") != std::string::npos);
+}
+
+TEST_CASE("PredicateObjectMap::processRow tolerates null map entries and null parent subject terms") {
+	R2RMLMapping mapping;
+
+	// Null entries in predicateMaps/objectMaps must simply be skipped.
+	{
+		PredicateObjectMap pom;
+		pom.predicateMaps.push_back(nullptr);
+		const uint8_t predUri[] = "http://example.com/ns#name";
+		SerdNode predNode = serd_node_from_string(SERD_URI, predUri);
+		pom.predicateMaps.push_back(std::unique_ptr<ConstantTermMap>(new ConstantTermMap(predNode)));
+		pom.objectMaps.push_back(nullptr);
+		auto obj = std::unique_ptr<ColumnTermMap>(new ColumnTermMap("NAME"));
+		obj->termType = TermType::Literal;
+		pom.objectMaps.push_back(std::move(obj));
+
+		auto row = makeRow({{"NAME", StringSQLValue(std::string("SMITH"))}});
+		MockSQLConnection conn;
+		const uint8_t subjUri[] = "http://example.com/subj/1";
+		SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
+
+		std::string out =
+		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn); });
+		// The valid predicate/object pair still emits despite the null entries.
+		REQUIRE(out.find("SMITH") != std::string::npos);
+	}
+
+	// A join whose parent row exists but whose parent subject term is null
+	// (parent subject column missing) must be skipped without emitting.
+	{
+		PredicateObjectMap pom;
+		const uint8_t predUri[] = "http://example.com/ns#department";
+		SerdNode predNode = serd_node_from_string(SERD_URI, predUri);
+		pom.predicateMaps.push_back(std::unique_ptr<ConstantTermMap>(new ConstantTermMap(predNode)));
+
+		TriplesMap parent;
+		parent.logicalTable = std::unique_ptr<BaseTableOrView>(new BaseTableOrView("DEPT"));
+		auto parentSm = std::unique_ptr<TestValueSubjectMap>(new TestValueSubjectMap());
+		parentSm->valueMap = std::unique_ptr<ColumnTermMap>(new ColumnTermMap("MISSING_COL"));
+		parent.subjectMap = std::move(parentSm);
+
+		auto rom = std::unique_ptr<TestReferencingObjectMap>(new TestReferencingObjectMap());
+		rom->parentTriplesMap = &parent; // no join conditions: every parent row matches
+		pom.objectMaps.push_back(std::move(rom));
+
+		MockSQLConnection conn;
+		conn.addResult("DEPT", {makeRow({{"DEPTNO", StringSQLValue(std::string("10"))}})});
+
+		MapSQLRow row;
+		const uint8_t subjUri[] = "http://example.com/subj/1";
+		SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
+
+		std::string out =
+		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn); });
+		REQUIRE(out.empty());
+	}
 }
