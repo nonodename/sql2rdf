@@ -1,6 +1,6 @@
 # SQL2RDF++
 
-A command line utility to convert relational database tables to RDF using R2RML syntax.
+A command line utility to convert relational database tables to RDF using R2RML syntax, with support for [YARRRML](https://rml.io/yarrrml/spec/) as a friendlier YAML front-end to R2RML.
 
 Ultimately this is intended to prove out implementation of R2RML in C++ so that the code can be lifted into a DuckDB extension to support a `COPY TO` export from DuckDB.
 
@@ -11,6 +11,7 @@ The project is structured as a reusable library plus a thin CLI application:
 | Target | Type | DuckDB dependency | Description |
 |--------|------|-------------------|-------------|
 | `sql2rdf_r2rml` | static library | none | Core R2RML implementation. Links only [Serd](https://drobilla.net/software/serd/) (embedded). Suitable for use in other projects, including a DuckDB extension. |
+| `sql2rdf_yarrrml` | static library | none | YARRRML → R2RML translator. Publicly links `sql2rdf_r2rml` and privately links [yaml-cpp](https://github.com/jbeder/yaml-cpp) (fetched via CMake `FetchContent`), so consumers of `sql2rdf_r2rml` alone stay free of the YAML dependency. |
 | `SQL2RDF++` | executable | required | CLI application. Compiles the DuckDB adapter (`DuckDBConnection`) and links the system or embedded DuckDB library. |
 | `test_runner` | executable | none | Test suite using [Catch2](https://github.com/catchorg/Catch2). All tests run against a mock SQL backend — no DuckDB required. |
 | `format` | utility | none | Apply `clang-format` to all project C++ sources in-place. |
@@ -77,22 +78,60 @@ See the GitHub Actions workflow for the exact install steps used in CI for each 
 
 ## Testing
 
-Tests are based on the example tables and mapping configurations from the [W3C R2RML specification](https://www.w3.org/TR/r2rml/). Example mapping files are in `tests/sourceR2RML/`.
+Tests are based on the example tables and mapping configurations from the [W3C R2RML specification](https://www.w3.org/TR/r2rml/). Example mapping files are in `tests/sourceR2RML/`. YARRRML equivalents of the same examples, plus feature/error-handling fixtures, are in `tests/sourceYARRRML/`.
 
 All tests run against a mock SQL backend (`MockSQL.h`) — no DuckDB installation is required to run them.
+
+## YARRRML support
+
+[YARRRML](https://rml.io/yarrrml/spec/) mapping files (`.yml`/`.yaml`/`.yarrrml`) are translated internally into R2RML Turtle and then parsed by the same R2RML engine used for `.ttl` mappings, so both formats produce identical output for equivalent mappings. Example:
+
+```yaml
+prefixes:
+  ex: http://example.com/ns#
+
+mappings:
+  employee:
+    sources:
+      - table: EMP
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - [a, ex:Employee]
+      - [ex:name, $(ENAME)]
+      - [ex:count, $(COUNT), xsd:integer]
+      - [ex:nickname, $(NICKNAME), en~lang]
+      - [ex:homepage, $(HOMEPAGE)~iri]
+```
+
+Supported subset:
+
+- `prefixes`, `base`, `mappings`/`mapping`.
+- `sources`/`source` (per-mapping, single entry or list — the first is used) with `table`/`query`; a top-level `sources` map of named sources referenced by name. `access`/`type`/`credentials`/`queryFormulation`/`referenceFormulation` are ignored.
+- `subjects`/`subject`/`s` (single entry or list — the first is used): `$(COL)` → column, mixed text → template, otherwise a constant IRI.
+- `po`/`predicateobjects`, in shortcut array form (`[predicates, objects]` or `[predicates, objects, datatype-or-language]`) or map form (`predicates`/`predicate`/`p`, `objects`/`object`/`o`). The `a` predicate with a constant class object is folded into `rr:class` on the subject map.
+- Object values: `$(COL)` → column (literal by default; `~iri` forces an IRI), mixed text → template, a CURIE/absolute IRI → constant IRI, any other plain string → constant literal. Per-object `{value:|v:, datatype:|language:}` maps and `[value, datatype-or-language]` pairs are supported.
+- Mapping references (joins): `{mapping: OTHER, condition(s): {function: equal, parameters: [[str1, $(CHILD)], [str2, $(PARENT)]]}}`.
+- `graphs`/`graph`, unknown per-mapping keys, and unknown top-level keys (e.g. `functions`, `targets`) are not supported and are reported as non-fatal warnings (`authors` is ignored silently).
+
+Non-fatal issues (unsupported keys, a mapping with no/multiple sources, an unresolved join-condition function, skipped `graphs`, ...) are collected into `R2RMLMapping::parseErrors` in the default lenient mode, or raised as a `std::runtime_error` when parsing in strict mode (`ignoreNonFatalErrors=false`). Fatal problems (unreadable file, YAML syntax errors, a missing `mappings` key) always throw.
 
 ## Usage
 
 ```sh
-Usage: ./SQL2RDF++ [options] <mapping.ttl> <database.db> <output.nt>
+Usage: ./SQL2RDF++ [options] <mapping.ttl|mapping.yml> <database.db> <output.nt>
 
 Arguments:
-  mapping.ttl    R2RML mapping file (Turtle format)
-  database.db    DuckDB database file
-  output.nt      Output RDF file
+  mapping.ttl|mapping.yml   R2RML mapping file (Turtle) or YARRRML mapping
+                            file (YAML); the format is chosen from the file
+                            extension (.ttl -> R2RML, .yml/.yaml/.yarrrml ->
+                            YARRRML) unless overridden with -y.
+  database.db               DuckDB database file
+  output.nt                 Output RDF file
 
 Options:
   -f ntriples|turtle   Output format (default: ntriples)
+  -y                   Force the mapping file to be parsed as YARRRML,
+                       regardless of its extension
   -P                   Print the parsed mapping to stderr
   -h                   Show this help message
 ```

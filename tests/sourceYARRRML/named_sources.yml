@@ -1,0 +1,21 @@
+prefixes:
+  ex: http://example.com/ns#
+
+sources:
+  empSource:
+    table: EMP
+  deptSource:
+    query: "SELECT DEPTNO, DNAME FROM DEPT"
+
+mappings:
+  employee:
+    sources: empSource
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - [ex:name, $(ENAME)]
+
+  department:
+    sources: deptSource
+    s: http://data.example.com/department/$(DEPTNO)
+    po:
+      - [ex:name, $(DNAME)]

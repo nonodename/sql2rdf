@@ -1,0 +1,20 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# rr:predicateObjectMap must have a blank node or IRI as its object (something
+# that can be resolved back to a subject key via objKey()).  Here one of the
+# two values is a plain string literal, which objKey() cannot turn into a
+# lookup key.  The parser must skip that entry (continue) while still
+# building the other, well-formed predicateObjectMap.
+
+<#TriplesMap1>
+    rr:logicalTable [ rr:tableName "EMP" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/employee/{EMPNO}";
+        rr:class ex:Employee;
+    ];
+    rr:predicateObjectMap "not-a-valid-pom";
+    rr:predicateObjectMap [
+        rr:predicate ex:name;
+        rr:objectMap [ rr:column "ENAME" ];
+    ].

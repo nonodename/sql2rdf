@@ -1,0 +1,29 @@
+prefixes:
+  ex: http://example.com/ns#
+
+mappings:
+  department:
+    sources:
+      - query: "SELECT DEPTNO, DNAME, LOC, (SELECT COUNT(*) FROM EMP WHERE EMP.DEPTNO=DEPT.DEPTNO) AS STAFF FROM DEPT"
+    s: http://data.example.com/department/$(DEPTNO)
+    po:
+      - [a, ex:Department]
+      - [ex:name, $(DNAME)]
+      - [ex:location, $(LOC)]
+      - [ex:staff, $(STAFF)]
+
+  employee:
+    sources:
+      - table: EMP
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - [a, ex:Employee]
+      - [ex:name, $(ENAME)]
+      - p: ex:department
+        o:
+          - mapping: department
+            condition:
+              function: equal
+              parameters:
+                - [str1, $(DEPTNO)]
+                - [str2, $(DEPTNO)]

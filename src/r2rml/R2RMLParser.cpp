@@ -302,6 +302,44 @@ public:
 	}
 
 	// ------------------------------------------------------------------
+	// Wrap a literal string in a ConstantTermMap (rr:constant with a literal
+	// object, e.g. `rr:constant "active"`).
+	// ------------------------------------------------------------------
+	static std::unique_ptr<ConstantTermMap> makeConstantLiteral(const std::string &literal) {
+		SerdNode node = serd_node_from_string(SERD_LITERAL, reinterpret_cast<const uint8_t *>(literal.c_str()));
+		auto tm = std::unique_ptr<ConstantTermMap>(new ConstantTermMap(node));
+		tm->termType = TermType::Literal;
+		return tm;
+	}
+
+	// ------------------------------------------------------------------
+	// Read rr:termType (if present) from `nodeKey` and, when recognised,
+	// override `tm`'s termType.  Called after any default term-type has
+	// already been applied so an explicit rr:termType always wins.
+	// ------------------------------------------------------------------
+	void applyExplicitTermType(const std::string &nodeKey, TermMap &tm) {
+		std::string tt = getFirstUri(ts, nodeKey, RR + "termType");
+		if (tt == RR + "IRI") {
+			tm.termType = TermType::IRI;
+		} else if (tt == RR + "Literal") {
+			tm.termType = TermType::Literal;
+		} else if (tt == RR + "BlankNode") {
+			tm.termType = TermType::BlankNode;
+		}
+	}
+
+	// ------------------------------------------------------------------
+	// Read rr:language (if present) from `nodeKey` and set `tm`'s
+	// languageTag.
+	// ------------------------------------------------------------------
+	void applyLanguage(const std::string &nodeKey, TermMap &tm) {
+		std::string lang = getFirstLiteral(ts, nodeKey, RR + "language");
+		if (!lang.empty()) {
+			tm.languageTag = std::unique_ptr<std::string>(new std::string(lang));
+		}
+	}
+
+	// ------------------------------------------------------------------
 	// Build a LogicalTable from a blank-node or named-resource key.
 	// ------------------------------------------------------------------
 	std::unique_ptr<LogicalTable> buildLogicalTable(const std::string &ltKey) {
@@ -333,6 +371,8 @@ public:
 			if (!dt.empty()) {
 				tm->datatypeIRI = std::unique_ptr<std::string>(new std::string(dt));
 			}
+			applyLanguage(nodeKey, *tm);
+			applyExplicitTermType(nodeKey, *tm);
 			return tm;
 		}
 
@@ -344,13 +384,24 @@ public:
 			if (!dt.empty()) {
 				tm->datatypeIRI = std::unique_ptr<std::string>(new std::string(dt));
 			}
+			applyLanguage(nodeKey, *tm);
+			applyExplicitTermType(nodeKey, *tm);
 			return tm;
 		}
 
-		// rr:constant (URI object)
-		std::string constant = getFirstUri(ts, nodeKey, RR + "constant");
-		if (!constant.empty()) {
-			return makeConstantUri(constant);
+		// rr:constant (URI or literal object)
+		const auto *constObjs = getObjects(ts, nodeKey, RR + "constant");
+		if (constObjs) {
+			for (const auto &c : *constObjs) {
+				if (c.type == ObjType::URI) {
+					return makeConstantUri(c.value);
+				}
+			}
+			for (const auto &c : *constObjs) {
+				if (c.type == ObjType::Literal) {
+					return makeConstantLiteral(c.value);
+				}
+			}
 		}
 
 		// rr:parentTriplesMap → ReferencingObjectMap
@@ -462,8 +513,10 @@ public:
 				auto tm = buildTermMap(omKey);
 				if (tm) {
 					// Per R2RML spec: default term type for rr:column in an
-					// objectMap is rr:Literal (not rr:IRI).
-					if (dynamic_cast<ColumnTermMap *>(tm.get())) {
+					// objectMap is rr:Literal (not rr:IRI), unless an explicit
+					// rr:termType was given on the object map (already applied
+					// by buildTermMap()), which always wins.
+					if (dynamic_cast<ColumnTermMap *>(tm.get()) && getFirstUri(ts, omKey, RR + "termType").empty()) {
 						tm->termType = TermType::Literal;
 					}
 					pom->objectMaps.push_back(std::move(tm));
@@ -478,48 +531,27 @@ public:
 };
 
 // ---------------------------------------------------------------------------
-// R2RMLParser implementation
+// Shared build phase (phases 2-4): construct the R2RMLMapping object model
+// from a fully-populated TripleStore, resolve parentTriplesMap references,
+// and report/throw any collected non-fatal errors.  Used by both parse() and
+// parseString() so their behaviour (aside from how triples are collected) is
+// identical.
+//
+// `env` ownership is transferred to the returned mapping.  `preErrors` are
+// errors collected during phase 1 (e.g. a malformed file URI) and are merged
+// with any build-phase errors before phase 4 reporting.
 // ---------------------------------------------------------------------------
-
-R2RMLParser::R2RMLParser() = default;
-
-R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreNonFatalErrors) {
-	// -----------------------------------------------------------------------
-	// Phase 1 – collect all triples via Serd
-	// -----------------------------------------------------------------------
-	ParseState state;
-	state.env = serd_env_new(nullptr);
-
-	SerdReader *reader =
-	    serd_reader_new(SERD_TURTLE, &state, nullptr, cbBase, cbPrefix, cbStatement, /*end_sink=*/nullptr);
-	serd_reader_set_error_sink(reader, cbError, nullptr);
-
-	// Convert the filesystem path to a file URI and use it as the document base.
-	SerdNode fileUriNode = serd_node_new_file_uri(reinterpret_cast<const uint8_t *>(mappingFilePath.c_str()),
-	                                              /*hostname=*/nullptr, /*out=*/nullptr, /*escape=*/true);
-
-	ParseContext ctx(state.triples);
-
-	if (fileUriNode.buf) {
-		serd_env_set_base_uri(state.env, &fileUriNode);
-		serd_reader_read_file(reader, fileUriNode.buf);
-		serd_node_free(&fileUriNode);
-	} else {
-		ctx.errors.push_back("R2RML parser: could not build file URI for: " + mappingFilePath);
-	}
-
-	serd_reader_free(reader);
-
-	// -----------------------------------------------------------------------
-	// Phase 2 – build the R2RMLMapping from the collected triples
-	// -----------------------------------------------------------------------
+static R2RMLMapping buildMappingFromTriples(TripleStore &triples, SerdEnv *env, std::vector<std::string> preErrors,
+                                            bool ignoreNonFatalErrors) {
 	R2RMLMapping mapping;
-	mapping.serdEnvironment = state.env; // transfer ownership
-	state.env = nullptr;
+	mapping.serdEnvironment = env; // transfer ownership
+
+	ParseContext ctx(triples);
+	ctx.errors = std::move(preErrors);
 
 	// Identify TriplesMap subjects: any non-blank named resource carrying at
 	// least one characteristic R2RML TriplesMap predicate.
-	for (const auto &entry : state.triples) {
+	for (const auto &entry : triples) {
 		const std::string &subj = entry.first;
 		const PredMap &preds = entry.second;
 
@@ -538,19 +570,19 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreN
 		tm->id = subj;
 
 		// Logical table (inline blank node or named resource)
-		std::string ltKey = getFirstObjKey(state.triples, subj, RR + "logicalTable");
+		std::string ltKey = getFirstObjKey(triples, subj, RR + "logicalTable");
 		if (!ltKey.empty()) {
 			tm->logicalTable = ctx.buildLogicalTable(ltKey);
 		}
 
 		// Subject map
-		std::string smKey = getFirstObjKey(state.triples, subj, RR + "subjectMap");
+		std::string smKey = getFirstObjKey(triples, subj, RR + "subjectMap");
 		if (!smKey.empty()) {
 			tm->subjectMap = ctx.buildSubjectMap(smKey);
 		}
 
 		// Predicate-object maps (there may be several)
-		const auto *pomObjs = getObjects(state.triples, subj, RR + "predicateObjectMap");
+		const auto *pomObjs = getObjects(triples, subj, RR + "predicateObjectMap");
 		if (pomObjs) {
 			for (const auto &pomObj : *pomObjs) {
 				std::string pomKey = objKey(pomObj);
@@ -600,6 +632,70 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreN
 	}
 
 	return mapping;
+}
+
+// ---------------------------------------------------------------------------
+// R2RMLParser implementation
+// ---------------------------------------------------------------------------
+
+R2RMLParser::R2RMLParser() = default;
+
+R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreNonFatalErrors) {
+	// -----------------------------------------------------------------------
+	// Phase 1 – collect all triples via Serd
+	// -----------------------------------------------------------------------
+	ParseState state;
+	state.env = serd_env_new(nullptr);
+
+	SerdReader *reader =
+	    serd_reader_new(SERD_TURTLE, &state, nullptr, cbBase, cbPrefix, cbStatement, /*end_sink=*/nullptr);
+	serd_reader_set_error_sink(reader, cbError, nullptr);
+
+	// Convert the filesystem path to a file URI and use it as the document base.
+	SerdNode fileUriNode = serd_node_new_file_uri(reinterpret_cast<const uint8_t *>(mappingFilePath.c_str()),
+	                                              /*hostname=*/nullptr, /*out=*/nullptr, /*escape=*/true);
+
+	std::vector<std::string> preErrors;
+
+	if (fileUriNode.buf) {
+		serd_env_set_base_uri(state.env, &fileUriNode);
+		serd_reader_read_file(reader, fileUriNode.buf);
+		serd_node_free(&fileUriNode);
+	} else {
+		preErrors.push_back("R2RML parser: could not build file URI for: " + mappingFilePath);
+	}
+
+	serd_reader_free(reader);
+
+	SerdEnv *env = state.env; // transfer ownership out of `state`
+	state.env = nullptr;
+
+	return buildMappingFromTriples(state.triples, env, std::move(preErrors), ignoreNonFatalErrors);
+}
+
+R2RMLMapping R2RMLParser::parseString(const std::string &turtleText, const std::string &baseUri,
+                                      bool ignoreNonFatalErrors) {
+	// -----------------------------------------------------------------------
+	// Phase 1 – collect all triples via Serd, reading from an in-memory string
+	// -----------------------------------------------------------------------
+	ParseState state;
+	state.env = serd_env_new(nullptr);
+
+	SerdReader *reader =
+	    serd_reader_new(SERD_TURTLE, &state, nullptr, cbBase, cbPrefix, cbStatement, /*end_sink=*/nullptr);
+	serd_reader_set_error_sink(reader, cbError, nullptr);
+
+	SerdNode baseNode = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(baseUri.c_str()));
+	serd_env_set_base_uri(state.env, &baseNode);
+
+	serd_reader_read_string(reader, reinterpret_cast<const uint8_t *>(turtleText.c_str()));
+
+	serd_reader_free(reader);
+
+	SerdEnv *env = state.env; // transfer ownership out of `state`
+	state.env = nullptr;
+
+	return buildMappingFromTriples(state.triples, env, {}, ignoreNonFatalErrors);
 }
 
 } // namespace r2rml

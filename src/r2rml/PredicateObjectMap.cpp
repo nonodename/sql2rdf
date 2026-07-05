@@ -67,12 +67,17 @@ void PredicateObjectMap::processRow(const SQLRow &row, const SerdNode &subject, 
 				}
 
 				SerdNode datatypeNode = SERD_NODE_NULL;
+				SerdNode langNode = SERD_NODE_NULL;
 				const SerdNode *datatype = nullptr;
 				const SerdNode *lang = nullptr;
 				// dtIRI must outlive datatypeNode (whose buf points into it).
 				std::string dtIRI;
 
-				if (object.type == SERD_LITERAL && !objMap->languageTag) {
+				if (object.type == SERD_LITERAL && objMap->languageTag) {
+					langNode = serd_node_from_string(SERD_LITERAL,
+					                                 reinterpret_cast<const uint8_t *>(objMap->languageTag->c_str()));
+					lang = &langNode;
+				} else if (object.type == SERD_LITERAL) {
 					dtIRI = objMap->computeDatatypeIRI(row);
 					if (!dtIRI.empty()) {
 						datatypeNode =

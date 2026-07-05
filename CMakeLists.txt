@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5...3.29)
+cmake_minimum_required(VERSION 3.10...3.29)
 project(SQL2RDF++ LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 11)
@@ -9,10 +9,29 @@ include(FetchContent)
 FetchContent_Declare(
   Catch2
   GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-  GIT_TAG v3.13.0 # or latest release
+  GIT_TAG v3.15.1 # or latest release
 )
 
 FetchContent_MakeAvailable(Catch2)
+
+# ----------------------------------------------------------------------------
+# yaml-cpp dependency - used only by the sql2rdf_yarrrml library so that
+# sql2rdf_r2rml (and anyone linking only it) stays free of a YAML dependency.
+# ----------------------------------------------------------------------------
+set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+# Avoid a "format" custom-target name collision with this project's own
+# `format` target (below); yaml-cpp's own formatting is irrelevant to us.
+set(YAML_CPP_FORMAT_SOURCE OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+  yaml-cpp
+  GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+  GIT_TAG yaml-cpp-0.9.0
+)
+
+FetchContent_MakeAvailable(yaml-cpp)
 
 # ----------------------------------------------------------------------------
 # DuckDB dependency - prefer system-installed library; fall back to embedded
@@ -69,11 +88,12 @@ add_executable(test_runner ${TEST_SOURCES})
 # Include headers for tests and link to Catch2 and serd
 target_include_directories(test_runner PRIVATE include ${CMAKE_SOURCE_DIR}/external/serd/include ${CMAKE_SOURCE_DIR}/tests)
 if(UNIX)
-  target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml serd m)
+  target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml sql2rdf_yarrrml serd m)
 else()
-  target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml serd)
+  target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml sql2rdf_yarrrml serd)
 endif()
 target_compile_definitions(test_runner PRIVATE SOURCE_R2RML_DIR="${CMAKE_SOURCE_DIR}/tests/sourceR2RML/")
+target_compile_definitions(test_runner PRIVATE SOURCE_YARRRML_DIR="${CMAKE_SOURCE_DIR}/tests/sourceYARRRML/")
 
 # Register individual Catch2 test cases with CTest
 catch_discover_tests(test_runner)
@@ -118,10 +138,19 @@ else()
   target_link_libraries(sql2rdf_r2rml PUBLIC serd)
 endif()
 
+# ----------------------------------------------------------------------------
+# YARRRML support - a separate static library so that sql2rdf_r2rml itself
+# stays free of the yaml-cpp dependency.
+# ----------------------------------------------------------------------------
+add_library(sql2rdf_yarrrml STATIC src/yarrrml/YARRRMLParser.cpp)
+target_include_directories(sql2rdf_yarrrml PUBLIC include)
+target_link_libraries(sql2rdf_yarrrml PUBLIC sql2rdf_r2rml)
+target_link_libraries(sql2rdf_yarrrml PRIVATE yaml-cpp::yaml-cpp)
+
 # Specify main executable sources and link to the library (requires DuckDB)
 if(DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB)
   add_executable(${PROJECT_NAME} src/main.cpp src/DuckDBConnection.cpp)
-  target_link_libraries(${PROJECT_NAME} PRIVATE sql2rdf_r2rml duckdb)
+  target_link_libraries(${PROJECT_NAME} PRIVATE sql2rdf_r2rml sql2rdf_yarrrml duckdb)
   target_include_directories(${PROJECT_NAME} PRIVATE include src)
 endif()
 
