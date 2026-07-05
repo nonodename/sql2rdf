@@ -28,6 +28,18 @@ public:
 	 *     std::runtime_error to be thrown instead.
 	 */
 	R2RMLMapping parse(const std::string &mappingFilePath, bool ignoreNonFatalErrors = true);
+
+	/**
+	 * Parse an in-memory Turtle document (e.g. produced by translating a
+	 * YARRRML document) into the R2RML object model.
+	 *
+	 * @param turtleText  The Turtle document text.
+	 * @param baseUri     Base URI used to resolve relative references (e.g.
+	 *                    "<#TriplesMap1>") within `turtleText`.
+	 * @param ignoreNonFatalErrors  See parse().
+	 */
+	R2RMLMapping parseString(const std::string &turtleText, const std::string &baseUri,
+	                        bool ignoreNonFatalErrors = true);
 };
 
 } // namespace r2rml

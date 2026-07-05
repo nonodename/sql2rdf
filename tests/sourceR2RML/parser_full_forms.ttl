@@ -1,0 +1,43 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#>.
+@base <http://example.com/base/>.
+
+# Exercises parser code paths that the other fixtures never touch:
+#  - an in-document @base directive (Serd invokes the parser's base callback)
+#  - a language-tagged literal and a datatype-typed literal on arbitrary
+#    predicates (cbStatement records ObjValue::lang / ObjValue::datatype for
+#    every literal object, regardless of whether the predicate is R2RML's)
+#  - rr:subjectMap using rr:column (instead of rr:template/rr:constant)
+#  - rr:predicateObjectMap using the full rr:predicateMap form (instead of the
+#    rr:predicate shortcut)
+#  - rr:predicateObjectMap using the rr:object constant-URI shortcut
+#  - rr:objectMap using rr:template together with a static rr:datatype
+
+<#TriplesMapFull>
+    rr:logicalTable [ rr:tableName "EMP" ];
+    rr:subjectMap [
+        rr:column "EMPNO";
+        rr:class ex:Employee;
+    ];
+    ex:comment "A fully-featured full-form test mapping"@en;
+    ex:version "1"^^xsd:integer;
+    rr:predicateObjectMap [
+        rr:predicateMap [ rr:template "http://example.com/ns#{JOB}" ];
+        rr:objectMap [ rr:template "http://data.example.com/role/{JOB}"; rr:datatype xsd:string ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:tag;
+        rr:object ex:ConstantTag;
+    ].
+
+# Second TriplesMap: subjectMap uses rr:constant instead of rr:template/rr:column.
+<#TriplesMapConstSubject>
+    rr:logicalTable [ rr:tableName "SINGLETON" ];
+    rr:subjectMap [
+        rr:constant ex:TheOneAndOnly;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:name;
+        rr:objectMap [ rr:column "NAME" ];
+    ].
