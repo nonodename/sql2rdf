@@ -21,6 +21,9 @@ FetchContent_MakeAvailable(Catch2)
 set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+# Avoid a "format" custom-target name collision with this project's own
+# `format` target (below); yaml-cpp's own formatting is irrelevant to us.
+set(YAML_CPP_FORMAT_SOURCE OFF CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
   yaml-cpp

@@ -1,0 +1,10 @@
+prefixes:
+  ex: http://example.com/ns#
+
+mappings:
+  employee:
+    sources:
+      - query: "SELECT EMP.*, (CASE JOB WHEN 'CLERK' THEN 'general-office' WHEN 'NIGHTGUARD' THEN 'security' WHEN 'ENGINEER' THEN 'engineering' END) ROLE FROM EMP"
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - [ex:role, http://data.example.com/roles/$(ROLE)]

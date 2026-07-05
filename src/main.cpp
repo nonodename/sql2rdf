@@ -12,19 +12,37 @@
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/R2RMLParser.h"
 #include "r2rml/TriplesMap.h"
+#include "yarrrml/YARRRMLParser.h"
 
 static void printHelp(const char *programName) {
-	std::cerr << "Usage: " << programName << " [options] <mapping.ttl> <database.db> <output.nt>\n"
+	std::cerr << "Usage: " << programName << " [options] <mapping.ttl|mapping.yml> <database.db> <output.nt>\n"
 	          << "\n"
 	          << "Arguments:\n"
-	          << "  mapping.ttl    R2RML mapping file (Turtle format)\n"
-	          << "  database.db    DuckDB database file\n"
-	          << "  output.nt      Output RDF file\n"
+	          << "  mapping.ttl|mapping.yml   R2RML mapping file (Turtle) or YARRRML mapping\n"
+	          << "                            file (YAML); the format is chosen from the file\n"
+	          << "                            extension (.ttl -> R2RML, .yml/.yaml/.yarrrml ->\n"
+	          << "                            YARRRML) unless overridden with -y.\n"
+	          << "  database.db               DuckDB database file\n"
+	          << "  output.nt                 Output RDF file\n"
 	          << "\n"
 	          << "Options:\n"
 	          << "  -f ntriples|turtle   Output format (default: ntriples)\n"
+	          << "  -y                   Force the mapping file to be parsed as YARRRML,\n"
+	          << "                       regardless of its extension\n"
 	          << "  -P                   Print the parsed mapping to stderr\n"
 	          << "  -h                   Show this help message\n";
+}
+
+/// Return true if `path`'s extension indicates a YARRRML (YAML) mapping file.
+static bool hasYarrrmlExtension(const std::string &path) {
+	static const char *const yarrrmlExtensions[] = {".yml", ".yaml", ".yarrrml"};
+	for (const char *ext : yarrrmlExtensions) {
+		std::size_t extLen = std::strlen(ext);
+		if (path.size() >= extLen && path.compare(path.size() - extLen, extLen, ext) == 0) {
+			return true;
+		}
+	}
+	return false;
 }
 
 int main(int argc, char *argv[]) {
@@ -34,6 +52,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	bool printMapping = false;
+	bool forceYarrrml = false;
 	SerdSyntax outputFormat = SERD_NTRIPLES;
 	const char *mappingFile = nullptr;
 	const char *databaseFile = nullptr;
@@ -45,6 +64,8 @@ int main(int argc, char *argv[]) {
 			return 0;
 		} else if (std::strcmp(argv[i], "-P") == 0) {
 			printMapping = true;
+		} else if (std::strcmp(argv[i], "-y") == 0) {
+			forceYarrrml = true;
 		} else if (std::strcmp(argv[i], "-f") == 0) {
 			if (++i >= argc) {
 				std::cerr << "Error: -f requires a format argument"

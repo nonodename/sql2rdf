@@ -1,0 +1,11 @@
+prefixes:
+  ex: http://example.com/ns#
+
+mappings:
+  m1:
+    source:
+      table: EMP
+    subject: http://data.example.com/employee/$(EMPNO)
+    predicateobjects:
+      - predicate: ex:name
+        object: $(ENAME)

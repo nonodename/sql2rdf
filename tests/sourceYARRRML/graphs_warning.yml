@@ -1,0 +1,12 @@
+prefixes:
+  ex: http://example.com/ns#
+
+mappings:
+  m1:
+    sources:
+      - table: EMP
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - [ex:name, $(ENAME)]
+    graphs:
+      - http://example.com/graph1
