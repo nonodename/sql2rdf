@@ -33,18 +33,6 @@ static void printHelp(const char *programName) {
 	          << "  -h                   Show this help message\n";
 }
 
-/// Return true if `path`'s extension indicates a YARRRML (YAML) mapping file.
-static bool hasYarrrmlExtension(const std::string &path) {
-	static const char *const yarrrmlExtensions[] = {".yml", ".yaml", ".yarrrml"};
-	for (const char *ext : yarrrmlExtensions) {
-		std::size_t extLen = std::strlen(ext);
-		if (path.size() >= extLen && path.compare(path.size() - extLen, extLen, ext) == 0) {
-			return true;
-		}
-	}
-	return false;
-}
-
 int main(int argc, char *argv[]) {
 	if (argc < 2) {
 		printHelp(argv[0]);
@@ -110,7 +98,7 @@ int main(int argc, char *argv[]) {
 	// Parse and validate the mapping (R2RML Turtle or YARRRML YAML, chosen by
 	// file extension unless -y forces YARRRML).
 	// -------------------------------------------------------------------------
-	bool useYarrrml = forceYarrrml || hasYarrrmlExtension(mappingFile);
+	bool useYarrrml = forceYarrrml || yarrrml::YARRRMLParser::hasYarrrmlExtension(mappingFile);
 
 	r2rml::R2RMLMapping mapping;
 	try {
