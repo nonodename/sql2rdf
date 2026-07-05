@@ -39,7 +39,7 @@ public:
 	 * @param ignoreNonFatalErrors  See parse().
 	 */
 	R2RMLMapping parseString(const std::string &turtleText, const std::string &baseUri,
-	                        bool ignoreNonFatalErrors = true);
+	                         bool ignoreNonFatalErrors = true);
 };
 
 } // namespace r2rml

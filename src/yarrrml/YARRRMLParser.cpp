@@ -379,7 +379,8 @@ std::string buildObjectFragment(const YAML::Node &objNode, const std::set<std::s
                                 const std::string &extraTtl, const std::string &mappingName,
                                 std::vector<std::string> &warnings) {
 	if (objNode.IsScalar()) {
-		VSpec vs = classifyValue(objNode.as<std::string>(), /*allowIriSuffix=*/true, /*literalsAllowed=*/true, prefixes);
+		VSpec vs =
+		    classifyValue(objNode.as<std::string>(), /*allowIriSuffix=*/true, /*literalsAllowed=*/true, prefixes);
 		return valueSpecToMapFragment(vs, prefixes, extraTtl);
 	}
 
@@ -502,7 +503,8 @@ PoResult buildPredicateObjectMaps(const YAML::Node &mNode, const std::string &ma
 		return res;
 	}
 	if (!poNode.IsSequence()) {
-		warnings.push_back("YARRRML parser: mapping '" + mappingName + "': po/predicateobjects must be a list, ignored");
+		warnings.push_back("YARRRML parser: mapping '" + mappingName +
+		                   "': po/predicateobjects must be a list, ignored");
 		return res;
 	}
 
@@ -557,8 +559,8 @@ std::string buildLogicalTable(const YAML::Node &mNode, const std::map<std::strin
 		std::string refName = src.as<std::string>();
 		auto it = namedSources.find(refName);
 		if (it == namedSources.end()) {
-			warnings.push_back("YARRRML parser: mapping '" + mappingName + "' references unknown source '" +
-			                   refName + "'; logicalTable omitted");
+			warnings.push_back("YARRRML parser: mapping '" + mappingName + "' references unknown source '" + refName +
+			                   "'; logicalTable omitted");
 			return "";
 		}
 		src = it->second;
@@ -598,7 +600,7 @@ std::string buildSubjectMap(const YAML::Node &mNode, const std::vector<std::stri
 		if (!list.empty()) {
 			if (list[0].IsScalar()) {
 				VSpec vs = classifyValue(list[0].as<std::string>(), /*allowIriSuffix=*/false,
-				                        /*literalsAllowed=*/false, prefixes);
+				                         /*literalsAllowed=*/false, prefixes);
 				switch (vs.kind) {
 				case VKind::Column:
 					valueFrag = "rr:column " + quoted(vs.text);
@@ -640,8 +642,8 @@ std::string buildSubjectMap(const YAML::Node &mNode, const std::vector<std::stri
 }
 
 const std::set<std::string> &mappingKnownKeys() {
-	static const std::set<std::string> keys = {"sources", "source",         "subjects",         "subject", "s",
-	                                           "po",      "predicateobjects", "predicateObjects", "graphs", "graph"};
+	static const std::set<std::string> keys = {"sources", "source",           "subjects",         "subject", "s",
+	                                           "po",      "predicateobjects", "predicateObjects", "graphs",  "graph"};
 	return keys;
 }
 
@@ -731,7 +733,7 @@ std::string translateToTurtleImpl(const std::string &yamlText, std::vector<std::
 		}
 	}
 
-	static const std::set<std::string> knownTopKeys = {"prefixes", "base", "sources", "source",
+	static const std::set<std::string> knownTopKeys = {"prefixes", "base",    "sources", "source",
 	                                                   "mappings", "mapping", "authors"};
 	for (YAML::const_iterator it = root.begin(); it != root.end(); ++it) {
 		std::string key = it->first.as<std::string>();
