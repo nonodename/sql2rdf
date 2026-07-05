@@ -23,16 +23,7 @@ public:
 	~YARRRMLParser() = default;
 
 	/// Return true if `path`'s extension indicates a YARRRML (YAML) mapping file.
-	static bool hasYarrrmlExtension(const std::string &path) {
-		static const char *const yarrrmlExtensions[] = {".yml", ".yaml", ".yarrrml"};
-		for (const char *ext : yarrrmlExtensions) {
-			std::size_t extLen = std::strlen(ext);
-			if (path.size() >= extLen && path.compare(path.size() - extLen, extLen, ext) == 0) {
-				return true;
-			}
-		}
-		return false;
-	}
+	static bool hasYarrrmlExtension(const std::string &path);
 	/**
 	 * Translate a YARRRML YAML document (text) to an R2RML Turtle document.
 	 *

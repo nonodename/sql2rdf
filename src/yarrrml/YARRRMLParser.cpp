@@ -799,6 +799,17 @@ std::string computeFileBaseUri(const std::string &path) {
 // YARRRMLParser implementation
 // ---------------------------------------------------------------------------
 
+bool YARRRMLParser::hasYarrrmlExtension(const std::string &path) {
+	static const char *const yarrrmlExtensions[] = {".yml", ".yaml", ".yarrrml"};
+	for (const char *ext : yarrrmlExtensions) {
+		std::size_t extLen = std::strlen(ext);
+		if (path.size() >= extLen && path.compare(path.size() - extLen, extLen, ext) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
 std::string YARRRMLParser::translateToTurtle(const std::string &yamlText) {
 	std::vector<std::string> warnings; // discarded: use parse() for warning reporting
 	return translateToTurtleImpl(yamlText, warnings);
