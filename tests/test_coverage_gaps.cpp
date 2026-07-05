@@ -1,6 +1,6 @@
 /**
  * Additional unit/integration tests targeting coverage gaps identified via a
- * gcov pass over src/r2rml/*.cpp.  Each TEST_CASE below documents, in its
+ * gcov pass over src/r2rml/ *.cpp.  Each TEST_CASE below documents, in its
  * comment, exactly which previously-uncovered function/branch it exercises.
  *
  * These tests exercise EXISTING production behaviour only; no production
@@ -217,8 +217,8 @@ TEST_CASE("GraphMap, ObjectMap and PredicateMap are constructible and default-va
 
 TEST_CASE("SubjectMap::print via operator<< renders classes and graph maps") {
 	TestValueSubjectMap sm;
-	sm.classIRIs.push_back("http://example.com/ns#Employee");
-	sm.classIRIs.push_back("http://example.com/ns#Person");
+	sm.classIRIs.emplace_back("http://example.com/ns#Employee");
+	sm.classIRIs.emplace_back("http://example.com/ns#Person");
 	sm.graphMaps.push_back(std::unique_ptr<TestGraphMap>(new TestGraphMap()));
 
 	REQUIRE(sm.isValid()); // SubjectMap::isValid() only checks graphMaps validity
@@ -289,8 +289,8 @@ TEST_CASE("R2RMLView::print without sqlVersions") {
 
 TEST_CASE("R2RMLView::print with sqlVersions lists each version") {
 	R2RMLView view("SELECT * FROM EMP");
-	view.sqlVersions.push_back("SQL2008");
-	view.sqlVersions.push_back("Oracle");
+	view.sqlVersions.emplace_back("SQL2008");
+	view.sqlVersions.emplace_back("Oracle");
 
 	std::ostringstream oss;
 	oss << view;
@@ -562,14 +562,14 @@ TEST_CASE("R2RMLMapping move construction and move assignment transfer ownership
 
 	R2RMLMapping m2(std::move(m1));
 	REQUIRE(m2.serdEnvironment == originalEnv);
-	REQUIRE(m1.serdEnvironment == nullptr);
+	REQUIRE(m1.serdEnvironment == nullptr); // NOLINT(bugprone-use-after-move)
 	REQUIRE(m2.triplesMaps.size() == n);
 	REQUIRE(m1.triplesMaps.empty());
 
 	R2RMLMapping m3;
 	m3 = std::move(m2);
 	REQUIRE(m3.serdEnvironment == originalEnv);
-	REQUIRE(m2.serdEnvironment == nullptr);
+	REQUIRE(m2.serdEnvironment == nullptr); // NOLINT(bugprone-use-after-move)
 	REQUIRE(m3.triplesMaps.size() == n);
 
 	// Move-assigning a mapping into itself (through an aliased pointer so the
@@ -1155,7 +1155,7 @@ TEST_CASE("R2RMLMapping move assignment frees the target's existing Serd environ
 
 	target = std::move(source); // must serd_env_free target's old environment
 	REQUIRE(target.serdEnvironment == sourceEnv);
-	REQUIRE(source.serdEnvironment == nullptr);
+	REQUIRE(source.serdEnvironment == nullptr); // NOLINT(bugprone-use-after-move)
 	REQUIRE(target.triplesMaps.size() == 1);
 	REQUIRE(target.triplesMaps[0]->id.find("TriplesMap2") != std::string::npos);
 }
