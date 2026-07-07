@@ -157,7 +157,12 @@ set(R2RML_SOURCES
   src/r2rml/R2RMLParser.cpp
 )
 add_library(sql2rdf_r2rml STATIC ${R2RML_SOURCES})
-target_include_directories(sql2rdf_r2rml PUBLIC include ${CMAKE_CURRENT_SOURCE_DIR}/external/serd/include)
+add_library(sql2rdf::r2rml ALIAS sql2rdf_r2rml)
+target_include_directories(sql2rdf_r2rml PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/serd/include>
+  $<INSTALL_INTERFACE:include>
+)
 if(UNIX)
   target_link_libraries(sql2rdf_r2rml PUBLIC serd m)
 else()
@@ -169,7 +174,11 @@ endif()
 # stays free of the yaml-cpp dependency.
 # ----------------------------------------------------------------------------
 add_library(sql2rdf_yarrrml STATIC src/yarrrml/YARRRMLParser.cpp)
-target_include_directories(sql2rdf_yarrrml PUBLIC include)
+add_library(sql2rdf::yarrrml ALIAS sql2rdf_yarrrml)
+target_include_directories(sql2rdf_yarrrml PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
 target_link_libraries(sql2rdf_yarrrml PUBLIC sql2rdf_r2rml)
 target_link_libraries(sql2rdf_yarrrml PRIVATE yaml-cpp::yaml-cpp)
 
@@ -181,19 +190,25 @@ if(SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB))
 endif()
 
 # ----------------------------------------------------------------------------
-# serd dependency - build as a static library from source tree
+# serd dependency - build as a static library from source tree, unless a
+# consumer has already defined a `serd` target (e.g. via their own
+# find_package/FetchContent of serd) before pulling this project in, in
+# which case we reuse theirs instead of vendoring a second copy.
 # ----------------------------------------------------------------------------
-# grab all C source files from the git submodule
-file(GLOB SERD_C_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/external/serd/src/*.c")
-add_library(serd STATIC ${SERD_C_SOURCES})
-# Make sure the library is treated as C (not C++)
-set_target_properties(serd PROPERTIES LINKER_LANGUAGE C)
-# public include directory for users of the library
-target_include_directories(serd PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/external/serd/include
-)
-# Build as a static library (no shared/dll)
-target_compile_definitions(serd PUBLIC SERD_STATIC)
+if(NOT TARGET serd)
+  # grab all C source files from the git submodule
+  file(GLOB SERD_C_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/external/serd/src/*.c")
+  add_library(serd STATIC ${SERD_C_SOURCES})
+  # Make sure the library is treated as C (not C++)
+  set_target_properties(serd PROPERTIES LINKER_LANGUAGE C)
+  # public include directory for users of the library
+  target_include_directories(serd PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/serd/include>
+      $<INSTALL_INTERFACE:include>
+  )
+  # Build as a static library (no shared/dll)
+  target_compile_definitions(serd PUBLIC SERD_STATIC)
+endif()
 
 # link the serd static library into our executable (only when it was created)
 if(SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB))

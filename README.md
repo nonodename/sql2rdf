@@ -33,10 +33,12 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(sql2rdf)
 
-target_link_libraries(myapp PRIVATE sql2rdf_r2rml)   # or sql2rdf_yarrrml which will give you both that and r2rml
+target_link_libraries(myapp PRIVATE sql2rdf::r2rml)   # or sql2rdf::yarrrml which will give you both that and r2rml
 ```
 
-By default this gets you only `sql2rdf_r2rml`/`sql2rdf_yarrrml` (and their `serd`/`yaml-cpp` dependencies) — no `test_runner`, no `SQL2RDF++` CLI, no Catch2 fetch, and no DuckDB probing or fetch. The `format`/`format-check`/`tidy` dev-utility targets are also skipped, avoiding a target-name collision with any identically-named targets in the consuming project.
+By default this gets you only `sql2rdf_r2rml`/`sql2rdf_yarrrml` (exposed under the namespaced `sql2rdf::r2rml`/`sql2rdf::yarrrml` ALIAS targets, plus their `serd`/`yaml-cpp` dependencies) — no `test_runner`, no `SQL2RDF++` CLI, no Catch2 fetch, and no DuckDB probing or fetch. The `format`/`format-check`/`tidy` dev-utility targets are also skipped, avoiding a target-name collision with any identically-named targets in the consuming project.
+
+If your own project already defines a `serd` target (e.g. from its own `FetchContent`/`find_package` of Serd), sql2rdf will reuse it instead of vendoring a second copy — just make sure that target exists before `FetchContent_MakeAvailable(sql2rdf)` runs.
 
 If you do want sql2rdf's tests or CLI built as part of your own build, set the corresponding option to `ON` *before* `FetchContent_MakeAvailable`:
 
