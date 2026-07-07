@@ -12,13 +12,40 @@ The project is structured as a reusable library plus a thin CLI application:
 |--------|------|-------------------|-------------|
 | `sql2rdf_r2rml` | static library | none | Core R2RML implementation. Links only [Serd](https://drobilla.net/software/serd/) (embedded). Suitable for use in other projects, including a DuckDB extension. |
 | `sql2rdf_yarrrml` | static library | none | YARRRML → R2RML translator. Publicly links `sql2rdf_r2rml` and privately links [yaml-cpp](https://github.com/jbeder/yaml-cpp) (fetched via CMake `FetchContent`), so consumers of `sql2rdf_r2rml` alone stay free of the YAML dependency. |
-| `SQL2RDF++` | executable | required | CLI application. Compiles the DuckDB adapter (`DuckDBConnection`) and links the system or embedded DuckDB library. |
-| `test_runner` | executable | none | Test suite using [Catch2](https://github.com/catchorg/Catch2). All tests run against a mock SQL backend — no DuckDB required. |
-| `format` | utility | none | Apply `clang-format` to all project C++ sources in-place. |
-| `format-check` | utility | none | Check formatting with `clang-format --dry-run --Werror`; exits non-zero if any file would change. Used in CI. |
-| `tidy` | utility | none | Run `clang-tidy` static analysis using `.clang-tidy`. Builds `sql2rdf_r2rml` first to ensure a fresh compilation database. |
+| `SQL2RDF++` | executable | required | CLI application. Compiles the DuckDB adapter (`DuckDBConnection`) and links the system or embedded DuckDB library. Gated by `SQL2RDF_BUILD_CLI` (default: ON when building standalone, OFF when consumed via `FetchContent`). |
+| `test_runner` | executable | none | Test suite using [Catch2](https://github.com/catchorg/Catch2). All tests run against a mock SQL backend — no DuckDB required. Gated by `SQL2RDF_BUILD_TESTS` (default: ON when building standalone, OFF when consumed via `FetchContent`). |
+| `format` | utility | none | Apply `clang-format` to all project C++ sources in-place. Only defined when building standalone. |
+| `format-check` | utility | none | Check formatting with `clang-format --dry-run --Werror`; exits non-zero if any file would change. Used in CI. Only defined when building standalone. |
+| `tidy` | utility | none | Run `clang-tidy` static analysis using `.clang-tidy`. Builds `sql2rdf_r2rml` first to ensure a fresh compilation database. Only defined when building standalone. |
 
 The [Serd](https://drobilla.net/software/serd/) RDF syntax library is included as a git submodule under `external/serd` and compiled from source into the `sql2rdf_r2rml` library.
+
+## Consuming via FetchContent
+
+Downstream CMake projects can pull in the library targets directly:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(
+  sql2rdf
+  GIT_REPOSITORY https://github.com/nonodename/sql2rdf.git
+  GIT_TAG        <tag-or-commit>
+)
+FetchContent_MakeAvailable(sql2rdf)
+
+target_link_libraries(myapp PRIVATE sql2rdf_r2rml)   # or sql2rdf_yarrrml which will give you both that and r2rml
+```
+
+By default this gets you only `sql2rdf_r2rml`/`sql2rdf_yarrrml` (and their `serd`/`yaml-cpp` dependencies) — no `test_runner`, no `SQL2RDF++` CLI, no Catch2 fetch, and no DuckDB probing or fetch. The `format`/`format-check`/`tidy` dev-utility targets are also skipped, avoiding a target-name collision with any identically-named targets in the consuming project.
+
+If you do want sql2rdf's tests or CLI built as part of your own build, set the corresponding option to `ON` *before* `FetchContent_MakeAvailable`:
+
+```cmake
+set(SQL2RDF_BUILD_TESTS ON CACHE BOOL "" FORCE)
+set(SQL2RDF_BUILD_CLI ON CACHE BOOL "" FORCE)
+```
+
+Installed `find_package()` consumption is not supported — FetchContent/`add_subdirectory`-style source consumption is the only supported integration path.
 
 ## Building
 
@@ -51,6 +78,8 @@ cmake -B build -G Ninja
 cmake --build build
 ```
 
+Standalone builds get the CLI and test suite by default. Pass `-DSQL2RDF_BUILD_TESTS=OFF` and/or `-DSQL2RDF_BUILD_CLI=OFF` to suppress either even in a standalone checkout (see [Consuming via FetchContent](#consuming-via-fetchcontent) for the downstream-consumer defaults).
+
 ### Code quality
 
 Requires `clang-format` and `clang-tidy` on `PATH` (e.g. `brew install llvm` or `apt install clang-format clang-tidy`):
@@ -73,6 +102,8 @@ To build DuckDB from source instead, pass `-DUSE_EMBEDDED_DUCKDB=ON` at configur
 ```sh
 cmake -B build -DUSE_EMBEDDED_DUCKDB=ON
 ```
+
+When embedding DuckDB, its own shell/CLI and unittest targets are disabled (`BUILD_SHELL`/`BUILD_UNITTESTS` forced `OFF`) so embedding DuckDB doesn't also pull in DuckDB's own test suite or shell binary.
 
 See the GitHub Actions workflow for the exact install steps used in CI for each platform.
 
