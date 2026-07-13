@@ -51,7 +51,7 @@ Installed `find_package()` consumption is not supported — FetchContent/`add_su
 
 ## Building
 
-**Requires a C++14-compliant compiler** (GCC 5+, Clang 3.4+, MSVC 2015+).
+**Requires a C++11-compliant compiler** (GCC 5+, Clang 3.4+, MSVC 2015+).
 
 To build the extension, first clone this repo. Then in the repo base locally run:
 
