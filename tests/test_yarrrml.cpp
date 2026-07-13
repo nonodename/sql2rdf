@@ -361,6 +361,40 @@ TEST_CASE("translateToTurtle - 'a' predicate maps to rdf:type via subjectMap rr:
 	REQUIRE(ttl.find("rr:class ex:Employee") != std::string::npos);
 }
 
+TEST_CASE("translateToTurtle - CURIE prefix directly abutting a column ref (no separator text)") {
+	YARRRMLParser parser;
+	std::string yaml = "prefixes:\n"
+	                   "  ex: http://example.com/ns#\n"
+	                   "mappings:\n"
+	                   "  employee:\n"
+	                   "    sources:\n"
+	                   "      - table: EMP\n"
+	                   "    s: http://x/$(EMPNO)\n"
+	                   "    po:\n"
+	                   "      - [ex:manager, ex:$(MGR)]\n";
+	std::string ttl = parser.translateToTurtle(yaml);
+	REQUIRE(ttl.find("rr:template \"http://example.com/ns#{MGR}\"") != std::string::npos);
+}
+
+TEST_CASE("translateToTurtle - CURIE prefix in a template subject/object is expanded to the full IRI") {
+	YARRRMLParser parser;
+	std::string yaml = "prefixes:\n"
+	                   "  ex: http://example.com/ns#\n"
+	                   "mappings:\n"
+	                   "  employee:\n"
+	                   "    sources:\n"
+	                   "      - table: EMP\n"
+	                   "    s: ex:employee/$(EMPNO)\n"
+	                   "    po:\n"
+	                   "      - [ex:manager, ex:employee/$(MGR)]\n";
+	std::string ttl = parser.translateToTurtle(yaml);
+	REQUIRE(ttl.find("rr:template \"http://example.com/ns#employee/{EMPNO}\"") != std::string::npos);
+	REQUIRE(ttl.find("rr:template \"http://example.com/ns#employee/{MGR}\"") != std::string::npos);
+	// The unexpanded CURIE form must not appear anywhere in the generated template text.
+	REQUIRE(ttl.find("\"ex:employee/{EMPNO}\"") == std::string::npos);
+	REQUIRE(ttl.find("\"ex:employee/{MGR}\"") == std::string::npos);
+}
+
 TEST_CASE("translateToTurtle - throws std::runtime_error on invalid YAML syntax") {
 	YARRRMLParser parser;
 	std::string yaml = "mappings:\n  m1:\n    s: [unbalanced\n";
@@ -462,6 +496,24 @@ TEST_CASE("YARRRML Example 4 - EMP2DEPT table with template subject and template
 	REQUIRE(mapping.isValid());
 }
 
+TEST_CASE("YARRRML CURIE-prefixed templates - subject and object templates expand the prefix") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "prefixed_templates.yml");
+
+	REQUIRE(mapping.triplesMaps.size() == 1);
+	TriplesMap *tm = findById(mapping, "employee");
+	REQUIRE(tm != nullptr);
+
+	REQUIRE(tm->subjectMap != nullptr);
+
+	REQUIRE(tm->predicateObjectMaps.size() == 1);
+	auto *obj = dynamic_cast<TemplateTermMap *>(tm->predicateObjectMaps[0]->objectMaps[0].get());
+	REQUIRE(obj != nullptr);
+	REQUIRE(obj->templateString == "http://example.com/ns#employee/{MGR}");
+
+	REQUIRE(mapping.isValid());
+}
+
 TEST_CASE("YARRRML Example 5 - CASE SQL view with role template object") {
 	YARRRMLParser parser;
 	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "example5.yml");
@@ -534,6 +586,24 @@ TEST_CASE("YARRRML processDatabase Example1 - EMP table produces rdf:type and na
 	REQUIRE(out.find("<http://example.com/ns#Employee>") != std::string::npos);
 	REQUIRE(out.find("<http://example.com/ns#name>") != std::string::npos);
 	REQUIRE(out.find("\"SMITH\"") != std::string::npos);
+}
+
+TEST_CASE("YARRRML processDatabase - CURIE-prefixed subject/object templates expand to full IRIs") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "prefixed_templates.yml");
+	REQUIRE(mapping.isValid());
+
+	MockSQLConnection conn;
+	conn.addResult("EMP", {makeRow({{"EMPNO", StringSQLValue(std::string("7369"))},
+	                                {"MGR", StringSQLValue(std::string("7902"))}})});
+
+	std::string out = runProcessDatabase(mapping, conn);
+
+	REQUIRE(out.find("<http://example.com/ns#employee/7369>") != std::string::npos);
+	const std::string managerLink = "<http://example.com/ns#employee/7369> "
+	                                "<http://example.com/ns#manager> "
+	                                "<http://example.com/ns#employee/7902>";
+	REQUIRE(out.find(managerLink) != std::string::npos);
 }
 
 TEST_CASE("YARRRML processDatabase emp+dept join - employee links to department IRI") {

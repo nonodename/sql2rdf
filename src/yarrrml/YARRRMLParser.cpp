@@ -152,7 +152,7 @@ bool looksAbsoluteIri(const std::string &v) {
 	return p != std::string::npos && p > 0;
 }
 
-bool looksCurie(const std::string &v, const std::set<std::string> &prefixes) {
+bool looksCurie(const std::string &v, const std::map<std::string, std::string> &prefixes) {
 	std::size_t colon = v.find(':');
 	if (colon == std::string::npos) {
 		return false;
@@ -165,7 +165,7 @@ bool looksCurie(const std::string &v, const std::set<std::string> &prefixes) {
 
 /// Render `v` as a Turtle IRI term: a bare CURIE token when it uses a known
 /// prefix, otherwise an absolute (or best-effort relative) <IRI>.
-std::string iriToken(const std::string &v, const std::set<std::string> &prefixes) {
+std::string iriToken(const std::string &v, const std::map<std::string, std::string> &prefixes) {
 	if (looksAbsoluteIri(v)) {
 		return "<" + v + ">";
 	}
@@ -173,6 +173,26 @@ std::string iriToken(const std::string &v, const std::set<std::string> &prefixes
 		return v;
 	}
 	return "<" + v + ">";
+}
+
+/// If `text` begins with "prefix:" for a known prefix (and isn't already an
+/// absolute "scheme://..." IRI), replace the prefix with its full namespace
+/// IRI. Needed for rr:template literal text: unlike a bare CURIE term, text
+/// embedded in a Turtle string literal is never resolved by the downstream
+/// Turtle parser's own prefix mechanism, so it must be expanded here.
+std::string expandLeadingCurie(const std::string &text, const std::map<std::string, std::string> &prefixes) {
+	std::size_t colon = text.find(':');
+	if (colon == std::string::npos) {
+		return text;
+	}
+	if (text.compare(colon + 1, 2, "//") == 0) {
+		return text; // absolute IRI (scheme://...), not a CURIE
+	}
+	auto it = prefixes.find(text.substr(0, colon));
+	if (it == prefixes.end()) {
+		return text;
+	}
+	return it->second + text.substr(colon + 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +265,7 @@ struct VSpec {
 /// becomes a literal constant (objects) or is always treated as an IRI
 /// (subjects/predicates, which cannot be literals).
 VSpec classifyValue(const std::string &rawIn, bool allowIriSuffix, bool literalsAllowed,
-                    const std::set<std::string> &prefixes) {
+                    const std::map<std::string, std::string> &prefixes) {
 	std::string raw = rawIn;
 	bool forceIri = false;
 	if (allowIriSuffix) {
@@ -276,14 +296,17 @@ VSpec classifyValue(const std::string &rawIn, bool allowIriSuffix, bool literals
 
 	if (hasColumn) {
 		std::string tmpl;
+		bool isFirstToken = true;
 		for (const Token &t : toks) {
 			if (t.isColumn) {
 				tmpl += '{';
 				tmpl += t.text;
 				tmpl += '}';
 			} else {
-				tmpl += escapeTemplateLiteral(t.text);
+				std::string litText = isFirstToken ? expandLeadingCurie(t.text, prefixes) : t.text;
+				tmpl += escapeTemplateLiteral(litText);
 			}
+			isFirstToken = false;
 		}
 		VSpec vs;
 		vs.kind = VKind::Template;
@@ -309,7 +332,7 @@ VSpec classifyValue(const std::string &rawIn, bool allowIriSuffix, bool literals
 /// Render a VSpec as an rr:objectMap (or rr:predicateMap-compatible) blank
 /// node fragment, e.g. "[ rr:column \"COL\" ]".  `extra` is appended inside
 /// the brackets (used for rr:datatype / rr:language / rr:termType).
-std::string valueSpecToMapFragment(const VSpec &vs, const std::set<std::string> &prefixes, const std::string &extra) {
+std::string valueSpecToMapFragment(const VSpec &vs, const std::map<std::string, std::string> &prefixes, const std::string &extra) {
 	switch (vs.kind) {
 	case VKind::Column: {
 		std::string s = "[ rr:column " + quoted(vs.text);
@@ -332,7 +355,7 @@ std::string valueSpecToMapFragment(const VSpec &vs, const std::set<std::string> 
 
 /// Translate a po shortcut's third array element ("xsd:integer" or "en~lang")
 /// into an "; rr:datatype ..." or "; rr:language ..." suffix.
-std::string buildDatatypeOrLangFragment(const std::string &raw, const std::set<std::string> &prefixes) {
+std::string buildDatatypeOrLangFragment(const std::string &raw, const std::map<std::string, std::string> &prefixes) {
 	static const std::string suf = "~lang";
 	if (raw.size() > suf.size() && raw.compare(raw.size() - suf.size(), suf.size(), suf) == 0) {
 		return "; rr:language " + quoted(raw.substr(0, raw.size() - suf.size()));
@@ -356,7 +379,7 @@ std::string extractColumnRef(const YAML::Node &param) {
 
 /// Translate a predicate value ("a", a CURIE/IRI, or a $(...) template) into
 /// an "rr:predicate ..." or "rr:predicateMap [...]" fragment.
-std::string buildPredicateFragment(const std::string &raw, const std::set<std::string> &prefixes) {
+std::string buildPredicateFragment(const std::string &raw, const std::map<std::string, std::string> &prefixes) {
 	if (raw == "a") {
 		return "rr:predicate rdf:type";
 	}
@@ -375,7 +398,7 @@ std::string buildPredicateFragment(const std::string &raw, const std::set<std::s
 /// Translate one object-list entry (a plain scalar, a [value, dtOrLang]
 /// array, a {value:/v:, datatype:/language:} map, or a {mapping: ...,
 /// condition(s): ...} mapping reference) into an rr:objectMap fragment.
-std::string buildObjectFragment(const YAML::Node &objNode, const std::set<std::string> &prefixes,
+std::string buildObjectFragment(const YAML::Node &objNode, const std::map<std::string, std::string> &prefixes,
                                 const std::string &extraTtl, const std::string &mappingName,
                                 std::vector<std::string> &warnings) {
 	if (objNode.IsScalar()) {
@@ -464,7 +487,7 @@ struct PoResult {
 };
 
 void processPredObjPair(const YAML::Node &predNode, const YAML::Node &objNode, const std::string &extraTtl,
-                        const std::string &mappingName, const std::set<std::string> &prefixes,
+                        const std::string &mappingName, const std::map<std::string, std::string> &prefixes,
                         std::vector<std::string> &warnings, PoResult &res) {
 	std::vector<std::string> preds = flattenScalarList(predNode);
 	std::vector<YAML::Node> objs = flattenList(objNode);
@@ -496,7 +519,7 @@ void processPredObjPair(const YAML::Node &predNode, const YAML::Node &objNode, c
 }
 
 PoResult buildPredicateObjectMaps(const YAML::Node &mNode, const std::string &mappingName,
-                                  const std::set<std::string> &prefixes, std::vector<std::string> &warnings) {
+                                  const std::map<std::string, std::string> &prefixes, std::vector<std::string> &warnings) {
 	PoResult res;
 	YAML::Node poNode = firstOf(mNode, {"po", "predicateobjects", "predicateObjects"});
 	if (!poNode) {
@@ -587,7 +610,7 @@ std::string buildLogicalTable(const YAML::Node &mNode, const std::map<std::strin
 }
 
 std::string buildSubjectMap(const YAML::Node &mNode, const std::vector<std::string> &classIris,
-                            const std::string &mappingName, const std::set<std::string> &prefixes,
+                            const std::string &mappingName, const std::map<std::string, std::string> &prefixes,
                             std::vector<std::string> &warnings) {
 	std::string valueFrag;
 	YAML::Node subjNode = firstOf(mNode, {"subjects", "subject", "s"});
@@ -648,7 +671,7 @@ const std::set<std::string> &mappingKnownKeys() {
 }
 
 void translateOneMapping(std::ostream &out, const std::string &name, const YAML::Node &mNode,
-                         const std::map<std::string, YAML::Node> &namedSources, const std::set<std::string> &prefixes,
+                         const std::map<std::string, YAML::Node> &namedSources, const std::map<std::string, std::string> &prefixes,
                          std::vector<std::string> &warnings) {
 	std::string logicalTableFrag = buildLogicalTable(mNode, namedSources, name, warnings);
 	PoResult poResult = buildPredicateObjectMaps(mNode, name, prefixes, warnings);
@@ -706,7 +729,12 @@ std::string translateToTurtleImpl(const std::string &yamlText, std::vector<std::
 		throw std::runtime_error("YARRRML parser: missing required 'mappings' key");
 	}
 
-	std::set<std::string> knownPrefixes = {"rr", "rdf", "rdfs", "xsd"};
+	std::map<std::string, std::string> knownPrefixes = {
+	    {"rr", "http://www.w3.org/ns/r2rml#"},
+	    {"rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"},
+	    {"rdfs", "http://www.w3.org/2000/01/rdf-schema#"},
+	    {"xsd", "http://www.w3.org/2001/XMLSchema#"},
+	};
 	std::vector<std::pair<std::string, std::string>> userPrefixes;
 
 	YAML::Node prefixesNode = root["prefixes"];
@@ -715,7 +743,7 @@ std::string translateToTurtleImpl(const std::string &yamlText, std::vector<std::
 			std::string name = it->first.as<std::string>();
 			std::string uri = it->second.as<std::string>();
 			userPrefixes.emplace_back(name, uri);
-			knownPrefixes.insert(name);
+			knownPrefixes[name] = uri;
 		}
 	}
 

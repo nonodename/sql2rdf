@@ -1,0 +1,10 @@
+prefixes:
+  ex: http://example.com/ns#
+
+mappings:
+  employee:
+    sources:
+      - table: EMP
+    s: ex:employee/$(EMPNO)
+    po:
+      - [ex:manager, ex:employee/$(MGR)]
