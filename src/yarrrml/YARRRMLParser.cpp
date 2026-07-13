@@ -332,7 +332,8 @@ VSpec classifyValue(const std::string &rawIn, bool allowIriSuffix, bool literals
 /// Render a VSpec as an rr:objectMap (or rr:predicateMap-compatible) blank
 /// node fragment, e.g. "[ rr:column \"COL\" ]".  `extra` is appended inside
 /// the brackets (used for rr:datatype / rr:language / rr:termType).
-std::string valueSpecToMapFragment(const VSpec &vs, const std::map<std::string, std::string> &prefixes, const std::string &extra) {
+std::string valueSpecToMapFragment(const VSpec &vs, const std::map<std::string, std::string> &prefixes,
+                                   const std::string &extra) {
 	switch (vs.kind) {
 	case VKind::Column: {
 		std::string s = "[ rr:column " + quoted(vs.text);
@@ -519,7 +520,8 @@ void processPredObjPair(const YAML::Node &predNode, const YAML::Node &objNode, c
 }
 
 PoResult buildPredicateObjectMaps(const YAML::Node &mNode, const std::string &mappingName,
-                                  const std::map<std::string, std::string> &prefixes, std::vector<std::string> &warnings) {
+                                  const std::map<std::string, std::string> &prefixes,
+                                  std::vector<std::string> &warnings) {
 	PoResult res;
 	YAML::Node poNode = firstOf(mNode, {"po", "predicateobjects", "predicateObjects"});
 	if (!poNode) {
@@ -671,8 +673,8 @@ const std::set<std::string> &mappingKnownKeys() {
 }
 
 void translateOneMapping(std::ostream &out, const std::string &name, const YAML::Node &mNode,
-                         const std::map<std::string, YAML::Node> &namedSources, const std::map<std::string, std::string> &prefixes,
-                         std::vector<std::string> &warnings) {
+                         const std::map<std::string, YAML::Node> &namedSources,
+                         const std::map<std::string, std::string> &prefixes, std::vector<std::string> &warnings) {
 	std::string logicalTableFrag = buildLogicalTable(mNode, namedSources, name, warnings);
 	PoResult poResult = buildPredicateObjectMaps(mNode, name, prefixes, warnings);
 	std::string subjectFrag = buildSubjectMap(mNode, poResult.classIris, name, prefixes, warnings);
