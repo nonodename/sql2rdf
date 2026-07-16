@@ -21,6 +21,7 @@ jobs:
         submodules: 'true'
 
     - name: Verify submodule checksums
+      shell: bash
       run: |
         cd external/serd
         ACTUAL_COMMIT=$(git rev-parse HEAD)
@@ -112,6 +113,7 @@ jobs:
         submodules: 'true'
 
     - name: Verify submodule checksums
+      shell: bash
       run: |
         cd external/serd
         ACTUAL_COMMIT=$(git rev-parse HEAD)
