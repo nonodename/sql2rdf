@@ -20,6 +20,19 @@ jobs:
         fetch-depth: 0
         submodules: 'true'
 
+    - name: Verify submodule checksums
+      run: |
+        cd external/serd
+        ACTUAL_COMMIT=$(git rev-parse HEAD)
+        EXPECTED_COMMIT="24474530f8acef5c6cdcefa00b0049367e5d3079"
+        if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
+          echo "Submodule commit hash mismatch!"
+          echo "Expected: $EXPECTED_COMMIT"
+          echo "Actual:   $ACTUAL_COMMIT"
+          exit 1
+        fi
+        echo "Serd submodule verified (commit: $ACTUAL_COMMIT)"
+
     - name: Install tools
       run: |
         sudo apt-get update -qq
@@ -97,6 +110,19 @@ jobs:
       with:
         fetch-depth: 0
         submodules: 'true'
+
+    - name: Verify submodule checksums
+      run: |
+        cd external/serd
+        ACTUAL_COMMIT=$(git rev-parse HEAD)
+        EXPECTED_COMMIT="24474530f8acef5c6cdcefa00b0049367e5d3079"
+        if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
+          echo "Submodule commit hash mismatch!"
+          echo "Expected: $EXPECTED_COMMIT"
+          echo "Actual:   $ACTUAL_COMMIT"
+          exit 1
+        fi
+        echo "Serd submodule verified (commit: $ACTUAL_COMMIT)"
 
     - name: Set reusable strings
       # Turn repeated input strings (such as the build output directory) into step outputs. These step outputs can be used throughout the workflow file.

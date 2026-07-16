@@ -20,6 +20,31 @@ The project is structured as a reusable library plus a thin CLI application:
 
 The [Serd](https://drobilla.net/software/serd/) RDF syntax library is included as a git submodule under `external/serd` and compiled from source into the `sql2rdf_r2rml` library.
 
+## Dependency Verification
+
+This project uses SHA256 checksum verification for all external dependencies to ensure build reproducibility and security:
+
+- **FetchContent dependencies** (Catch2, yaml-cpp, DuckDB): CMake's built-in `URL_HASH` parameter verifies the downloaded content matches expected SHA256 hashes. The build will fail if any dependency's content doesn't match.
+- **Git submodules** (Serd): A custom CMake verification function checks that the Serd submodule's commit hash matches the expected value. The build will fail if the submodule is at an unexpected commit.
+
+Checksums are stored in `cmake/Dependencies.cmake`. The GitHub Actions workflow also verifies the Serd submodule commit hash before building.
+
+### Updating Checksums
+
+When updating a dependency version, you must update the corresponding checksum:
+
+1. **FetchContent dependencies**: Download the new release tarball and compute its SHA256:
+   ```sh
+   curl -L https://github.com/user/repo/archive/refs/tags/vX.Y.Z.tar.gz | shasum -a 256
+   ```
+   Update the corresponding variable in `cmake/Dependencies.cmake`.
+
+2. **Git submodules**: After updating the submodule, get the new commit hash:
+   ```sh
+   git -C external/serd rev-parse HEAD
+   ```
+   Update `SERD_EXPECTED_COMMIT` in `cmake/Dependencies.cmake` and the GitHub Actions workflow.
+
 ## Consuming via FetchContent
 
 Downstream CMake projects can pull in the library targets directly:

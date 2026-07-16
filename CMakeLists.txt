@@ -20,11 +20,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(FetchContent)
 
+# Include dependency checksums and verification
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Dependencies.cmake)
+
 if(SQL2RDF_BUILD_TESTS)
   FetchContent_Declare(
     Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
     GIT_TAG v3.15.1 # or latest release
+    URL_HASH SHA256=${CATCH2_SHA256}
   )
 
   FetchContent_MakeAvailable(Catch2)
@@ -45,6 +49,7 @@ FetchContent_Declare(
   yaml-cpp
   GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
   GIT_TAG yaml-cpp-0.9.0
+  URL_HASH SHA256=${YAML_CPP_SHA256}
 )
 
 FetchContent_MakeAvailable(yaml-cpp)
@@ -71,6 +76,7 @@ if(SQL2RDF_BUILD_CLI)
       duckdb
       GIT_REPOSITORY https://github.com/duckdb/duckdb.git
       GIT_TAG        v1.4.4 # Use the latest stable tag
+      URL_HASH SHA256=${DUCKDB_SHA256}
     )
     FetchContent_GetProperties(duckdb)
     if(NOT duckdb_POPULATED)
@@ -196,6 +202,9 @@ endif()
 # which case we reuse theirs instead of vendoring a second copy.
 # ----------------------------------------------------------------------------
 if(NOT TARGET serd)
+  # Verify Serd submodule commit hash
+  verify_submodule_commit("${CMAKE_CURRENT_SOURCE_DIR}/external/serd" "${SERD_EXPECTED_COMMIT}")
+  
   # grab all C source files from the git submodule
   file(GLOB SERD_C_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/external/serd/src/*.c")
   add_library(serd STATIC ${SERD_C_SOURCES})
