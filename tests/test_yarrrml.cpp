@@ -25,11 +25,15 @@
 #ifndef SOURCE_YARRRML_DIR
 #define SOURCE_YARRRML_DIR ""
 #endif
+#ifndef SOURCE_R2RML_DIR
+#define SOURCE_R2RML_DIR ""
+#endif
 
 #include "r2rml/BaseTableOrView.h"
 #include "r2rml/ColumnTermMap.h"
 #include "r2rml/ConstantTermMap.h"
 #include "r2rml/JoinCondition.h"
+#include "r2rml/MappingParser.h"
 #include "r2rml/PredicateObjectMap.h"
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/R2RMLParser.h"
@@ -756,4 +760,30 @@ TEST_CASE("YARRRML parse - no errors on a fully valid mapping") {
 	YARRRMLParser parser;
 	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "example1.yml");
 	REQUIRE(mapping.parseErrors.empty());
+}
+
+TEST_CASE("MappingParser::create - .ttl path yields an R2RMLParser") {
+	auto parser = r2rml::MappingParser::create(SOURCE_R2RML_DIR "example1.ttl");
+	REQUIRE(dynamic_cast<R2RMLParser *>(parser.get()) != nullptr);
+	REQUIRE(dynamic_cast<YARRRMLParser *>(parser.get()) == nullptr);
+
+	R2RMLMapping mapping = parser->parse(SOURCE_R2RML_DIR "example1.ttl");
+	REQUIRE(mapping.isValid());
+}
+
+TEST_CASE("MappingParser::create - .yml/.yaml/.yarrrml paths yield a YARRRMLParser") {
+	for (const char *fixture : {"example1.yml"}) {
+		auto parser = r2rml::MappingParser::create(std::string(SOURCE_YARRRML_DIR) + fixture);
+		REQUIRE(dynamic_cast<YARRRMLParser *>(parser.get()) != nullptr);
+	}
+
+	for (const std::string &path : {std::string("mapping.yaml"), std::string("mapping.yarrrml")}) {
+		auto parser = r2rml::MappingParser::create(path);
+		REQUIRE(dynamic_cast<YARRRMLParser *>(parser.get()) != nullptr);
+	}
+}
+
+TEST_CASE("MappingParser::create - unrecognized extension throws std::runtime_error") {
+	REQUIRE_THROWS_AS(r2rml::MappingParser::create("mapping.json"), std::runtime_error);
+	REQUIRE_THROWS_AS(r2rml::MappingParser::create("mapping"), std::runtime_error);
 }

@@ -179,7 +179,7 @@ endif()
 # YARRRML support - a separate static library so that sql2rdf_r2rml itself
 # stays free of the yaml-cpp dependency.
 # ----------------------------------------------------------------------------
-add_library(sql2rdf_yarrrml STATIC src/yarrrml/YARRRMLParser.cpp)
+add_library(sql2rdf_yarrrml STATIC src/yarrrml/YARRRMLParser.cpp src/yarrrml/MappingParserFactory.cpp)
 add_library(sql2rdf::yarrrml ALIAS sql2rdf_yarrrml)
 target_include_directories(sql2rdf_yarrrml PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

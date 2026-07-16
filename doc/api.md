@@ -45,17 +45,42 @@ fclose(out);
 
 ## Parsing
 
+### `MappingParser`
+
+Abstract base class implemented by every mapping-format parser (`R2RMLParser` for Turtle, `YARRRMLParser` for YARRRML YAML). Both translate an on-disk mapping document into the same `R2RMLMapping` object model.
+
+```cpp
+#include "r2rml/MappingParser.h"
+
+class MappingParser {
+public:
+    virtual ~MappingParser() = default;
+    virtual R2RMLMapping parse(const std::string& mappingFilePath, bool ignoreNonFatalErrors = true) = 0;
+
+    static std::unique_ptr<MappingParser> create(const std::string& mappingFilePath);
+};
+```
+
+| Method | Description |
+|--------|-------------|
+| `parse(path, ignoreNonFatalErrors)` | Parses the mapping document at `path` and returns a populated `R2RMLMapping`. |
+| `create(path)` (static) | Instantiates the concrete parser appropriate for `path`'s extension: `.ttl` → `R2RMLParser`, `.yml`/`.yaml`/`.yarrrml` → `YARRRMLParser`. Throws `std::runtime_error` if no known format matches. |
+
+`MappingParser::create` is defined in `src/yarrrml/MappingParserFactory.cpp`, part of the `sql2rdf_yarrrml` library, not `sql2rdf_r2rml` — the core library must never depend on yaml-cpp/YARRRML (see layering rules in `CLAUDE.md`). Calling `create()` therefore requires linking `sql2rdf_yarrrml`, even if the resolved format turns out to be R2RML; consumers that only link `sql2rdf_r2rml` and never touch YARRRML should construct `R2RMLParser` directly instead.
+
+`TripleCollector`, the shared triple-gathering helper used internally by both parsers, is also declared in `r2rml/MappingParser.h` (moved out of `r2rml/R2RMLParser.h`).
+
 ### `R2RMLParser`
 
-Parses a Turtle (`.ttl`) R2RML mapping file into the C++ object model.
+Parses a Turtle (`.ttl`) R2RML mapping file into the C++ object model. Inherits `MappingParser`.
 
 ```cpp
 #include "r2rml/R2RMLParser.h"
 
-class R2RMLParser {
+class R2RMLParser : public MappingParser {
 public:
     R2RMLParser();
-    R2RMLMapping parse(const std::string& mappingFilePath);
+    R2RMLMapping parse(const std::string& mappingFilePath, bool ignoreNonFatalErrors = true) override;
 };
 ```
 

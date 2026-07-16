@@ -9,8 +9,8 @@
 #include <serd/serd.h>
 
 #include "DuckDBConnection.h"
+#include "r2rml/MappingParser.h"
 #include "r2rml/R2RMLMapping.h"
-#include "r2rml/R2RMLParser.h"
 #include "r2rml/TriplesMap.h"
 #include "yarrrml/YARRRMLParser.h"
 
@@ -98,17 +98,12 @@ int main(int argc, char *argv[]) {
 	// Parse and validate the mapping (R2RML Turtle or YARRRML YAML, chosen by
 	// file extension unless -y forces YARRRML).
 	// -------------------------------------------------------------------------
-	bool useYarrrml = forceYarrrml || yarrrml::YARRRMLParser::hasYarrrmlExtension(mappingFile);
-
 	r2rml::R2RMLMapping mapping;
 	try {
-		if (useYarrrml) {
-			yarrrml::YARRRMLParser parser;
-			mapping = parser.parse(mappingFile);
-		} else {
-			r2rml::R2RMLParser parser;
-			mapping = parser.parse(mappingFile);
-		}
+		std::unique_ptr<r2rml::MappingParser> parser =
+		    forceYarrrml ? std::unique_ptr<r2rml::MappingParser>(new yarrrml::YARRRMLParser())
+		                 : r2rml::MappingParser::create(mappingFile);
+		mapping = parser->parse(mappingFile);
 	} catch (const std::exception &e) {
 		std::cerr << "Error: failed to parse mapping '" << mappingFile << "': " << e.what() << "\n";
 		return 1;

@@ -2,6 +2,8 @@
 
 #include <string>
 
+#include "r2rml/MappingParser.h"
+
 namespace r2rml {
 class R2RMLMapping;
 } // namespace r2rml
@@ -18,10 +20,10 @@ namespace yarrrml {
  * downstream engine behaviour (term-map generation, joins, datatypes, etc.)
  * is identical between R2RML and YARRRML mappings.
  */
-class YARRRMLParser {
+class YARRRMLParser : public r2rml::MappingParser {
 public:
 	YARRRMLParser() = default;
-	~YARRRMLParser() = default;
+	~YARRRMLParser() override = default;
 
 	/// Return true if `path`'s extension indicates a YARRRML (YAML) mapping file.
 	static bool hasYarrrmlExtension(const std::string &path);
@@ -40,7 +42,7 @@ public:
 	 * Fatal problems (unreadable file, YAML syntax error, missing `mappings`
 	 * key) always throw std::runtime_error, regardless of this flag.
 	 */
-	r2rml::R2RMLMapping parse(const std::string &yarrrmlFilePath, bool ignoreNonFatalErrors = true);
+	r2rml::R2RMLMapping parse(const std::string &yarrrmlFilePath, bool ignoreNonFatalErrors = true) override;
 };
 
 } // namespace yarrrml
