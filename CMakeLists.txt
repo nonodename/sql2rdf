@@ -262,8 +262,10 @@ if(SQL2RDF_IS_TOP_LEVEL)
 
   if(CLANG_TIDY_EXE)
     file(GLOB_RECURSE TIDY_SOURCES
-      "${CMAKE_CURRENT_SOURCE_DIR}/src/r2rml/*.cpp"
-      "${CMAKE_CURRENT_SOURCE_DIR}/include/r2rml/*.h"
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/yarrrml/*.cpp"
+      "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp"
     )
     add_custom_target(tidy

@@ -69,13 +69,13 @@ int main(int argc, char *argv[]) {
 				return 1;
 			}
 		} else if (argv[i][0] != '-') {
-			if (!mappingFile)
+			if (!mappingFile) {
 				mappingFile = argv[i];
-			else if (!databaseFile)
+			} else if (!databaseFile) {
 				databaseFile = argv[i];
-			else if (!outputFile)
+			} else if (!outputFile) {
 				outputFile = argv[i];
-			else {
+			} else {
 				std::cerr << "Error: unexpected argument '" << argv[i] << "'\n";
 				printHelp(argv[0]);
 				return 1;
