@@ -280,131 +280,60 @@ TEST_CASE("R2RML extension - rr:language end-to-end produces a language-tagged l
 }
 
 // ---------------------------------------------------------------------------
-// translateToTurtle - unit tests on the generated Turtle text
+// YARRRML translation edge cases - object-model assertions
+//
+// These used to assert on the intermediate Turtle text produced by the
+// (now removed) translateToTurtle(); since YARRRMLParser emits statements
+// directly, they assert on the parsed object model instead. This is in some
+// ways a stronger test: it proves literal values reach the model unchanged,
+// with no serialise/re-parse round trip in between to mask an escaping bug.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("translateToTurtle - table source produces rr:tableName") {
+TEST_CASE("YARRRML translation - literal value with embedded quotes/backslashes reaches the model verbatim") {
 	YARRRMLParser parser;
-	std::string yaml = "prefixes:\n"
-	                   "  ex: http://example.com/ns#\n"
-	                   "mappings:\n"
-	                   "  employee:\n"
-	                   "    sources:\n"
-	                   "      - table: EMP\n"
-	                   "    s: http://data.example.com/employee/$(EMPNO)\n"
-	                   "    po:\n"
-	                   "      - [ex:name, $(ENAME)]\n";
-	std::string ttl = parser.translateToTurtle(yaml);
-	REQUIRE(ttl.find("rr:tableName \"EMP\"") != std::string::npos);
-	REQUIRE(ttl.find("rr:template \"http://data.example.com/employee/{EMPNO}\"") != std::string::npos);
-	REQUIRE(ttl.find("@prefix ex: <http://example.com/ns#>") != std::string::npos);
-	REQUIRE(ttl.find("@prefix rr: <http://www.w3.org/ns/r2rml#>") != std::string::npos);
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "quoted_literal_value.yml");
+
+	TriplesMap *tm = findById(mapping, "employee");
+	REQUIRE(tm != nullptr);
+	REQUIRE(tm->predicateObjectMaps.size() == 1);
+	auto *cst = dynamic_cast<ConstantTermMap *>(tm->predicateObjectMaps[0]->objectMaps[0].get());
+	REQUIRE(cst != nullptr);
+	REQUIRE(nodeUri(cst->constantValue) == "the \"boss\" said \\hi\\");
 }
 
-TEST_CASE("translateToTurtle - escapes quotes inside literal values") {
+TEST_CASE("YARRRML translation - \\$( escape produces a literal $( in the model") {
 	YARRRMLParser parser;
-	std::string yaml = "prefixes:\n"
-	                   "  ex: http://example.com/ns#\n"
-	                   "mappings:\n"
-	                   "  employee:\n"
-	                   "    sources:\n"
-	                   "      - table: EMP\n"
-	                   "    s: http://data.example.com/employee/$(EMPNO)\n"
-	                   "    po:\n"
-	                   "      - [ex:nickname, \"the \\\"boss\\\"\"]\n";
-	std::string ttl = parser.translateToTurtle(yaml);
-	REQUIRE(ttl.find("\\\"boss\\\"") != std::string::npos);
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "dollar_escape.yml");
+
+	TriplesMap *tm = findById(mapping, "employee");
+	REQUIRE(tm != nullptr);
+	auto *cst = dynamic_cast<ConstantTermMap *>(tm->predicateObjectMaps[0]->objectMaps[0].get());
+	REQUIRE(cst != nullptr);
+	REQUIRE(nodeUri(cst->constantValue) == "total = $(x) + 1");
 }
 
-TEST_CASE("translateToTurtle - \\$( escape produces a literal $(") {
+TEST_CASE("YARRRML translation - multi-line SQL query with embedded quotes reaches the model verbatim") {
 	YARRRMLParser parser;
-	std::string yaml = "prefixes:\n"
-	                   "  ex: http://example.com/ns#\n"
-	                   "mappings:\n"
-	                   "  employee:\n"
-	                   "    sources:\n"
-	                   "      - table: EMP\n"
-	                   "    s: http://data.example.com/employee/$(EMPNO)\n"
-	                   "    po:\n"
-	                   "      - [ex:formula, 'total = \\$(x) + 1']\n";
-	std::string ttl = parser.translateToTurtle(yaml);
-	REQUIRE(ttl.find("total = $(x) + 1") != std::string::npos);
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "sql_query_escaping.yml");
+
+	TriplesMap *tm = findById(mapping, "department");
+	REQUIRE(tm != nullptr);
+	auto *view = dynamic_cast<R2RMLView *>(tm->logicalTable.get());
+	REQUIRE(view != nullptr);
+	REQUIRE(view->sqlQuery.find("DEPTNO, DNAME\nFROM DEPT") != std::string::npos);
+	REQUIRE(view->sqlQuery.find("BOSS \"TOP\"") != std::string::npos);
 }
 
-TEST_CASE("translateToTurtle - SQL query uses a triple-quoted string") {
+TEST_CASE("YARRRML translation - CURIE prefix directly abutting a column ref (no separator text)") {
 	YARRRMLParser parser;
-	std::string yaml = "prefixes:\n"
-	                   "  ex: http://example.com/ns#\n"
-	                   "mappings:\n"
-	                   "  department:\n"
-	                   "    sources:\n"
-	                   "      - query: \"SELECT DEPTNO FROM DEPT\"\n"
-	                   "    s: http://data.example.com/department/$(DEPTNO)\n"
-	                   "    po:\n"
-	                   "      - [ex:name, $(DEPTNO)]\n";
-	std::string ttl = parser.translateToTurtle(yaml);
-	REQUIRE(ttl.find("rr:sqlQuery \"\"\"SELECT DEPTNO FROM DEPT\"\"\"") != std::string::npos);
-}
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "curie_abuts_column.yml");
 
-TEST_CASE("translateToTurtle - 'a' predicate maps to rdf:type via subjectMap rr:class") {
-	YARRRMLParser parser;
-	std::string yaml = "prefixes:\n"
-	                   "  ex: http://example.com/ns#\n"
-	                   "mappings:\n"
-	                   "  employee:\n"
-	                   "    sources:\n"
-	                   "      - table: EMP\n"
-	                   "    s: http://data.example.com/employee/$(EMPNO)\n"
-	                   "    po:\n"
-	                   "      - [a, ex:Employee]\n";
-	std::string ttl = parser.translateToTurtle(yaml);
-	REQUIRE(ttl.find("rr:class ex:Employee") != std::string::npos);
-}
-
-TEST_CASE("translateToTurtle - CURIE prefix directly abutting a column ref (no separator text)") {
-	YARRRMLParser parser;
-	std::string yaml = "prefixes:\n"
-	                   "  ex: http://example.com/ns#\n"
-	                   "mappings:\n"
-	                   "  employee:\n"
-	                   "    sources:\n"
-	                   "      - table: EMP\n"
-	                   "    s: http://x/$(EMPNO)\n"
-	                   "    po:\n"
-	                   "      - [ex:manager, ex:$(MGR)]\n";
-	std::string ttl = parser.translateToTurtle(yaml);
-	REQUIRE(ttl.find("rr:template \"http://example.com/ns#{MGR}\"") != std::string::npos);
-}
-
-TEST_CASE("translateToTurtle - CURIE prefix in a template subject/object is expanded to the full IRI") {
-	YARRRMLParser parser;
-	std::string yaml = "prefixes:\n"
-	                   "  ex: http://example.com/ns#\n"
-	                   "mappings:\n"
-	                   "  employee:\n"
-	                   "    sources:\n"
-	                   "      - table: EMP\n"
-	                   "    s: ex:employee/$(EMPNO)\n"
-	                   "    po:\n"
-	                   "      - [ex:manager, ex:employee/$(MGR)]\n";
-	std::string ttl = parser.translateToTurtle(yaml);
-	REQUIRE(ttl.find("rr:template \"http://example.com/ns#employee/{EMPNO}\"") != std::string::npos);
-	REQUIRE(ttl.find("rr:template \"http://example.com/ns#employee/{MGR}\"") != std::string::npos);
-	// The unexpanded CURIE form must not appear anywhere in the generated template text.
-	REQUIRE(ttl.find("\"ex:employee/{EMPNO}\"") == std::string::npos);
-	REQUIRE(ttl.find("\"ex:employee/{MGR}\"") == std::string::npos);
-}
-
-TEST_CASE("translateToTurtle - throws std::runtime_error on invalid YAML syntax") {
-	YARRRMLParser parser;
-	std::string yaml = "mappings:\n  m1:\n    s: [unbalanced\n";
-	REQUIRE_THROWS_AS(parser.translateToTurtle(yaml), std::runtime_error);
-}
-
-TEST_CASE("translateToTurtle - throws std::runtime_error when 'mappings' key is missing") {
-	YARRRMLParser parser;
-	std::string yaml = "prefixes:\n  ex: http://example.com/ns#\n";
-	REQUIRE_THROWS_AS(parser.translateToTurtle(yaml), std::runtime_error);
+	TriplesMap *tm = findById(mapping, "employee");
+	REQUIRE(tm != nullptr);
+	REQUIRE(tm->predicateObjectMaps.size() == 1);
+	auto *obj = dynamic_cast<TemplateTermMap *>(tm->predicateObjectMaps[0]->objectMaps[0].get());
+	REQUIRE(obj != nullptr);
+	REQUIRE(obj->templateString == "http://example.com/ns#{MGR}");
 }
 
 // ---------------------------------------------------------------------------

@@ -61,11 +61,6 @@ struct ObjValue {
 using PredMap = std::map<std::string, std::vector<ObjValue>>;
 using TripleStore = std::map<std::string, PredMap>;
 
-struct ParseState {
-	SerdEnv *env {nullptr};
-	TripleStore triples;
-};
-
 // ---------------------------------------------------------------------------
 // Node-expansion helper
 // ---------------------------------------------------------------------------
@@ -98,30 +93,41 @@ static std::string expandNode(SerdEnv *env, const SerdNode *node) {
 }
 
 // ---------------------------------------------------------------------------
-// Serd callbacks
+// TripleCollector – gathers statements (from Serd or built directly by a
+// caller) into a TripleStore, independent of their origin.
 // ---------------------------------------------------------------------------
 
-static SerdStatus cbBase(void *handle, const SerdNode *base) {
-	auto *state = static_cast<ParseState *>(handle);
-	serd_env_set_base_uri(state->env, base);
-	return SERD_SUCCESS;
+struct TripleCollector::Impl {
+	SerdEnv *env {serd_env_new(nullptr)};
+	TripleStore triples;
+	std::vector<std::string> errors;
+
+	~Impl() {
+		if (env) {
+			serd_env_free(env);
+		}
+	}
+};
+
+TripleCollector::TripleCollector() : impl_(new Impl()) {
 }
 
-static SerdStatus cbPrefix(void *handle, const SerdNode *name, const SerdNode *uri) {
-	auto *state = static_cast<ParseState *>(handle);
-	serd_env_set_prefix(state->env, name, uri);
-	return SERD_SUCCESS;
+TripleCollector::~TripleCollector() = default;
+
+void TripleCollector::setBase(const SerdNode *base) {
+	serd_env_set_base_uri(impl_->env, base);
 }
 
-static SerdStatus cbStatement(void *handle, SerdStatementFlags /*flags*/, const SerdNode * /*graph*/,
-                              const SerdNode *subject, const SerdNode *predicate, const SerdNode *object,
-                              const SerdNode *object_datatype, const SerdNode *object_lang) {
-	auto *state = static_cast<ParseState *>(handle);
+void TripleCollector::setPrefix(const SerdNode *name, const SerdNode *uri) {
+	serd_env_set_prefix(impl_->env, name, uri);
+}
 
-	std::string subjKey = expandNode(state->env, subject);
-	std::string predKey = expandNode(state->env, predicate);
+void TripleCollector::statement(const SerdNode *subject, const SerdNode *predicate, const SerdNode *object,
+                                const SerdNode *objectDatatype, const SerdNode *objectLang) {
+	std::string subjKey = expandNode(impl_->env, subject);
+	std::string predKey = expandNode(impl_->env, predicate);
 	if (subjKey.empty() || predKey.empty()) {
-		return SERD_SUCCESS;
+		return;
 	}
 
 	ObjValue obj;
@@ -131,18 +137,44 @@ static SerdStatus cbStatement(void *handle, SerdStatementFlags /*flags*/, const 
 	} else if (object->type == SERD_LITERAL) {
 		obj.type = ObjType::Literal;
 		obj.value = std::string(reinterpret_cast<const char *>(object->buf), object->n_bytes);
-		if (object_datatype && object_datatype->buf) {
-			obj.datatype = expandNode(state->env, object_datatype);
+		if (objectDatatype && objectDatatype->buf) {
+			obj.datatype = expandNode(impl_->env, objectDatatype);
 		}
-		if (object_lang && object_lang->buf) {
-			obj.lang = std::string(reinterpret_cast<const char *>(object_lang->buf), object_lang->n_bytes);
+		if (objectLang && objectLang->buf) {
+			obj.lang = std::string(reinterpret_cast<const char *>(objectLang->buf), objectLang->n_bytes);
 		}
 	} else {
 		obj.type = ObjType::URI;
-		obj.value = expandNode(state->env, object);
+		obj.value = expandNode(impl_->env, object);
 	}
 
-	state->triples[subjKey][predKey].push_back(std::move(obj));
+	impl_->triples[subjKey][predKey].push_back(std::move(obj));
+}
+
+void TripleCollector::addError(const std::string &message) {
+	impl_->errors.push_back(message);
+}
+
+// ---------------------------------------------------------------------------
+// Serd callbacks – forward into a TripleCollector so the text-parsing paths
+// (parse(), parseString()) share the exact same statement-insertion logic
+// as callers that build statements directly (parseCollected()).
+// ---------------------------------------------------------------------------
+
+static SerdStatus cbBase(void *handle, const SerdNode *base) {
+	static_cast<TripleCollector *>(handle)->setBase(base);
+	return SERD_SUCCESS;
+}
+
+static SerdStatus cbPrefix(void *handle, const SerdNode *name, const SerdNode *uri) {
+	static_cast<TripleCollector *>(handle)->setPrefix(name, uri);
+	return SERD_SUCCESS;
+}
+
+static SerdStatus cbStatement(void *handle, SerdStatementFlags /*flags*/, const SerdNode * /*graph*/,
+                              const SerdNode *subject, const SerdNode *predicate, const SerdNode *object,
+                              const SerdNode *object_datatype, const SerdNode *object_lang) {
+	static_cast<TripleCollector *>(handle)->statement(subject, predicate, object, object_datatype, object_lang);
 	return SERD_SUCCESS;
 }
 
@@ -644,33 +676,27 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreN
 	// -----------------------------------------------------------------------
 	// Phase 1 – collect all triples via Serd
 	// -----------------------------------------------------------------------
-	ParseState state;
-	state.env = serd_env_new(nullptr);
+	TripleCollector collector;
 
 	SerdReader *reader =
-	    serd_reader_new(SERD_TURTLE, &state, nullptr, cbBase, cbPrefix, cbStatement, /*end_sink=*/nullptr);
+	    serd_reader_new(SERD_TURTLE, &collector, nullptr, cbBase, cbPrefix, cbStatement, /*end_sink=*/nullptr);
 	serd_reader_set_error_sink(reader, cbError, nullptr);
 
 	// Convert the filesystem path to a file URI and use it as the document base.
 	SerdNode fileUriNode = serd_node_new_file_uri(reinterpret_cast<const uint8_t *>(mappingFilePath.c_str()),
 	                                              /*hostname=*/nullptr, /*out=*/nullptr, /*escape=*/true);
 
-	std::vector<std::string> preErrors;
-
 	if (fileUriNode.buf) {
-		serd_env_set_base_uri(state.env, &fileUriNode);
+		collector.setBase(&fileUriNode);
 		serd_reader_read_file(reader, fileUriNode.buf);
 		serd_node_free(&fileUriNode);
 	} else {
-		preErrors.push_back("R2RML parser: could not build file URI for: " + mappingFilePath);
+		collector.addError("R2RML parser: could not build file URI for: " + mappingFilePath);
 	}
 
 	serd_reader_free(reader);
 
-	SerdEnv *env = state.env; // transfer ownership out of `state`
-	state.env = nullptr;
-
-	return buildMappingFromTriples(state.triples, env, std::move(preErrors), ignoreNonFatalErrors);
+	return parseCollected(collector, ignoreNonFatalErrors);
 }
 
 R2RMLMapping R2RMLParser::parseString(const std::string &turtleText, const std::string &baseUri,
@@ -678,24 +704,28 @@ R2RMLMapping R2RMLParser::parseString(const std::string &turtleText, const std::
 	// -----------------------------------------------------------------------
 	// Phase 1 – collect all triples via Serd, reading from an in-memory string
 	// -----------------------------------------------------------------------
-	ParseState state;
-	state.env = serd_env_new(nullptr);
+	TripleCollector collector;
 
 	SerdReader *reader =
-	    serd_reader_new(SERD_TURTLE, &state, nullptr, cbBase, cbPrefix, cbStatement, /*end_sink=*/nullptr);
+	    serd_reader_new(SERD_TURTLE, &collector, nullptr, cbBase, cbPrefix, cbStatement, /*end_sink=*/nullptr);
 	serd_reader_set_error_sink(reader, cbError, nullptr);
 
 	SerdNode baseNode = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(baseUri.c_str()));
-	serd_env_set_base_uri(state.env, &baseNode);
+	collector.setBase(&baseNode);
 
 	serd_reader_read_string(reader, reinterpret_cast<const uint8_t *>(turtleText.c_str()));
 
 	serd_reader_free(reader);
 
-	SerdEnv *env = state.env; // transfer ownership out of `state`
-	state.env = nullptr;
+	return parseCollected(collector, ignoreNonFatalErrors);
+}
 
-	return buildMappingFromTriples(state.triples, env, {}, ignoreNonFatalErrors);
+R2RMLMapping R2RMLParser::parseCollected(TripleCollector &collector, bool ignoreNonFatalErrors) {
+	SerdEnv *env = collector.impl_->env; // transfer ownership out of the collector
+	collector.impl_->env = nullptr;
+
+	return buildMappingFromTriples(collector.impl_->triples, env, std::move(collector.impl_->errors),
+	                               ignoreNonFatalErrors);
 }
 
 } // namespace r2rml

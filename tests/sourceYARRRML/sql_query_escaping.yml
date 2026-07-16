@@ -1,0 +1,13 @@
+prefixes:
+  ex: http://example.com/ns#
+
+mappings:
+  department:
+    sources:
+      - query: |
+          SELECT DEPTNO, DNAME
+          FROM DEPT
+          WHERE DNAME = 'BOSS "TOP"'
+    s: http://data.example.com/department/$(DEPTNO)
+    po:
+      - [ex:name, $(DNAME)]

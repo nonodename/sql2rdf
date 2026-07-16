@@ -1,16 +1,20 @@
 // YARRRML → R2RML translator.
 //
-// Strategy: translate the supported YARRRML subset (see YARRRMLParser.h) into
-// an in-memory R2RML Turtle document, then hand that document to
-// r2rml::R2RMLParser::parseString() to build the actual object model.  This
-// keeps all term-map/engine semantics (template expansion, datatypes, joins,
-// ...) identical between R2RML and YARRRML mappings, since YARRRML mappings
-// are ultimately executed by the very same R2RML engine.
+// Strategy: translate the supported YARRRML subset (see YARRRMLParser.h)
+// straight into SerdNode-based RDF statements, fed to an r2rml::TripleCollector
+// -- the same statement-insertion logic r2rml::R2RMLParser's own Turtle-parsing
+// paths use -- and then hand that collector to
+// r2rml::R2RMLParser::parseCollected() to build the actual object model. This
+// avoids serialising to Turtle text and re-parsing it (and the string-escaping
+// edge cases that come with it) while keeping all term-map/engine semantics
+// (template expansion, datatypes, joins, ...) identical between R2RML and
+// YARRRML mappings, since YARRRML mappings are ultimately executed by the very
+// same R2RML engine.
 //
 // Non-fatal problems encountered while translating (unsupported keys, a
 // mapping with no source, an unresolved join-condition function, ...) are
-// collected into a `warnings` vector rather than raised immediately; the
-// caller (YARRRMLParser::parse) decides whether to merge them into the
+// recorded via TripleCollector::addError() rather than raised immediately;
+// R2RMLParser::parseCollected() decides whether to merge them into the
 // resulting R2RMLMapping::parseErrors or to throw, mirroring
 // R2RMLParser::parse()'s ignoreNonFatalErrors convention.
 
@@ -29,6 +33,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace yarrrml {
@@ -88,59 +93,6 @@ std::vector<std::string> flattenScalarList(const YAML::Node &node) {
 }
 
 // ---------------------------------------------------------------------------
-// Turtle string-literal escaping
-// ---------------------------------------------------------------------------
-
-/// Escape a value for use inside a short (single-quoted) Turtle string.
-std::string quoted(const std::string &s) {
-	std::string out;
-	out.reserve(s.size() + 2);
-	out += '"';
-	for (char c : s) {
-		switch (c) {
-		case '\\':
-			out += "\\\\";
-			break;
-		case '"':
-			out += "\\\"";
-			break;
-		case '\n':
-			out += "\\n";
-			break;
-		case '\t':
-			out += "\\t";
-			break;
-		case '\r':
-			out += "\\r";
-			break;
-		default:
-			out += c;
-		}
-	}
-	out += '"';
-	return out;
-}
-
-/// Escape a value for use inside a long/triple-quoted Turtle string (used for
-/// rr:sqlQuery so multi-line SQL text stays readable).
-std::string tripleQuoted(const std::string &s) {
-	std::string out;
-	out.reserve(s.size() + 6);
-	out += "\"\"\"";
-	for (char c : s) {
-		if (c == '"') {
-			out += "\\\"";
-		} else if (c == '\\') {
-			out += "\\\\";
-		} else {
-			out += c;
-		}
-	}
-	out += "\"\"\"";
-	return out;
-}
-
-// ---------------------------------------------------------------------------
 // IRI / CURIE recognition
 // ---------------------------------------------------------------------------
 
@@ -163,23 +115,27 @@ bool looksCurie(const std::string &v, const std::map<std::string, std::string> &
 	return prefixes.count(v.substr(0, colon)) > 0;
 }
 
-/// Render `v` as a Turtle IRI term: a bare CURIE token when it uses a known
-/// prefix, otherwise an absolute (or best-effort relative) <IRI>.
-std::string iriToken(const std::string &v, const std::map<std::string, std::string> &prefixes) {
+/// Resolve `v` to the IRI text a SerdNode should carry: a recognised CURIE is
+/// expanded to its full namespace IRI; anything else (already absolute, or a
+/// relative reference such as "#TriplesMap1") is returned unchanged and left
+/// for TripleCollector to resolve against the document base, exactly as an
+/// angle-bracketed Turtle IRI would have been.
+std::string resolveIri(const std::string &v, const std::map<std::string, std::string> &prefixes) {
 	if (looksAbsoluteIri(v)) {
-		return "<" + v + ">";
-	}
-	if (looksCurie(v, prefixes)) {
 		return v;
 	}
-	return "<" + v + ">";
+	if (looksCurie(v, prefixes)) {
+		std::size_t colon = v.find(':');
+		return prefixes.at(v.substr(0, colon)) + v.substr(colon + 1);
+	}
+	return v;
 }
 
 /// If `text` begins with "prefix:" for a known prefix (and isn't already an
 /// absolute "scheme://..." IRI), replace the prefix with its full namespace
 /// IRI. Needed for rr:template literal text: unlike a bare CURIE term, text
-/// embedded in a Turtle string literal is never resolved by the downstream
-/// Turtle parser's own prefix mechanism, so it must be expanded here.
+/// embedded in an rr:template value is never resolved by anything downstream,
+/// so it must be expanded here.
 std::string expandLeadingCurie(const std::string &text, const std::map<std::string, std::string> &prefixes) {
 	std::size_t colon = text.find(':');
 	if (colon == std::string::npos) {
@@ -329,39 +285,22 @@ VSpec classifyValue(const std::string &rawIn, bool allowIriSuffix, bool literals
 	return vs;
 }
 
-/// Render a VSpec as an rr:objectMap (or rr:predicateMap-compatible) blank
-/// node fragment, e.g. "[ rr:column \"COL\" ]".  `extra` is appended inside
-/// the brackets (used for rr:datatype / rr:language / rr:termType).
-std::string valueSpecToMapFragment(const VSpec &vs, const std::map<std::string, std::string> &prefixes,
-                                   const std::string &extra) {
-	switch (vs.kind) {
-	case VKind::Column: {
-		std::string s = "[ rr:column " + quoted(vs.text);
-		if (vs.forceIri) {
-			s += "; rr:termType rr:IRI";
-		}
-		s += extra;
-		s += " ]";
-		return s;
-	}
-	case VKind::Template:
-		return "[ rr:template " + quoted(vs.text) + extra + " ]";
-	case VKind::ConstIri:
-		return "[ rr:constant " + iriToken(vs.text, prefixes) + " ]";
-	case VKind::ConstLit:
-	default:
-		return "[ rr:constant " + quoted(vs.text) + extra + " ]";
-	}
-}
-
 /// Translate a po shortcut's third array element ("xsd:integer" or "en~lang")
-/// into an "; rr:datatype ..." or "; rr:language ..." suffix.
-std::string buildDatatypeOrLangFragment(const std::string &raw, const std::map<std::string, std::string> &prefixes) {
+/// into a datatype IRI or language tag.
+struct ValueExtra {
+	std::string datatypeIri;
+	std::string language;
+};
+
+ValueExtra buildDatatypeOrLangExtra(const std::string &raw, const std::map<std::string, std::string> &prefixes) {
 	static const std::string suf = "~lang";
+	ValueExtra extra;
 	if (raw.size() > suf.size() && raw.compare(raw.size() - suf.size(), suf.size(), suf) == 0) {
-		return "; rr:language " + quoted(raw.substr(0, raw.size() - suf.size()));
+		extra.language = raw.substr(0, raw.size() - suf.size());
+	} else {
+		extra.datatypeIri = resolveIri(raw, prefixes);
 	}
-	return "; rr:datatype " + iriToken(raw, prefixes);
+	return extra;
 }
 
 /// Extract the column name from a join-condition parameter pair such as
@@ -378,53 +317,189 @@ std::string extractColumnRef(const YAML::Node &param) {
 	return "";
 }
 
+// ---------------------------------------------------------------------------
+// SerdNode construction & direct statement emission
+//
+// Rather than serialising R2RML as Turtle text and re-parsing it, mappings
+// are translated straight into SerdNode-based statements fed to a
+// TripleCollector -- the same statement-insertion logic R2RMLParser's own
+// Turtle-parsing paths use.
+// ---------------------------------------------------------------------------
+
+const std::string RR = "http://www.w3.org/ns/r2rml#";
+const std::string RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+
+/// A reference to a node already known to a translation step: either a named
+/// IRI (possibly relative, e.g. "#TriplesMap1") or a blank node minted via
+/// BlankNodeMinter. `valid == false` denotes "no node" (nothing to link).
+struct NodeRef {
+	bool valid;
+	bool isBlank;
+	std::string text;
+
+	NodeRef() : valid(false), isBlank(false) {
+	}
+	NodeRef(bool isBlankIn, std::string textIn) : valid(true), isBlank(isBlankIn), text(std::move(textIn)) {
+	}
+
+	static NodeRef uri(std::string v) {
+		return NodeRef(false, std::move(v));
+	}
+	static NodeRef blank(std::string id) {
+		return NodeRef(true, std::move(id));
+	}
+};
+
+SerdNode toSerdNode(const NodeRef &n) {
+	const auto *buf = reinterpret_cast<const uint8_t *>(n.text.c_str());
+	return n.isBlank ? serd_node_from_string(SERD_BLANK, buf) : serd_node_from_string(SERD_URI, buf);
+}
+
+/// Mints sequential blank-node identifiers ("b0", "b1", ...) for one YARRRML
+/// document -- replaces the anonymous node IDs Serd used to generate
+/// implicitly for "[ ... ]" Turtle syntax.
+class BlankNodeMinter {
+public:
+	NodeRef next() {
+		return NodeRef::blank("b" + std::to_string(counter_++));
+	}
+
+private:
+	unsigned counter_ {0};
+};
+
+void emitUriTriple(r2rml::TripleCollector &collector, const NodeRef &subject, const std::string &predicateIri,
+                   const NodeRef &object) {
+	SerdNode s = toSerdNode(subject);
+	SerdNode p = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(predicateIri.c_str()));
+	SerdNode o = toSerdNode(object);
+	collector.statement(&s, &p, &o);
+}
+
+void emitLiteralTriple(r2rml::TripleCollector &collector, const NodeRef &subject, const std::string &predicateIri,
+                       const std::string &literalText, const std::string &datatypeIri = std::string(),
+                       const std::string &language = std::string()) {
+	SerdNode s = toSerdNode(subject);
+	SerdNode p = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(predicateIri.c_str()));
+	SerdNode o = serd_node_from_string(SERD_LITERAL, reinterpret_cast<const uint8_t *>(literalText.c_str()));
+
+	SerdNode dt = SERD_NODE_NULL;
+	SerdNode lang = SERD_NODE_NULL;
+	if (!datatypeIri.empty()) {
+		dt = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(datatypeIri.c_str()));
+	}
+	if (!language.empty()) {
+		lang = serd_node_from_string(SERD_LITERAL, reinterpret_cast<const uint8_t *>(language.c_str()));
+	}
+	collector.statement(&s, &p, &o, datatypeIri.empty() ? nullptr : &dt, language.empty() ? nullptr : &lang);
+}
+
+/// Mint a blank node and emit the rr:column / rr:template / rr:constant (+
+/// optional rr:termType / rr:datatype / rr:language) statements describing
+/// `vs` on it. Equivalent to what used to be a "[ rr:x ... ]" Turtle
+/// fragment; the returned NodeRef is that blank node, ready to be linked in
+/// as e.g. an rr:objectMap value.
+NodeRef emitValueSpecAsMap(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const VSpec &vs,
+                           const std::map<std::string, std::string> &prefixes, const ValueExtra &extra) {
+	NodeRef node = blanks.next();
+	switch (vs.kind) {
+	case VKind::Column:
+		emitLiteralTriple(collector, node, RR + "column", vs.text);
+		if (vs.forceIri) {
+			emitUriTriple(collector, node, RR + "termType", NodeRef::uri(RR + "IRI"));
+		}
+		break;
+	case VKind::Template:
+		emitLiteralTriple(collector, node, RR + "template", vs.text);
+		break;
+	case VKind::ConstIri:
+		// Per R2RML, rr:constant with an IRI object carries no datatype/language.
+		emitUriTriple(collector, node, RR + "constant", NodeRef::uri(resolveIri(vs.text, prefixes)));
+		return node;
+	case VKind::ConstLit:
+	default:
+		emitLiteralTriple(collector, node, RR + "constant", vs.text);
+		break;
+	}
+	if (!extra.datatypeIri.empty()) {
+		emitUriTriple(collector, node, RR + "datatype", NodeRef::uri(extra.datatypeIri));
+	}
+	if (!extra.language.empty()) {
+		emitLiteralTriple(collector, node, RR + "language", extra.language);
+	}
+	return node;
+}
+
 /// Translate a predicate value ("a", a CURIE/IRI, or a $(...) template) into
-/// an "rr:predicate ..." or "rr:predicateMap [...]" fragment.
-std::string buildPredicateFragment(const std::string &raw, const std::map<std::string, std::string> &prefixes) {
+/// either a constant predicate IRI (rr:predicate) or a freshly minted
+/// rr:predicateMap blank node.
+struct PredicateResult {
+	bool isConstant;
+	std::string constantIri;
+	NodeRef mapNode;
+};
+
+PredicateResult buildPredicateResult(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const std::string &raw,
+                                     const std::map<std::string, std::string> &prefixes) {
 	if (raw == "a") {
-		return "rr:predicate rdf:type";
+		return PredicateResult {true, RDF_TYPE, NodeRef()};
 	}
 	VSpec vs = classifyValue(raw, /*allowIriSuffix=*/false, /*literalsAllowed=*/false, prefixes);
 	switch (vs.kind) {
-	case VKind::Template:
-		return "rr:predicateMap [ rr:template " + quoted(vs.text) + " ]";
-	case VKind::Column:
-		return "rr:predicateMap [ rr:column " + quoted(vs.text) + " ]";
+	case VKind::Template: {
+		NodeRef node = blanks.next();
+		emitLiteralTriple(collector, node, RR + "template", vs.text);
+		return PredicateResult {false, "", node};
+	}
+	case VKind::Column: {
+		NodeRef node = blanks.next();
+		emitLiteralTriple(collector, node, RR + "column", vs.text);
+		return PredicateResult {false, "", node};
+	}
 	case VKind::ConstIri:
 	default:
-		return "rr:predicate " + iriToken(vs.text, prefixes);
+		return PredicateResult {true, resolveIri(vs.text, prefixes), NodeRef()};
 	}
 }
 
 /// Translate one object-list entry (a plain scalar, a [value, dtOrLang]
 /// array, a {value:/v:, datatype:/language:} map, or a {mapping: ...,
-/// condition(s): ...} mapping reference) into an rr:objectMap fragment.
-std::string buildObjectFragment(const YAML::Node &objNode, const std::map<std::string, std::string> &prefixes,
-                                const std::string &extraTtl, const std::string &mappingName,
-                                std::vector<std::string> &warnings) {
+/// condition(s): ...} mapping reference) into a freshly minted rr:objectMap
+/// blank node. Returns an invalid NodeRef (and records a warning) on failure.
+NodeRef emitObjectNode(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const YAML::Node &objNode,
+                       const std::map<std::string, std::string> &prefixes, const ValueExtra &extraIn,
+                       const std::string &mappingName) {
 	if (objNode.IsScalar()) {
 		VSpec vs =
 		    classifyValue(objNode.as<std::string>(), /*allowIriSuffix=*/true, /*literalsAllowed=*/true, prefixes);
-		return valueSpecToMapFragment(vs, prefixes, extraTtl);
+		return emitValueSpecAsMap(collector, blanks, vs, prefixes, extraIn);
 	}
 
 	if (objNode.IsSequence()) {
 		if (objNode.size() < 1 || !objNode[0].IsScalar()) {
-			warnings.push_back("YARRRML parser: mapping '" + mappingName + "': malformed object value array, skipped");
-			return "";
+			collector.addError("YARRRML parser: mapping '" + mappingName + "': malformed object value array, skipped");
+			return NodeRef();
 		}
-		std::string extra = extraTtl;
+		ValueExtra extra = extraIn;
 		if (objNode.size() >= 2 && objNode[1].IsScalar()) {
-			extra += buildDatatypeOrLangFragment(objNode[1].as<std::string>(), prefixes);
+			ValueExtra dtOrLang = buildDatatypeOrLangExtra(objNode[1].as<std::string>(), prefixes);
+			if (!dtOrLang.datatypeIri.empty()) {
+				extra.datatypeIri = dtOrLang.datatypeIri;
+			}
+			if (!dtOrLang.language.empty()) {
+				extra.language = dtOrLang.language;
+			}
 		}
 		VSpec vs = classifyValue(objNode[0].as<std::string>(), true, true, prefixes);
-		return valueSpecToMapFragment(vs, prefixes, extra);
+		return emitValueSpecAsMap(collector, blanks, vs, prefixes, extra);
 	}
 
 	if (objNode.IsMap()) {
 		YAML::Node mappingRefNode = objNode["mapping"];
 		if (mappingRefNode && mappingRefNode.IsScalar()) {
-			std::string frag = "[ rr:parentTriplesMap <#" + mappingRefNode.as<std::string>() + ">";
+			NodeRef node = blanks.next();
+			emitUriTriple(collector, node, RR + "parentTriplesMap",
+			              NodeRef::uri("#" + mappingRefNode.as<std::string>()));
 
 			YAML::Node condNode = firstOf(objNode, {"condition", "conditions"});
 			for (const YAML::Node &c : flattenList(condNode)) {
@@ -434,101 +509,109 @@ std::string buildObjectFragment(const YAML::Node &objNode, const std::map<std::s
 				YAML::Node fnNode = c["function"];
 				std::string fn = (fnNode && fnNode.IsScalar()) ? fnNode.as<std::string>() : "";
 				if (fn != "equal") {
-					warnings.push_back("YARRRML parser: mapping '" + mappingName +
+					collector.addError("YARRRML parser: mapping '" + mappingName +
 					                   "': unsupported join condition function '" + fn + "', condition skipped");
 					continue;
 				}
 				YAML::Node paramsNode = c["parameters"];
 				if (!paramsNode || !paramsNode.IsSequence() || paramsNode.size() < 2) {
-					warnings.push_back("YARRRML parser: mapping '" + mappingName +
+					collector.addError("YARRRML parser: mapping '" + mappingName +
 					                   "': join condition missing parameters, skipped");
 					continue;
 				}
 				std::string childCol = extractColumnRef(paramsNode[0]);
 				std::string parentCol = extractColumnRef(paramsNode[1]);
 				if (childCol.empty() || parentCol.empty()) {
-					warnings.push_back("YARRRML parser: mapping '" + mappingName +
+					collector.addError("YARRRML parser: mapping '" + mappingName +
 					                   "': join condition parameters not recognised, skipped");
 					continue;
 				}
-				frag += "; rr:joinCondition [ rr:child " + quoted(childCol) + "; rr:parent " + quoted(parentCol) + " ]";
+				NodeRef jc = blanks.next();
+				emitLiteralTriple(collector, jc, RR + "child", childCol);
+				emitLiteralTriple(collector, jc, RR + "parent", parentCol);
+				emitUriTriple(collector, node, RR + "joinCondition", jc);
 			}
-			frag += " ]";
-			return frag;
+			return node;
 		}
 
 		YAML::Node valNode = firstOf(objNode, {"value", "v"});
 		if (valNode && valNode.IsScalar()) {
-			std::string extra = extraTtl;
+			ValueExtra extra = extraIn;
 			YAML::Node dtNode = objNode["datatype"];
 			YAML::Node langNode = objNode["language"];
 			if (dtNode && dtNode.IsScalar()) {
-				extra += "; rr:datatype " + iriToken(dtNode.as<std::string>(), prefixes);
+				extra.datatypeIri = resolveIri(dtNode.as<std::string>(), prefixes);
 			} else if (langNode && langNode.IsScalar()) {
-				extra += "; rr:language " + quoted(langNode.as<std::string>());
+				extra.language = langNode.as<std::string>();
 			}
 			VSpec vs = classifyValue(valNode.as<std::string>(), true, true, prefixes);
-			return valueSpecToMapFragment(vs, prefixes, extra);
+			return emitValueSpecAsMap(collector, blanks, vs, prefixes, extra);
 		}
 
-		warnings.push_back("YARRRML parser: mapping '" + mappingName + "': unrecognised object entry, skipped");
-		return "";
+		collector.addError("YARRRML parser: mapping '" + mappingName + "': unrecognised object entry, skipped");
+		return NodeRef();
 	}
 
-	warnings.push_back("YARRRML parser: mapping '" + mappingName + "': unrecognised object entry, skipped");
-	return "";
+	collector.addError("YARRRML parser: mapping '" + mappingName + "': unrecognised object entry, skipped");
+	return NodeRef();
 }
 
 /// Accumulated result of translating a mapping's `po`/`predicateobjects`
 /// entries: rdf:type shortcuts fold into subjectMap rr:class assertions,
-/// everything else becomes a regular rr:predicateObjectMap fragment.
+/// everything else becomes a regular rr:predicateObjectMap blank node.
 struct PoResult {
 	std::vector<std::string> classIris;
-	std::vector<std::string> pomFragments;
+	std::vector<NodeRef> pomNodes;
 };
 
-void processPredObjPair(const YAML::Node &predNode, const YAML::Node &objNode, const std::string &extraTtl,
-                        const std::string &mappingName, const std::map<std::string, std::string> &prefixes,
-                        std::vector<std::string> &warnings, PoResult &res) {
+void emitPredObjPair(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const YAML::Node &predNode,
+                     const YAML::Node &objNode, const ValueExtra &extra, const std::string &mappingName,
+                     const std::map<std::string, std::string> &prefixes, PoResult &res) {
 	std::vector<std::string> preds = flattenScalarList(predNode);
 	std::vector<YAML::Node> objs = flattenList(objNode);
 
 	if (preds.empty() || objs.empty()) {
-		warnings.push_back("YARRRML parser: mapping '" + mappingName +
+		collector.addError("YARRRML parser: mapping '" + mappingName +
 		                   "': po entry missing predicate or object, skipped");
 		return;
 	}
 
 	for (const std::string &predRaw : preds) {
 		bool isRdfType = (predRaw == "a");
-		std::string predFragment = buildPredicateFragment(predRaw, prefixes);
+		PredicateResult predResult = buildPredicateResult(collector, blanks, predRaw, prefixes);
 
 		for (const YAML::Node &obj : objs) {
-			if (isRdfType && extraTtl.empty() && obj.IsScalar()) {
+			if (isRdfType && extra.datatypeIri.empty() && extra.language.empty() && obj.IsScalar()) {
 				VSpec vs = classifyValue(obj.as<std::string>(), false, false, prefixes);
 				if (vs.kind == VKind::ConstIri) {
-					res.classIris.push_back(iriToken(vs.text, prefixes));
+					res.classIris.push_back(resolveIri(vs.text, prefixes));
 					continue;
 				}
 			}
-			std::string objFrag = buildObjectFragment(obj, prefixes, extraTtl, mappingName, warnings);
-			if (!objFrag.empty()) {
-				res.pomFragments.push_back("[ " + predFragment + "; rr:objectMap " + objFrag + " ]");
+			NodeRef objMap = emitObjectNode(collector, blanks, obj, prefixes, extra, mappingName);
+			if (objMap.valid) {
+				NodeRef pom = blanks.next();
+				if (predResult.isConstant) {
+					emitUriTriple(collector, pom, RR + "predicate", NodeRef::uri(predResult.constantIri));
+				} else {
+					emitUriTriple(collector, pom, RR + "predicateMap", predResult.mapNode);
+				}
+				emitUriTriple(collector, pom, RR + "objectMap", objMap);
+				res.pomNodes.push_back(pom);
 			}
 		}
 	}
 }
 
-PoResult buildPredicateObjectMaps(const YAML::Node &mNode, const std::string &mappingName,
-                                  const std::map<std::string, std::string> &prefixes,
-                                  std::vector<std::string> &warnings) {
+PoResult emitPredicateObjectMaps(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const YAML::Node &mNode,
+                                 const std::string &mappingName, const std::map<std::string, std::string> &prefixes) {
 	PoResult res;
 	YAML::Node poNode = firstOf(mNode, {"po", "predicateobjects", "predicateObjects"});
 	if (!poNode) {
 		return res;
 	}
 	if (!poNode.IsSequence()) {
-		warnings.push_back("YARRRML parser: mapping '" + mappingName +
+		collector.addError("YARRRML parser: mapping '" + mappingName +
 		                   "': po/predicateobjects must be a list, ignored");
 		return res;
 	}
@@ -536,46 +619,49 @@ PoResult buildPredicateObjectMaps(const YAML::Node &mNode, const std::string &ma
 	for (const YAML::Node &item : poNode) {
 		if (item.IsSequence()) {
 			if (item.size() < 2) {
-				warnings.push_back("YARRRML parser: mapping '" + mappingName +
+				collector.addError("YARRRML parser: mapping '" + mappingName +
 				                   "': po entry array must have at least 2 elements, skipped");
 				continue;
 			}
-			std::string extra;
+			ValueExtra extra;
 			if (item.size() >= 3 && item[2].IsScalar()) {
-				extra = buildDatatypeOrLangFragment(item[2].as<std::string>(), prefixes);
+				extra = buildDatatypeOrLangExtra(item[2].as<std::string>(), prefixes);
 			}
-			processPredObjPair(item[0], item[1], extra, mappingName, prefixes, warnings, res);
+			emitPredObjPair(collector, blanks, item[0], item[1], extra, mappingName, prefixes, res);
 		} else if (item.IsMap()) {
 			YAML::Node predNode = firstOf(item, {"predicates", "predicate", "p"});
 			YAML::Node objNode = firstOf(item, {"objects", "object", "o"});
 			if (!predNode || !objNode) {
-				warnings.push_back("YARRRML parser: mapping '" + mappingName +
+				collector.addError("YARRRML parser: mapping '" + mappingName +
 				                   "': po entry missing predicates/objects key, skipped");
 				continue;
 			}
-			processPredObjPair(predNode, objNode, "", mappingName, prefixes, warnings, res);
+			emitPredObjPair(collector, blanks, predNode, objNode, ValueExtra(), mappingName, prefixes, res);
 		} else {
-			warnings.push_back("YARRRML parser: mapping '" + mappingName + "': unrecognised po entry, skipped");
+			collector.addError("YARRRML parser: mapping '" + mappingName + "': unrecognised po entry, skipped");
 		}
 	}
 	return res;
 }
 
-std::string buildLogicalTable(const YAML::Node &mNode, const std::map<std::string, YAML::Node> &namedSources,
-                              const std::string &mappingName, std::vector<std::string> &warnings) {
+/// Mint a blank node for the mapping's logical table (rr:tableName or
+/// rr:sqlQuery) and emit its statements. Returns an invalid NodeRef (and
+/// records a warning) if no usable source was found.
+NodeRef emitLogicalTable(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const YAML::Node &mNode,
+                         const std::map<std::string, YAML::Node> &namedSources, const std::string &mappingName) {
 	YAML::Node sourcesNode = firstOf(mNode, {"sources", "source"});
 	if (!sourcesNode) {
-		warnings.push_back("YARRRML parser: mapping '" + mappingName + "' has no source; logicalTable omitted");
-		return "";
+		collector.addError("YARRRML parser: mapping '" + mappingName + "' has no source; logicalTable omitted");
+		return NodeRef();
 	}
 
 	std::vector<YAML::Node> sourceList = flattenList(sourcesNode);
 	if (sourceList.empty()) {
-		warnings.push_back("YARRRML parser: mapping '" + mappingName + "' has no source; logicalTable omitted");
-		return "";
+		collector.addError("YARRRML parser: mapping '" + mappingName + "' has no source; logicalTable omitted");
+		return NodeRef();
 	}
 	if (sourceList.size() > 1) {
-		warnings.push_back("YARRRML parser: mapping '" + mappingName +
+		collector.addError("YARRRML parser: mapping '" + mappingName +
 		                   "' has multiple sources; using the first and ignoring the rest");
 	}
 
@@ -584,86 +670,91 @@ std::string buildLogicalTable(const YAML::Node &mNode, const std::map<std::strin
 		std::string refName = src.as<std::string>();
 		auto it = namedSources.find(refName);
 		if (it == namedSources.end()) {
-			warnings.push_back("YARRRML parser: mapping '" + mappingName + "' references unknown source '" + refName +
+			collector.addError("YARRRML parser: mapping '" + mappingName + "' references unknown source '" + refName +
 			                   "'; logicalTable omitted");
-			return "";
+			return NodeRef();
 		}
 		src = it->second;
 	}
 
 	if (!src.IsMap()) {
-		warnings.push_back("YARRRML parser: mapping '" + mappingName +
+		collector.addError("YARRRML parser: mapping '" + mappingName +
 		                   "' source is not a mapping; logicalTable omitted");
-		return "";
+		return NodeRef();
 	}
 
 	YAML::Node queryNode = src["query"];
 	if (queryNode && queryNode.IsScalar()) {
-		return "[ rr:sqlQuery " + tripleQuoted(queryNode.as<std::string>()) + " ]";
+		NodeRef node = blanks.next();
+		emitLiteralTriple(collector, node, RR + "sqlQuery", queryNode.as<std::string>());
+		return node;
 	}
 	YAML::Node tableNode = src["table"];
 	if (tableNode && tableNode.IsScalar()) {
-		return "[ rr:tableName " + quoted(tableNode.as<std::string>()) + " ]";
+		NodeRef node = blanks.next();
+		emitLiteralTriple(collector, node, RR + "tableName", tableNode.as<std::string>());
+		return node;
 	}
 
-	warnings.push_back("YARRRML parser: mapping '" + mappingName +
+	collector.addError("YARRRML parser: mapping '" + mappingName +
 	                   "' source has neither 'table' nor 'query'; logicalTable omitted");
-	return "";
+	return NodeRef();
 }
 
-std::string buildSubjectMap(const YAML::Node &mNode, const std::vector<std::string> &classIris,
-                            const std::string &mappingName, const std::map<std::string, std::string> &prefixes,
-                            std::vector<std::string> &warnings) {
-	std::string valueFrag;
+/// Mint a blank node for the mapping's subject map (value strategy + any
+/// rr:class assertions) and emit its statements. Returns an invalid NodeRef
+/// if there is neither a subject value nor any classes to assert.
+NodeRef emitSubjectMap(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const YAML::Node &mNode,
+                       const std::vector<std::string> &classIris, const std::string &mappingName,
+                       const std::map<std::string, std::string> &prefixes) {
+	bool haveValue = false;
+	VKind valueKind = VKind::ConstIri;
+	std::string valueText;
+
 	YAML::Node subjNode = firstOf(mNode, {"subjects", "subject", "s"});
 	if (subjNode) {
 		std::vector<YAML::Node> list = flattenList(subjNode);
 		if (list.size() > 1) {
-			warnings.push_back("YARRRML parser: mapping '" + mappingName +
+			collector.addError("YARRRML parser: mapping '" + mappingName +
 			                   "' has multiple subjects; using the first and ignoring the rest");
 		}
 		if (!list.empty()) {
 			if (list[0].IsScalar()) {
 				VSpec vs = classifyValue(list[0].as<std::string>(), /*allowIriSuffix=*/false,
 				                         /*literalsAllowed=*/false, prefixes);
-				switch (vs.kind) {
-				case VKind::Column:
-					valueFrag = "rr:column " + quoted(vs.text);
-					break;
-				case VKind::Template:
-					valueFrag = "rr:template " + quoted(vs.text);
-					break;
-				case VKind::ConstIri:
-				default:
-					valueFrag = "rr:constant " + iriToken(vs.text, prefixes);
-					break;
-				}
+				haveValue = true;
+				valueKind = vs.kind;
+				valueText = vs.text;
 			} else {
-				warnings.push_back("YARRRML parser: mapping '" + mappingName +
+				collector.addError("YARRRML parser: mapping '" + mappingName +
 				                   "' subject value must be a string, skipped");
 			}
 		}
 	}
 
-	if (valueFrag.empty() && classIris.empty()) {
-		return "";
+	if (!haveValue && classIris.empty()) {
+		return NodeRef();
 	}
 
-	std::string out = "[ ";
-	bool firstPart = true;
-	if (!valueFrag.empty()) {
-		out += valueFrag;
-		firstPart = false;
+	NodeRef node = blanks.next();
+	if (haveValue) {
+		switch (valueKind) {
+		case VKind::Column:
+			emitLiteralTriple(collector, node, RR + "column", valueText);
+			break;
+		case VKind::Template:
+			emitLiteralTriple(collector, node, RR + "template", valueText);
+			break;
+		case VKind::ConstIri:
+		default:
+			emitUriTriple(collector, node, RR + "constant", NodeRef::uri(resolveIri(valueText, prefixes)));
+			break;
+		}
 	}
 	for (const std::string &c : classIris) {
-		if (!firstPart) {
-			out += "; ";
-		}
-		out += "rr:class " + c;
-		firstPart = false;
+		emitUriTriple(collector, node, RR + "class", NodeRef::uri(c));
 	}
-	out += " ]";
-	return out;
+	return node;
 }
 
 const std::set<std::string> &mappingKnownKeys() {
@@ -672,49 +763,50 @@ const std::set<std::string> &mappingKnownKeys() {
 	return keys;
 }
 
-void translateOneMapping(std::ostream &out, const std::string &name, const YAML::Node &mNode,
-                         const std::map<std::string, YAML::Node> &namedSources,
-                         const std::map<std::string, std::string> &prefixes, std::vector<std::string> &warnings) {
-	std::string logicalTableFrag = buildLogicalTable(mNode, namedSources, name, warnings);
-	PoResult poResult = buildPredicateObjectMaps(mNode, name, prefixes, warnings);
-	std::string subjectFrag = buildSubjectMap(mNode, poResult.classIris, name, prefixes, warnings);
+void emitOneMapping(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const std::string &name,
+                    const YAML::Node &mNode, const std::map<std::string, YAML::Node> &namedSources,
+                    const std::map<std::string, std::string> &prefixes) {
+	NodeRef logicalTable = emitLogicalTable(collector, blanks, mNode, namedSources, name);
+	PoResult poResult = emitPredicateObjectMaps(collector, blanks, mNode, name, prefixes);
+	NodeRef subjectMap = emitSubjectMap(collector, blanks, mNode, poResult.classIris, name, prefixes);
 
 	if (firstOf(mNode, {"graphs", "graph"})) {
-		warnings.push_back("YARRRML parser: mapping '" + name + "': graphs not supported, skipped");
+		collector.addError("YARRRML parser: mapping '" + name + "': graphs not supported, skipped");
 	}
 
 	for (YAML::const_iterator it = mNode.begin(); it != mNode.end(); ++it) {
 		std::string key = it->first.as<std::string>();
 		if (!mappingKnownKeys().count(key)) {
-			warnings.push_back("YARRRML parser: mapping '" + name + "': unsupported key '" + key + "' ignored");
+			collector.addError("YARRRML parser: mapping '" + name + "': unsupported key '" + key + "' ignored");
 		}
 	}
 
-	std::vector<std::string> parts;
-	if (!logicalTableFrag.empty()) {
-		parts.push_back("rr:logicalTable " + logicalTableFrag);
-	}
-	if (!subjectFrag.empty()) {
-		parts.push_back("rr:subjectMap " + subjectFrag);
-	}
-	for (const std::string &p : poResult.pomFragments) {
-		parts.push_back("rr:predicateObjectMap " + p);
-	}
+	NodeRef subject = NodeRef::uri("#" + name);
 
-	out << "<#" << name << ">\n";
-	if (parts.empty()) {
-		// Still a syntactically valid (but semantically inert) block: the
-		// R2RML object model only recognises a resource as a TriplesMap when
-		// it carries rr:logicalTable/subjectMap/predicateObjectMap/subject.
-		out << "    a rr:TriplesMap .\n\n";
+	if (!logicalTable.valid && !subjectMap.valid && poResult.pomNodes.empty()) {
+		// Still a syntactically valid (but semantically inert) TriplesMap: the
+		// R2RML object model only recognises a resource as a TriplesMap when it
+		// carries rr:logicalTable/subjectMap/predicateObjectMap/subject.
+		emitUriTriple(collector, subject, RDF_TYPE, NodeRef::uri(RR + "TriplesMap"));
 		return;
 	}
-	for (std::size_t i = 0; i < parts.size(); ++i) {
-		out << "    " << parts[i] << (i + 1 < parts.size() ? " ;\n" : " .\n\n");
+
+	if (logicalTable.valid) {
+		emitUriTriple(collector, subject, RR + "logicalTable", logicalTable);
+	}
+	if (subjectMap.valid) {
+		emitUriTriple(collector, subject, RR + "subjectMap", subjectMap);
+	}
+	for (const NodeRef &pom : poResult.pomNodes) {
+		emitUriTriple(collector, subject, RR + "predicateObjectMap", pom);
 	}
 }
 
-std::string translateToTurtleImpl(const std::string &yamlText, std::vector<std::string> &warnings) {
+/// Parse `yamlText` and emit statements for every mapping it defines into
+/// `collector`. Throws std::runtime_error on fatal problems (YAML syntax
+/// errors, a missing `mappings` key, etc); non-fatal issues are recorded via
+/// collector.addError().
+void emitYarrrmlDocument(const std::string &yamlText, r2rml::TripleCollector &collector) {
 	YAML::Node root;
 	try {
 		root = YAML::Load(yamlText);
@@ -737,22 +829,23 @@ std::string translateToTurtleImpl(const std::string &yamlText, std::vector<std::
 	    {"rdfs", "http://www.w3.org/2000/01/rdf-schema#"},
 	    {"xsd", "http://www.w3.org/2001/XMLSchema#"},
 	};
-	std::vector<std::pair<std::string, std::string>> userPrefixes;
 
 	YAML::Node prefixesNode = root["prefixes"];
 	if (prefixesNode && prefixesNode.IsMap()) {
 		for (YAML::const_iterator it = prefixesNode.begin(); it != prefixesNode.end(); ++it) {
-			std::string name = it->first.as<std::string>();
-			std::string uri = it->second.as<std::string>();
-			userPrefixes.emplace_back(name, uri);
-			knownPrefixes[name] = uri;
+			knownPrefixes[it->first.as<std::string>()] = it->second.as<std::string>();
 		}
 	}
 
-	std::string baseUri;
+	// A document-level `base:` key overrides the file-URI base already set on
+	// `collector` before translation started -- mirrors what an "@base <...> ."
+	// directive occurring early in a Turtle document would have done, since
+	// TripleCollector::setBase() resolves the new base against the current one.
 	YAML::Node baseNode = root["base"];
 	if (baseNode && baseNode.IsScalar()) {
-		baseUri = baseNode.as<std::string>();
+		std::string docBase = baseNode.as<std::string>();
+		SerdNode base = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(docBase.c_str()));
+		collector.setBase(&base);
 	}
 
 	std::map<std::string, YAML::Node> namedSources;
@@ -770,33 +863,19 @@ std::string translateToTurtleImpl(const std::string &yamlText, std::vector<std::
 		if (key == "authors" || knownTopKeys.count(key)) {
 			continue;
 		}
-		warnings.push_back("YARRRML parser: unsupported top-level key '" + key + "' ignored");
+		collector.addError("YARRRML parser: unsupported top-level key '" + key + "' ignored");
 	}
 
-	std::ostringstream out;
-	out << "@prefix rr: <http://www.w3.org/ns/r2rml#> .\n";
-	out << "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n";
-	out << "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n";
-	out << "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n";
-	for (const auto &p : userPrefixes) {
-		out << "@prefix " << p.first << ": <" << p.second << "> .\n";
-	}
-	if (!baseUri.empty()) {
-		out << "@base <" << baseUri << "> .\n";
-	}
-	out << "\n";
-
+	BlankNodeMinter blanks;
 	for (YAML::const_iterator it = mappingsNode.begin(); it != mappingsNode.end(); ++it) {
 		std::string name = it->first.as<std::string>();
 		YAML::Node mNode = it->second;
 		if (!mNode.IsMap()) {
-			warnings.push_back("YARRRML parser: mapping '" + name + "' is not a mapping node, skipped");
+			collector.addError("YARRRML parser: mapping '" + name + "' is not a mapping node, skipped");
 			continue;
 		}
-		translateOneMapping(out, name, mNode, namedSources, knownPrefixes, warnings);
+		emitOneMapping(collector, blanks, name, mNode, namedSources, knownPrefixes);
 	}
-
-	return out.str();
 }
 
 std::string readFileToString(const std::string &path) {
@@ -840,41 +919,18 @@ bool YARRRMLParser::hasYarrrmlExtension(const std::string &path) {
 	return false;
 }
 
-std::string YARRRMLParser::translateToTurtle(const std::string &yamlText) {
-	std::vector<std::string> warnings; // discarded: use parse() for warning reporting
-	return translateToTurtleImpl(yamlText, warnings);
-}
-
-std::string YARRRMLParser::translateFileToTurtle(const std::string &yarrrmlFilePath) {
-	return translateToTurtle(readFileToString(yarrrmlFilePath));
-}
-
 r2rml::R2RMLMapping YARRRMLParser::parse(const std::string &yarrrmlFilePath, bool ignoreNonFatalErrors) {
 	std::string yamlText = readFileToString(yarrrmlFilePath);
-
-	std::vector<std::string> warnings;
-	std::string turtle = translateToTurtleImpl(yamlText, warnings);
-
 	std::string baseUri = computeFileBaseUri(yarrrmlFilePath);
 
+	r2rml::TripleCollector collector;
+	SerdNode base = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(baseUri.c_str()));
+	collector.setBase(&base);
+
+	emitYarrrmlDocument(yamlText, collector);
+
 	r2rml::R2RMLParser parser;
-	r2rml::R2RMLMapping mapping = parser.parseString(turtle, baseUri, ignoreNonFatalErrors);
-
-	if (!warnings.empty()) {
-		if (ignoreNonFatalErrors) {
-			for (const std::string &w : warnings) {
-				mapping.parseErrors.push_back(w);
-			}
-		} else {
-			std::ostringstream msg;
-			for (const std::string &w : warnings) {
-				msg << w << "\n";
-			}
-			throw std::runtime_error(msg.str());
-		}
-	}
-
-	return mapping;
+	return parser.parseCollected(collector, ignoreNonFatalErrors);
 }
 
 } // namespace yarrrml
