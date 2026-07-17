@@ -127,18 +127,21 @@ public:
 
 class Filter : public GroupElement {
 public:
-	Filter() : GroupElement(ElementKind::Filter) {
-	}
-	~Filter() override; // out-of-line: Expression is only forward-declared here
+	// Both declared here and defined out-of-line: a member of forward-declared
+	// type Expression needs a complete type not just to be destroyed, but also
+	// for the compiler-generated unwind path in case a later member throws
+	// during construction.
+	Filter();
+	~Filter() override;
 
 	std::unique_ptr<Expression> constraint;
 };
 
 class Bind : public GroupElement {
 public:
-	Bind() : GroupElement(ElementKind::Bind) {
-	}
-	~Bind() override; // out-of-line: Expression is only forward-declared here
+	// See Filter's comment above: constructor and destructor both out-of-line.
+	Bind();
+	~Bind() override;
 
 	std::unique_ptr<Var> var;
 	std::unique_ptr<Expression> expr;
@@ -161,10 +164,10 @@ public:
 /// an empty Prologue/no DatasetClauses - see Query.h).
 class SubSelectElement : public GroupElement {
 public:
-	explicit SubSelectElement(std::unique_ptr<Query> query)
-	    : GroupElement(ElementKind::SubSelect), query(std::move(query)) {
-	}
-	~SubSelectElement() override; // out-of-line: Query is only forward-declared here
+	// See Filter's comment above: constructor and destructor both out-of-line
+	// (query is a forward-declared Query here).
+	explicit SubSelectElement(std::unique_ptr<Query> query);
+	~SubSelectElement() override;
 
 	std::unique_ptr<Query> query;
 };

@@ -8,8 +8,25 @@
 
 #include "sparql-parser/Parser.h"
 
-using namespace sparql;
-using namespace sparql::ast;
+using sparql::ParseError;
+using sparql::Parser;
+using sparql::ast::AggregateExpr;
+using sparql::ast::AggregateKind;
+using sparql::ast::BasicGraphPattern;
+using sparql::ast::BinaryExpr;
+using sparql::ast::BinaryOp;
+using sparql::ast::BuiltInCallExpr;
+using sparql::ast::BuiltinFunction;
+using sparql::ast::Expression;
+using sparql::ast::ExprKind;
+using sparql::ast::Filter;
+using sparql::ast::FunctionCallExpr;
+using sparql::ast::InExpr;
+using sparql::ast::IriExpr;
+using sparql::ast::Query;
+using sparql::ast::RdfLiteral;
+using sparql::ast::UnaryExpr;
+using sparql::ast::UnaryOp;
 
 namespace {
 const Expression &filterExprOf(const Query &q, std::size_t elementIndex = 1) {

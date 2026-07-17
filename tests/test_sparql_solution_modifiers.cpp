@@ -8,8 +8,10 @@
 
 #include "sparql-parser/Parser.h"
 
-using namespace sparql;
-using namespace sparql::ast;
+using sparql::Parser;
+using sparql::ast::ExprKind;
+using sparql::ast::OrderDirection;
+using sparql::ast::SolutionModifier;
 
 TEST_CASE("GROUP BY with a plain variable and HAVING over an aggregate (spec 11.1)") {
 	Parser parser;

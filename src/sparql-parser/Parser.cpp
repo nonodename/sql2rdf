@@ -8,7 +8,40 @@
 
 namespace sparql {
 
-using namespace ast;
+using ast::AlternativePath;
+using ast::BasicGraphPattern;
+using ast::BlankNode;
+using ast::DatasetClause;
+using ast::DatasetClauseKind;
+using ast::GroupCondition;
+using ast::GroupElement;
+using ast::GroupGraphPattern;
+using ast::InlineData;
+using ast::InversePath;
+using ast::Iri;
+using ast::NegatedPropertySet;
+using ast::OneOrMorePath;
+using ast::OrderCondition;
+using ast::OrderDirection;
+using ast::PathKind;
+using ast::PredicatePath;
+using ast::PrefixDecl;
+using ast::Prologue;
+using ast::PropertyPathExpr;
+using ast::Query;
+using ast::QueryForm;
+using ast::RdfLiteral;
+using ast::SelectItem;
+using ast::SequencePath;
+using ast::SolutionModifier;
+using ast::Term;
+using ast::TermKind;
+using ast::TriplePattern;
+using ast::Var;
+using ast::VarExpr;
+using ast::VariablePath;
+using ast::ZeroOrMorePath;
+using ast::ZeroOrOnePath;
 
 namespace {
 
@@ -19,18 +52,22 @@ namespace {
 // implement the full RFC 3986 §5.2 algorithm (dot-segment removal, query/
 // fragment handling, ...) - see the project plan's noted scope limitation.
 std::string resolveRelativeIri(const std::string &base, const std::string &ref) {
-	if (base.empty() || ref.empty())
+	if (base.empty() || ref.empty()) {
 		return ref;
-	if (ref.find("://") != std::string::npos)
+	}
+	if (ref.find("://") != std::string::npos) {
 		return ref;
+	}
 	std::size_t colon = ref.find(':');
 	std::size_t slash = ref.find('/');
-	if (colon != std::string::npos && (slash == std::string::npos || colon < slash))
+	if (colon != std::string::npos && (slash == std::string::npos || colon < slash)) {
 		return ref;
+	}
 	if (ref[0] == '/') {
 		std::size_t schemeEnd = base.find("://");
-		if (schemeEnd == std::string::npos)
+		if (schemeEnd == std::string::npos) {
 			return ref;
+		}
 		std::size_t authorityEnd = base.find('/', schemeEnd + 3);
 		std::string authority = (authorityEnd == std::string::npos) ? base : base.substr(0, authorityEnd);
 		return authority + ref;
@@ -44,13 +81,15 @@ std::string resolveRelativeIri(const std::string &base, const std::string &ref) 
 
 std::unique_ptr<Query> Parser::parseFile(const std::string &path) {
 	FILE *f = std::fopen(path.c_str(), "rb");
-	if (!f)
+	if (!f) {
 		throw std::runtime_error("cannot open SPARQL query file '" + path + "'");
+	}
 	std::string contents;
 	char buf[4096];
 	std::size_t n;
-	while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
+	while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
 		contents.append(buf, n);
+	}
 	std::fclose(f);
 	return parseString(contents);
 }
@@ -80,8 +119,9 @@ std::unique_ptr<Query> Parser::parseString(const std::string &queryText, const s
 	}
 
 	query->valuesClause = parseValuesClauseOptional();
-	if (!check(TokenType::Eof))
+	if (!check(TokenType::Eof)) {
 		error("unexpected trailing input after query");
+	}
 	return query;
 }
 
@@ -89,7 +129,7 @@ std::unique_ptr<Query> Parser::parseString(const std::string &queryText, const s
 // Token-stream plumbing
 // ---------------------------------------------------------------------------
 
-void Parser::initLexer(std::string text) {
+void Parser::initLexer(const std::string &text) {
 	source_ = preprocessCodepointEscapes(text);
 	lexer_.reset(new Lexer(source_));
 	advance();
@@ -108,30 +148,34 @@ bool Parser::checkKeyword(const char *kw) const {
 }
 
 bool Parser::matchType(TokenType type) {
-	if (!check(type))
+	if (!check(type)) {
 		return false;
+	}
 	advance();
 	return true;
 }
 
 bool Parser::matchKeyword(const char *kw) {
-	if (!checkKeyword(kw))
+	if (!checkKeyword(kw)) {
 		return false;
+	}
 	advance();
 	return true;
 }
 
 Token Parser::expectType(TokenType type, const char *what) {
-	if (!check(type))
+	if (!check(type)) {
 		error(std::string("expected ") + what);
+	}
 	Token t = current_;
 	advance();
 	return t;
 }
 
 void Parser::expectKeyword(const char *kw) {
-	if (!checkKeyword(kw))
+	if (!checkKeyword(kw)) {
 		error(std::string("expected keyword '") + kw + "'");
+	}
 	advance();
 }
 
@@ -147,8 +191,9 @@ void Parser::error(const std::string &message) const {
 std::string Parser::lookupPrefix(const std::string &prefix) const {
 	if (prologue_) {
 		for (const auto &p : prologue_->prefixes) {
-			if (p.prefix == prefix)
+			if (p.prefix == prefix) {
 				return p.iri;
+			}
 		}
 	}
 	error("unknown prefix '" + prefix + ":'");
@@ -187,8 +232,9 @@ std::unique_ptr<Iri> Parser::parseIri() {
 }
 
 std::unique_ptr<Var> Parser::parseVar() {
-	if (!check(TokenType::Var1) && !check(TokenType::Var2))
+	if (!check(TokenType::Var1) && !check(TokenType::Var2)) {
 		error("expected a variable");
+	}
 	std::unique_ptr<Var> v(new Var(current_.text));
 	advance();
 	return v;
@@ -216,8 +262,9 @@ std::unique_ptr<Term> Parser::cloneTerm(const Term &term) {
 		const auto &l = static_cast<const RdfLiteral &>(term);
 		std::unique_ptr<RdfLiteral> lit(new RdfLiteral(l.lexicalForm));
 		lit->languageTag = l.languageTag;
-		if (l.datatype)
+		if (l.datatype) {
 			lit->datatype = cloneIri(*l.datatype);
+		}
 		return std::unique_ptr<Term>(lit.release());
 	}
 	}
@@ -261,10 +308,12 @@ std::unique_ptr<PropertyPathExpr> Parser::clonePath(const PropertyPathExpr &path
 	case PathKind::NegatedPropertySet: {
 		const auto &p = static_cast<const NegatedPropertySet &>(path);
 		std::unique_ptr<NegatedPropertySet> n(new NegatedPropertySet());
-		for (const auto &f : p.forward)
+		for (const auto &f : p.forward) {
 			n->forward.push_back(cloneIri(*f));
-		for (const auto &inv : p.inverse)
+		}
+		for (const auto &inv : p.inverse) {
 			n->inverse.push_back(cloneIri(*inv));
+		}
 		return std::unique_ptr<PropertyPathExpr>(n.release());
 	}
 	}
@@ -343,8 +392,9 @@ void Parser::parseSelectClause(Query &query) {
 		query.selectItems.push_back(std::move(item));
 	} while (check(TokenType::Var1) || check(TokenType::Var2) || check(TokenType::LParen));
 
-	if (query.selectItems.empty())
+	if (query.selectItems.empty()) {
 		error("SELECT clause must project at least one variable, or use '*'");
+	}
 }
 
 void Parser::parseDatasetClauses(std::vector<DatasetClause> &clauses) {
@@ -373,8 +423,9 @@ void Parser::parseConstructQuery(Query &query) {
 		// CONSTRUCT WHERE { TriplesTemplate? } - short form: template == pattern.
 		expectType(TokenType::LBrace, "'{' after CONSTRUCT WHERE");
 		std::vector<TriplePattern> triples;
-		if (!check(TokenType::RBrace))
+		if (!check(TokenType::RBrace)) {
 			parseConstructTriples(triples);
+		}
 		expectType(TokenType::RBrace, "'}' closing CONSTRUCT WHERE");
 
 		query.hasConstructTemplate = true;
@@ -406,8 +457,9 @@ void Parser::parseConstructQuery(Query &query) {
 std::vector<TriplePattern> Parser::parseConstructTemplate() {
 	expectType(TokenType::LBrace, "'{' to start a CONSTRUCT template");
 	std::vector<TriplePattern> triples;
-	if (!check(TokenType::RBrace))
+	if (!check(TokenType::RBrace)) {
 		parseConstructTriples(triples);
+	}
 	expectType(TokenType::RBrace, "'}' closing CONSTRUCT template");
 	return triples;
 }
@@ -415,8 +467,9 @@ std::vector<TriplePattern> Parser::parseConstructTemplate() {
 void Parser::parseConstructTriples(std::vector<TriplePattern> &out) {
 	parseTriplesSameSubject(out, /*pathMode=*/false);
 	while (matchType(TokenType::Dot)) {
-		if (check(TokenType::RBrace) || check(TokenType::Eof))
+		if (check(TokenType::RBrace) || check(TokenType::Eof)) {
 			break;
+		}
 		parseTriplesSameSubject(out, /*pathMode=*/false);
 	}
 }
@@ -465,12 +518,15 @@ std::unique_ptr<Query> Parser::parseSubSelect() {
 // ---------------------------------------------------------------------------
 
 void Parser::parseSolutionModifier(SolutionModifier &modifier) {
-	if (checkKeyword("GROUP"))
+	if (checkKeyword("GROUP")) {
 		parseGroupClause(modifier);
-	if (checkKeyword("HAVING"))
+	}
+	if (checkKeyword("HAVING")) {
 		parseHavingClause(modifier);
-	if (checkKeyword("ORDER"))
+	}
+	if (checkKeyword("ORDER")) {
 		parseOrderClause(modifier);
+	}
 	parseLimitOffsetClauses(modifier);
 }
 
@@ -491,8 +547,9 @@ GroupCondition Parser::parseGroupCondition() {
 	}
 	if (matchType(TokenType::LParen)) {
 		cond.expr = parseExpression();
-		if (matchKeyword("AS"))
+		if (matchKeyword("AS")) {
 			cond.asVar = parseVar();
+		}
 		expectType(TokenType::RParen, "')' closing GROUP BY condition");
 		return cond;
 	}
@@ -567,8 +624,9 @@ void Parser::parseLimitOffsetClauses(SolutionModifier &modifier) {
 }
 
 std::unique_ptr<InlineData> Parser::parseValuesClauseOptional() {
-	if (!checkKeyword("VALUES"))
+	if (!checkKeyword("VALUES")) {
 		return nullptr;
+	}
 	advance();
 	if (check(TokenType::Var1) || check(TokenType::Var2)) {
 		return parseInlineDataOneVar();

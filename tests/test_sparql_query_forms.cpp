@@ -9,8 +9,17 @@
 
 #include "sparql-parser/Parser.h"
 
-using namespace sparql;
-using namespace sparql::ast;
+using sparql::ParseError;
+using sparql::Parser;
+using sparql::ast::BasicGraphPattern;
+using sparql::ast::DatasetClauseKind;
+using sparql::ast::ElementKind;
+using sparql::ast::GraphGraphPattern;
+using sparql::ast::Iri;
+using sparql::ast::QueryForm;
+using sparql::ast::SelectItem;
+using sparql::ast::TermKind;
+using sparql::ast::UnionGraphPattern;
 
 TEST_CASE("Simple SELECT with a single triple pattern (spec 2.1)") {
 	Parser parser;

@@ -291,8 +291,17 @@ if(SQL2RDF_IS_TOP_LEVEL)
       "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp"
     )
+    if(APPLE)
+      execute_process(
+        COMMAND xcrun --show-sdk-path
+        OUTPUT_VARIABLE CLANG_TIDY_SYSROOT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+      )
+      set(CLANG_TIDY_EXTRA_ARGS "--extra-arg=-isysroot${CLANG_TIDY_SYSROOT}")
+    endif()
+
     add_custom_target(tidy
-      COMMAND ${CLANG_TIDY_EXE} -p "${CMAKE_CURRENT_BINARY_DIR}" ${TIDY_SOURCES}
+      COMMAND ${CLANG_TIDY_EXE} -p "${CMAKE_CURRENT_BINARY_DIR}" ${CLANG_TIDY_EXTRA_ARGS} ${TIDY_SOURCES}
       COMMENT "Running clang-tidy..."
       DEPENDS sql2rdf_r2rml
     )

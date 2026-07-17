@@ -20,7 +20,9 @@ class R2RMLMapping;
 class TripleCollector {
 public:
 	TripleCollector();
-	~TripleCollector();
+	// Not defaulted here: Impl is only forward-declared, so the destructor
+	// must be defined where Impl is complete (R2RMLParser.cpp).
+	~TripleCollector(); // NOLINT(performance-trivially-destructible)
 
 	TripleCollector(const TripleCollector &) = delete;
 	TripleCollector &operator=(const TripleCollector &) = delete;

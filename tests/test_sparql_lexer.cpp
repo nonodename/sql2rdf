@@ -17,8 +17,9 @@ std::vector<Token> tokenize(const std::string &text) {
 	for (;;) {
 		Token t = lexer.next();
 		tokens.push_back(t);
-		if (t.type == TokenType::Eof)
+		if (t.type == TokenType::Eof) {
 			break;
+		}
 	}
 	return tokens;
 }

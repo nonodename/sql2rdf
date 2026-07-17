@@ -14,14 +14,16 @@ bool isHexDigit(char c) {
 }
 
 int hexValue(char c) {
-	if (c >= '0' && c <= '9')
+	if (c >= '0' && c <= '9') {
 		return c - '0';
-	if (c >= 'a' && c <= 'f')
+	}
+	if (c >= 'a' && c <= 'f') {
 		return 10 + (c - 'a');
+	}
 	return 10 + (c - 'A');
 }
 
-void appendUtf8(std::string &out, unsigned long codepoint) {
+void appendUtf8(std::string &out, uint64_t codepoint) {
 	if (codepoint <= 0x7F) {
 		out.push_back(static_cast<char>(codepoint));
 	} else if (codepoint <= 0x7FF) {
@@ -78,9 +80,9 @@ std::string preprocessCodepointEscapes(const std::string &input) {
 					}
 				}
 				if (allHex) {
-					unsigned long codepoint = 0;
+					uint64_t codepoint = 0;
 					for (std::size_t d = 0; d < digits; ++d) {
-						codepoint = (codepoint << 4) | static_cast<unsigned long>(hexValue(input[i + 2 + d]));
+						codepoint = (codepoint << 4) | static_cast<uint64_t>(hexValue(input[i + 2 + d]));
 					}
 					appendUtf8(out, codepoint);
 					i += 2 + digits;
@@ -99,8 +101,9 @@ Lexer::Lexer(std::string source) : source_(std::move(source)) {
 
 char Lexer::peek(std::size_t offset) const {
 	std::size_t idx = pos_ + offset;
-	if (idx >= source_.size())
+	if (idx >= source_.size()) {
 		return '\0';
+	}
 	return source_[idx];
 }
 
@@ -116,8 +119,9 @@ char Lexer::advance() {
 }
 
 bool Lexer::match(char expected) {
-	if (peek() != expected)
+	if (peek() != expected) {
 		return false;
+	}
 	advance();
 	return true;
 }
@@ -142,8 +146,9 @@ void Lexer::skipWhitespaceAndComments() {
 		if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
 			advance();
 		} else if (c == '#') {
-			while (peek() != '\0' && peek() != '\n' && peek() != '\r')
+			while (peek() != '\0' && peek() != '\n' && peek() != '\r') {
 				advance();
+			}
 		} else {
 			break;
 		}
@@ -155,31 +160,35 @@ Token Lexer::next() {
 	std::size_t startLine = line_;
 	std::size_t startColumn = column_;
 	char c = peek();
-	if (c == '\0')
+	if (c == '\0') {
 		return makeToken(TokenType::Eof, "", startLine, startColumn);
-
+	}
 	switch (c) {
 	case '<':
-		if (looksLikeIriref())
+		if (looksLikeIriref()) {
 			return lexIriref();
+		}
 		advance();
-		if (match('='))
+		if (match('=')) {
 			return makeToken(TokenType::LessEquals, "<=", startLine, startColumn);
+		}
 		return makeToken(TokenType::Less, "<", startLine, startColumn);
 	case '?':
 		// '?' is both the VAR1 prefix and the ZeroOrOnePath modifier (rule
 		// 93). It's a variable only when immediately followed by a valid
 		// name-start character; otherwise (whitespace, punctuation, EOF)
 		// it's the path modifier.
-		if (isNameStartChar(peek(1)) || std::isdigit(static_cast<unsigned char>(peek(1))))
+		if (isNameStartChar(peek(1)) || std::isdigit(static_cast<unsigned char>(peek(1)))) {
 			return lexVar();
+		}
 		advance();
 		return makeToken(TokenType::Question, "?", startLine, startColumn);
 	case '$':
 		return lexVar();
 	case '_':
-		if (peek(1) == ':')
+		if (peek(1) == ':') {
 			return lexBlankNodeLabel();
+		}
 		break;
 	case '(': {
 		advance();
@@ -233,28 +242,32 @@ Token Lexer::next() {
 		return makeToken(TokenType::Semicolon, ";", startLine, startColumn);
 	case '|':
 		advance();
-		if (match('|'))
+		if (match('|')) {
 			return makeToken(TokenType::OrOr, "||", startLine, startColumn);
+		}
 		return makeToken(TokenType::Pipe, "|", startLine, startColumn);
 	case '/':
 		advance();
 		return makeToken(TokenType::Slash, "/", startLine, startColumn);
 	case '^':
 		advance();
-		if (match('^'))
+		if (match('^')) {
 			return makeToken(TokenType::Caret, "^^", startLine, startColumn);
+		}
 		return makeToken(TokenType::Caret, "^", startLine, startColumn);
 	case '*':
 		advance();
 		return makeToken(TokenType::Star, "*", startLine, startColumn);
 	case '+':
-		if (std::isdigit(static_cast<unsigned char>(peek(1))) || peek(1) == '.')
+		if (std::isdigit(static_cast<unsigned char>(peek(1))) || peek(1) == '.') {
 			return lexNumberOrSign();
+		}
 		advance();
 		return makeToken(TokenType::Plus, "+", startLine, startColumn);
 	case '-':
-		if (std::isdigit(static_cast<unsigned char>(peek(1))) || peek(1) == '.')
+		if (std::isdigit(static_cast<unsigned char>(peek(1))) || peek(1) == '.') {
 			return lexNumberOrSign();
+		}
 		advance();
 		return makeToken(TokenType::Minus, "-", startLine, startColumn);
 	case '=':
@@ -262,20 +275,23 @@ Token Lexer::next() {
 		return makeToken(TokenType::Equals, "=", startLine, startColumn);
 	case '!':
 		advance();
-		if (match('='))
+		if (match('=')) {
 			return makeToken(TokenType::NotEquals, "!=", startLine, startColumn);
+		}
 		return makeToken(TokenType::Bang, "!", startLine, startColumn);
 	case '&':
 		advance();
-		if (match('&'))
+		if (match('&')) {
 			return makeToken(TokenType::AndAnd, "&&", startLine, startColumn);
+		}
 		error("unexpected character '&'");
 	case '@':
 		return lexLangTagOrCaret();
 	case '>':
 		advance();
-		if (match('='))
+		if (match('=')) {
 			return makeToken(TokenType::GreaterEquals, ">=", startLine, startColumn);
+		}
 		return makeToken(TokenType::Greater, ">", startLine, startColumn);
 	case ':':
 		return lexPrefixedNameOrKeyword();
@@ -283,14 +299,17 @@ Token Lexer::next() {
 		break;
 	}
 
-	if (c == '\'' || c == '"')
+	if (c == '\'' || c == '"') {
 		return lexString();
+	}
 
-	if (std::isdigit(static_cast<unsigned char>(c)))
+	if (std::isdigit(static_cast<unsigned char>(c))) {
 		return lexNumberOrSign();
+	}
 
-	if (isNameStartChar(c))
+	if (isNameStartChar(c)) {
 		return lexPrefixedNameOrKeyword();
+	}
 
 	error(std::string("unexpected character '") + c + "'");
 }
@@ -298,8 +317,9 @@ Token Lexer::next() {
 bool Lexer::looksLikeIriref() const {
 	for (std::size_t i = pos_ + 1; i < source_.size(); ++i) {
 		char c = source_[i];
-		if (c == '>')
+		if (c == '>') {
 			return true;
+		}
 		if (c == '<' || c == '"' || c == '{' || c == '}' || c == '|' || c == '^' || c == '`' ||
 		    static_cast<unsigned char>(c) <= 0x20) {
 			return false;
@@ -314,8 +334,9 @@ Token Lexer::lexIriref() {
 	std::string value;
 	for (;;) {
 		char c = peek();
-		if (c == '\0')
+		if (c == '\0') {
 			error("unterminated IRIREF");
+		}
 		if (c == '>') {
 			advance();
 			break;
@@ -335,16 +356,18 @@ std::string Lexer::lexPercentOrLocalEscape() {
 	if (peek() == '%') {
 		out.push_back(advance());
 		for (int i = 0; i < 2; ++i) {
-			if (!isHexDigit(peek()))
+			if (!isHexDigit(peek())) {
 				error("invalid %-escape in local name");
+			}
 			out.push_back(advance());
 		}
 	} else if (peek() == '\\') {
 		advance();
 		char c = peek();
 		static const std::string allowed = "_~.-!$&'()*+,;=/?#@%";
-		if (allowed.find(c) == std::string::npos)
+		if (allowed.find(c) == std::string::npos) {
 			error("invalid escape in local name");
+		}
 		out.push_back(advance());
 	}
 	return out;
@@ -388,17 +411,20 @@ Token Lexer::lexPrefixedNameOrKeyword() {
 	if (peek() == ':') {
 		advance();
 		std::string local = lexPnLocal();
-		if (local.empty())
+		if (local.empty()) {
 			return makeToken(TokenType::PnameNs, prefix + ":", startLine, startColumn);
+		}
 		return makeToken(TokenType::PnameLn, prefix + ":" + local, startLine, startColumn);
 	}
-	if (prefix == "a")
+	if (prefix == "a") {
 		return makeToken(TokenType::A, "a", startLine, startColumn);
+	}
 	Token t = makeToken(TokenType::Keyword, prefix, startLine, startColumn);
 	std::string upper;
 	upper.reserve(prefix.size());
-	for (char ch : prefix)
+	for (char ch : prefix) {
 		upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+	}
 	t.keyword = upper;
 	return t;
 }
@@ -412,8 +438,9 @@ Token Lexer::lexVar() {
 		error("expected variable name after '?'/'$'");
 	}
 	name.push_back(advance());
-	while (isVarNameChar(peek()))
+	while (isVarNameChar(peek())) {
 		name.push_back(advance());
+	}
 	return makeToken(type, name, startLine, startColumn);
 }
 
@@ -426,8 +453,9 @@ Token Lexer::lexBlankNodeLabel() {
 		error("expected blank node label after '_:'");
 	}
 	label.push_back(advance());
-	while (isNameChar(peek()) || (peek() == '.' && isNameChar(peek(1))))
+	while (isNameChar(peek()) || (peek() == '.' && isNameChar(peek(1)))) {
 		label.push_back(advance());
+	}
 	return makeToken(TokenType::BlankNodeLabel, label, startLine, startColumn);
 }
 
@@ -454,8 +482,9 @@ Token Lexer::lexNumber(bool negative, bool consumedSign) {
 	if (peek() == '.' && std::isdigit(static_cast<unsigned char>(peek(1)))) {
 		isDecimal = true;
 		text.push_back(advance());
-		while (std::isdigit(static_cast<unsigned char>(peek())))
+		while (std::isdigit(static_cast<unsigned char>(peek()))) {
 			text.push_back(advance());
+		}
 	} else if (peek() == '.' && !sawDigitsBeforeDot) {
 		error("invalid numeric literal");
 	}
@@ -463,12 +492,15 @@ Token Lexer::lexNumber(bool negative, bool consumedSign) {
 	if (peek() == 'e' || peek() == 'E') {
 		isDouble = true;
 		text.push_back(advance());
-		if (peek() == '+' || peek() == '-')
+		if (peek() == '+' || peek() == '-') {
 			text.push_back(advance());
-		if (!std::isdigit(static_cast<unsigned char>(peek())))
+		}
+		if (!std::isdigit(static_cast<unsigned char>(peek()))) {
 			error("invalid exponent in numeric literal");
-		while (std::isdigit(static_cast<unsigned char>(peek())))
+		}
+		while (std::isdigit(static_cast<unsigned char>(peek()))) {
 			text.push_back(advance());
+		}
 	}
 	TokenType type = isDouble ? TokenType::Double : (isDecimal ? TokenType::Decimal : TokenType::Integer);
 	return makeToken(type, text, startLine, startColumn);
@@ -487,8 +519,9 @@ Token Lexer::lexString() {
 	}
 	std::string value;
 	for (;;) {
-		if (peek() == '\0')
+		if (peek() == '\0') {
 			error("unterminated string literal");
+		}
 		if (longForm) {
 			// A run of exactly 3 quote characters closes the string. A
 			// longer run (peek(3) is also the quote char) means the actual
@@ -506,8 +539,9 @@ Token Lexer::lexString() {
 				advance();
 				break;
 			}
-			if (peek() == '\n' || peek() == '\r')
+			if (peek() == '\n' || peek() == '\r') {
 				error("unterminated string literal");
+			}
 		}
 		if (peek() == '\\') {
 			advance();
@@ -551,16 +585,20 @@ Token Lexer::lexLangTagOrCaret() {
 	std::size_t startLine = line_, startColumn = column_;
 	advance(); // '@'
 	std::string tag;
-	if (!std::isalpha(static_cast<unsigned char>(peek())))
+	if (!std::isalpha(static_cast<unsigned char>(peek()))) {
 		error("expected language tag after '@'");
-	while (std::isalpha(static_cast<unsigned char>(peek())))
+	}
+	while (std::isalpha(static_cast<unsigned char>(peek()))) {
 		tag.push_back(advance());
+	}
 	while (peek() == '-') {
 		tag.push_back(advance());
-		if (!std::isalnum(static_cast<unsigned char>(peek())))
+		if (!std::isalnum(static_cast<unsigned char>(peek()))) {
 			error("invalid language tag");
-		while (std::isalnum(static_cast<unsigned char>(peek())))
+		}
+		while (std::isalnum(static_cast<unsigned char>(peek()))) {
 			tag.push_back(advance());
+		}
 	}
 	return makeToken(TokenType::LangTag, tag, startLine, startColumn);
 }

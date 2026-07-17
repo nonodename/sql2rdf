@@ -2,12 +2,29 @@
 
 namespace sparql {
 
-using namespace ast;
+using ast::AggregateExpr;
+using ast::AggregateKind;
+using ast::BinaryExpr;
+using ast::BinaryOp;
+using ast::BuiltInCallExpr;
+using ast::BuiltinFunction;
+using ast::ExistsExpr;
+using ast::Expression;
+using ast::FunctionCallExpr;
+using ast::InExpr;
+using ast::Iri;
+using ast::IriExpr;
+using ast::LiteralExpr;
+using ast::RdfLiteral;
+using ast::UnaryExpr;
+using ast::UnaryOp;
+using ast::Var;
+using ast::VarExpr;
 
 namespace {
-const char *XSD_INTEGER_EXPR = "http://www.w3.org/2001/XMLSchema#integer";
-const char *XSD_DECIMAL_EXPR = "http://www.w3.org/2001/XMLSchema#decimal";
-const char *XSD_DOUBLE_EXPR = "http://www.w3.org/2001/XMLSchema#double";
+const char *const XSD_INTEGER_EXPR = "http://www.w3.org/2001/XMLSchema#integer";
+const char *const XSD_DECIMAL_EXPR = "http://www.w3.org/2001/XMLSchema#decimal";
+const char *const XSD_DOUBLE_EXPR = "http://www.w3.org/2001/XMLSchema#double";
 
 struct KeywordFn {
 	const char *kw;
@@ -56,11 +73,11 @@ const KeywordFn kTwoArgBuiltins[] = {
     {"SAMETERM", BuiltinFunction::SameTerm},
 };
 
-const char *kZeroArgKeywords[] = {"RAND", "NOW", "UUID", "STRUUID"};
+const char *const kZeroArgKeywords[] = {"RAND", "NOW", "UUID", "STRUUID"};
 const BuiltinFunction kZeroArgFns[] = {BuiltinFunction::Rand, BuiltinFunction::Now, BuiltinFunction::Uuid,
                                        BuiltinFunction::Struuid};
 
-const char *kExpressionStartKeywords[] = {
+const char *const kExpressionStartKeywords[] = {
     "TRUE",        "FALSE",     "COUNT",
     "SUM",         "MIN",       "MAX",
     "AVG",         "SAMPLE",    "GROUP_CONCAT",
@@ -169,10 +186,11 @@ std::unique_ptr<Expression> Parser::parseAdditiveExpression() {
 			advance();
 			std::unique_ptr<RdfLiteral> lit(new RdfLiteral(unsignedLex));
 			const char *dt = XSD_DOUBLE_EXPR;
-			if (t == TokenType::Integer)
+			if (t == TokenType::Integer) {
 				dt = XSD_INTEGER_EXPR;
-			else if (t == TokenType::Decimal)
+			} else if (t == TokenType::Decimal) {
 				dt = XSD_DECIMAL_EXPR;
+			}
 			lit->datatype = makeIri(dt, "");
 			std::unique_ptr<Expression> rhs(new LiteralExpr(std::move(lit)));
 			rhs = continueMultiplicativeFrom(std::move(rhs));
@@ -223,8 +241,9 @@ std::unique_ptr<Expression> Parser::parsePrimaryExpression() {
 	if (check(TokenType::Var1) || check(TokenType::Var2)) {
 		return std::unique_ptr<Expression>(new VarExpr(parseVar()));
 	}
-	if (check(TokenType::StringLiteral))
+	if (check(TokenType::StringLiteral)) {
 		return std::unique_ptr<Expression>(new LiteralExpr(parseRdfLiteral()));
+	}
 	if (check(TokenType::Integer) || check(TokenType::Decimal) || check(TokenType::Double)) {
 		return std::unique_ptr<Expression>(new LiteralExpr(parseNumericLiteral()));
 	}
@@ -250,17 +269,20 @@ std::unique_ptr<Expression> Parser::parseIriOrFunctionCall() {
 std::vector<std::unique_ptr<Expression>> Parser::parseArgList(bool *distinctOut) {
 	std::vector<std::unique_ptr<Expression>> args;
 	if (matchType(TokenType::Nil)) {
-		if (distinctOut)
+		if (distinctOut) {
 			*distinctOut = false;
+		}
 		return args;
 	}
 	expectType(TokenType::LParen, "'(' to start an argument list");
-	if (distinctOut)
+	if (distinctOut) {
 		*distinctOut = matchKeyword("DISTINCT");
+	}
 	if (!check(TokenType::RParen)) {
 		args.push_back(parseExpression());
-		while (matchType(TokenType::Comma))
+		while (matchType(TokenType::Comma)) {
 			args.push_back(parseExpression());
+		}
 	}
 	expectType(TokenType::RParen, "')' closing an argument list");
 	return args;
@@ -268,12 +290,14 @@ std::vector<std::unique_ptr<Expression>> Parser::parseArgList(bool *distinctOut)
 
 std::vector<std::unique_ptr<Expression>> Parser::parseExpressionList() {
 	std::vector<std::unique_ptr<Expression>> list;
-	if (matchType(TokenType::Nil))
+	if (matchType(TokenType::Nil)) {
 		return list;
+	}
 	expectType(TokenType::LParen, "'(' to start an expression list");
 	list.push_back(parseExpression());
-	while (matchType(TokenType::Comma))
+	while (matchType(TokenType::Comma)) {
 		list.push_back(parseExpression());
+	}
 	expectType(TokenType::RParen, "')' closing an expression list");
 	return list;
 }
@@ -283,11 +307,13 @@ std::unique_ptr<Expression> Parser::parseBuiltinArgsN(BuiltinFunction fn, int mi
 	expectType(TokenType::LParen, "'(' to start this function's argument list");
 	std::vector<std::unique_ptr<Expression>> args;
 	args.push_back(parseExpression());
-	while (static_cast<int>(args.size()) < maxArgs && matchType(TokenType::Comma))
+	while (static_cast<int>(args.size()) < maxArgs && matchType(TokenType::Comma)) {
 		args.push_back(parseExpression());
+	}
 	expectType(TokenType::RParen, "')' closing this function's argument list");
-	if (static_cast<int>(args.size()) < minArgs)
+	if (static_cast<int>(args.size()) < minArgs) {
 		error("too few arguments to function call");
+	}
 	return std::unique_ptr<Expression>(new BuiltInCallExpr(fn, std::move(args)));
 }
 
@@ -314,20 +340,27 @@ std::unique_ptr<Expression> Parser::parseAggregate(AggregateKind kind) {
 }
 
 std::unique_ptr<Expression> Parser::parseBuiltInCallOrAggregateOrExists() {
-	if (checkKeyword("COUNT"))
+	if (checkKeyword("COUNT")) {
 		return parseAggregate(AggregateKind::Count);
-	if (checkKeyword("SUM"))
+	}
+	if (checkKeyword("SUM")) {
 		return parseAggregate(AggregateKind::Sum);
-	if (checkKeyword("MIN"))
+	}
+	if (checkKeyword("MIN")) {
 		return parseAggregate(AggregateKind::Min);
-	if (checkKeyword("MAX"))
+	}
+	if (checkKeyword("MAX")) {
 		return parseAggregate(AggregateKind::Max);
-	if (checkKeyword("AVG"))
+	}
+	if (checkKeyword("AVG")) {
 		return parseAggregate(AggregateKind::Avg);
-	if (checkKeyword("SAMPLE"))
+	}
+	if (checkKeyword("SAMPLE")) {
 		return parseAggregate(AggregateKind::Sample);
-	if (checkKeyword("GROUP_CONCAT"))
+	}
+	if (checkKeyword("GROUP_CONCAT")) {
 		return parseAggregate(AggregateKind::GroupConcat);
+	}
 
 	if (checkKeyword("NOT")) {
 		advance();
@@ -388,20 +421,24 @@ std::unique_ptr<Expression> Parser::parseBuiltInCallOrAggregateOrExists() {
 		}
 	}
 	for (const auto &e : kOneArgBuiltins) {
-		if (checkKeyword(e.kw))
+		if (checkKeyword(e.kw)) {
 			return parseBuiltinArgsN(e.fn, 1, 1);
+		}
 	}
 	for (const auto &e : kTwoArgBuiltins) {
-		if (checkKeyword(e.kw))
+		if (checkKeyword(e.kw)) {
 			return parseBuiltinArgsN(e.fn, 2, 2);
+		}
 	}
-	if (checkKeyword("SUBSTR"))
+	if (checkKeyword("SUBSTR")) {
 		return parseBuiltinArgsN(BuiltinFunction::Substr, 2, 3);
-	if (checkKeyword("REGEX"))
+	}
+	if (checkKeyword("REGEX")) {
 		return parseBuiltinArgsN(BuiltinFunction::Regex, 2, 3);
-	if (checkKeyword("REPLACE"))
+	}
+	if (checkKeyword("REPLACE")) {
 		return parseBuiltinArgsN(BuiltinFunction::Replace, 3, 4);
-
+	}
 	error("expected a built-in function call, aggregate, or EXISTS/NOT EXISTS");
 	return nullptr;
 }
@@ -413,11 +450,13 @@ bool Parser::startsExpression() const {
 	    check(TokenType::PnameLn) || check(TokenType::Bang) || check(TokenType::Plus) || check(TokenType::Minus)) {
 		return true;
 	}
-	if (current_.type != TokenType::Keyword)
+	if (current_.type != TokenType::Keyword) {
 		return false;
+	}
 	for (const char *kw : kExpressionStartKeywords) {
-		if (current_.keyword == kw)
+		if (current_.keyword == kw) {
 			return true;
+		}
 	}
 	return false;
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -54,9 +55,9 @@ struct SolutionModifier {
 	std::vector<std::unique_ptr<Expression>> having;
 	std::vector<OrderCondition> orderBy;
 	bool hasLimit = false;
-	long limit = 0;
+	int64_t limit = 0;
 	bool hasOffset = false;
-	long offset = 0;
+	int64_t offset = 0;
 };
 
 /// Top-level parse result for a whole SPARQL query, and also reused

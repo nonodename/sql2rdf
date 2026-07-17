@@ -4,13 +4,64 @@
 
 namespace sparql {
 
-using namespace ast;
+using ast::AggregateExpr;
+using ast::AggregateKind;
+using ast::AlternativePath;
+using ast::BasicGraphPattern;
+using ast::BinaryExpr;
+using ast::BinaryOp;
+using ast::Bind;
+using ast::BlankNode;
+using ast::BuiltInCallExpr;
+using ast::BuiltinFunction;
+using ast::DatasetClauseKind;
+using ast::ElementKind;
+using ast::ExistsExpr;
+using ast::Expression;
+using ast::ExprKind;
+using ast::Filter;
+using ast::FunctionCallExpr;
+using ast::GraphGraphPattern;
+using ast::GroupGraphPattern;
+using ast::InExpr;
+using ast::InlineData;
+using ast::InversePath;
+using ast::Iri;
+using ast::IriExpr;
+using ast::LiteralExpr;
+using ast::MinusGraphPattern;
+using ast::NegatedPropertySet;
+using ast::OneOrMorePath;
+using ast::OptionalGraphPattern;
+using ast::OrderDirection;
+using ast::PathKind;
+using ast::PredicatePath;
+using ast::PropertyPathExpr;
+using ast::Query;
+using ast::QueryForm;
+using ast::RdfLiteral;
+using ast::SequencePath;
+using ast::ServiceGraphPattern;
+using ast::SolutionModifier;
+using ast::SubSelectElement;
+using ast::Term;
+using ast::TermKind;
+using ast::TriplePattern;
+using ast::UnaryExpr;
+using ast::UnaryOp;
+using ast::UnionGraphPattern;
+using ast::Var;
+using ast::VarExpr;
+using ast::VariablePath;
+using ast::ZeroOrMorePath;
+using ast::ZeroOrOnePath;
 
 namespace {
 
 void printIndent(std::ostream &os, int indent) {
-	for (int i = 0; i < indent; ++i)
+	for (int i = 0; i < indent; ++i) {
 		os << "  ";
+	}
 }
 
 std::string termStr(const Term &t) {
@@ -64,14 +115,16 @@ std::string pathStr(const PropertyPathExpr &p) {
 		std::string s = "!(";
 		bool first = true;
 		for (const auto &f : n.forward) {
-			if (!first)
+			if (!first) {
 				s += "|";
+			}
 			s += f->lexicalForm;
 			first = false;
 		}
 		for (const auto &inv : n.inverse) {
-			if (!first)
+			if (!first) {
 				s += "|";
+			}
 			s += "^" + inv->lexicalForm;
 			first = false;
 		}
@@ -262,8 +315,9 @@ std::string exprStr(const Expression &e) {
 		const auto &in = static_cast<const InExpr &>(e);
 		std::string s = exprStr(*in.lhs) + (in.negated ? " NOT IN (" : " IN (");
 		for (std::size_t i = 0; i < in.list.size(); ++i) {
-			if (i)
+			if (i) {
 				s += ", ";
+			}
 			s += exprStr(*in.list[i]);
 		}
 		return s + ")";
@@ -271,11 +325,13 @@ std::string exprStr(const Expression &e) {
 	case ExprKind::FunctionCall: {
 		const auto &f = static_cast<const FunctionCallExpr &>(e);
 		std::string s = f.iri->lexicalForm + "(";
-		if (f.distinct)
+		if (f.distinct) {
 			s += "DISTINCT ";
+		}
 		for (std::size_t i = 0; i < f.args.size(); ++i) {
-			if (i)
+			if (i) {
 				s += ", ";
+			}
 			s += exprStr(*f.args[i]);
 		}
 		return s + ")";
@@ -284,8 +340,9 @@ std::string exprStr(const Expression &e) {
 		const auto &b = static_cast<const BuiltInCallExpr &>(e);
 		std::string s = std::string(builtinName(b.fn)) + "(";
 		for (std::size_t i = 0; i < b.args.size(); ++i) {
-			if (i)
+			if (i) {
 				s += ", ";
+			}
 			s += exprStr(*b.args[i]);
 		}
 		return s + ")";
@@ -293,15 +350,17 @@ std::string exprStr(const Expression &e) {
 	case ExprKind::Aggregate: {
 		const auto &a = static_cast<const AggregateExpr &>(e);
 		std::string s = std::string(aggregateName(a.aggKind)) + "(";
-		if (a.distinct)
+		if (a.distinct) {
 			s += "DISTINCT ";
+		}
 		if (a.star) {
 			s += "*";
 		} else if (a.arg) {
 			s += exprStr(*a.arg);
 		}
-		if (a.hasSeparator)
+		if (a.hasSeparator) {
 			s += "; SEPARATOR=\"" + a.separator + "\"";
+		}
 		return s + ")";
 	}
 	case ExprKind::Exists: {
@@ -329,8 +388,9 @@ void printGroupGraphPattern(std::ostream &os, int indent, const GroupGraphPatter
 			const auto &b = static_cast<const BasicGraphPattern &>(*el);
 			printIndent(os, indent + 1);
 			os << "BasicGraphPattern\n";
-			for (const auto &tp : b.triples)
+			for (const auto &tp : b.triples) {
 				printTriplePattern(os, indent + 2, tp);
+			}
 			break;
 		}
 		case ElementKind::GroupGraphPattern:
@@ -340,8 +400,9 @@ void printGroupGraphPattern(std::ostream &os, int indent, const GroupGraphPatter
 			const auto &u = static_cast<const UnionGraphPattern &>(*el);
 			printIndent(os, indent + 1);
 			os << "Union\n";
-			for (const auto &br : u.branches)
+			for (const auto &br : u.branches) {
 				printGroupGraphPattern(os, indent + 2, *br);
+			}
 			break;
 		}
 		case ElementKind::OptionalGraphPattern:
@@ -388,8 +449,9 @@ void printGroupGraphPattern(std::ostream &os, int indent, const GroupGraphPatter
 			printIndent(os, indent + 1);
 			os << "Values (";
 			for (std::size_t i = 0; i < v.vars.size(); ++i) {
-				if (i)
+				if (i) {
 					os << " ";
+				}
 				os << "?" << v.vars[i]->name;
 			}
 			os << ") " << v.rows.size() << " row(s)\n";
@@ -407,12 +469,13 @@ void printGroupGraphPattern(std::ostream &os, int indent, const GroupGraphPatter
 void printQuery(std::ostream &os, int indent, const Query &q) {
 	printIndent(os, indent);
 	const char *formName = "SELECT";
-	if (q.form == QueryForm::Construct)
+	if (q.form == QueryForm::Construct) {
 		formName = "CONSTRUCT";
-	else if (q.form == QueryForm::Describe)
+	} else if (q.form == QueryForm::Describe) {
 		formName = "DESCRIBE";
-	else if (q.form == QueryForm::Ask)
+	} else if (q.form == QueryForm::Ask) {
 		formName = "ASK";
+	}
 	os << "Query [" << formName << (q.distinct ? " DISTINCT" : "") << (q.reduced ? " REDUCED" : "") << "]\n";
 
 	if (!q.prologue.baseIri.empty() || !q.prologue.prefixes.empty()) {
@@ -450,8 +513,9 @@ void printQuery(std::ostream &os, int indent, const Query &q) {
 	} else if (q.form == QueryForm::Construct) {
 		printIndent(os, indent + 1);
 		os << "ConstructTemplate\n";
-		for (const auto &tp : q.constructTemplate)
+		for (const auto &tp : q.constructTemplate) {
 			printTriplePattern(os, indent + 2, tp);
+		}
 	} else if (q.form == QueryForm::Describe) {
 		printIndent(os, indent + 1);
 		os << "Describe" << (q.describeStar ? " *" : "") << "\n";
@@ -474,8 +538,9 @@ void printQuery(std::ostream &os, int indent, const Query &q) {
 		for (const auto &g : sm.groupBy) {
 			printIndent(os, indent + 2);
 			os << exprStr(*g.expr);
-			if (g.asVar)
+			if (g.asVar) {
 				os << " AS ?" << g.asVar->name;
+			}
 			os << "\n";
 		}
 	}
@@ -507,8 +572,9 @@ void printQuery(std::ostream &os, int indent, const Query &q) {
 		printIndent(os, indent + 1);
 		os << "Values (";
 		for (std::size_t i = 0; i < q.valuesClause->vars.size(); ++i) {
-			if (i)
+			if (i) {
 				os << " ";
+			}
 			os << "?" << q.valuesClause->vars[i]->name;
 		}
 		os << ") " << q.valuesClause->rows.size() << " row(s)\n";
@@ -521,9 +587,11 @@ void print(std::ostream &os, const Query &query) {
 	printQuery(os, 0, query);
 }
 
+namespace ast {
 std::ostream &operator<<(std::ostream &os, const Query &query) {
-	print(os, query);
+	sparql::print(os, query);
 	return os;
 }
+} // namespace ast
 
 } // namespace sparql

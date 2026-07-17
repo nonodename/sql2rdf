@@ -11,8 +11,17 @@
 namespace sparql {
 namespace ast {
 
+Filter::Filter() : GroupElement(ElementKind::Filter) {
+}
 Filter::~Filter() = default;
+
+Bind::Bind() : GroupElement(ElementKind::Bind) {
+}
 Bind::~Bind() = default;
+
+SubSelectElement::SubSelectElement(std::unique_ptr<Query> query)
+    : GroupElement(ElementKind::SubSelect), query(std::move(query)) {
+}
 SubSelectElement::~SubSelectElement() = default;
 
 } // namespace ast

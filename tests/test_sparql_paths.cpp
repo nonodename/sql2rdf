@@ -8,8 +8,18 @@
 
 #include "sparql-parser/Parser.h"
 
-using namespace sparql;
-using namespace sparql::ast;
+using sparql::ParseError;
+using sparql::Parser;
+using sparql::ast::AlternativePath;
+using sparql::ast::BasicGraphPattern;
+using sparql::ast::NegatedPropertySet;
+using sparql::ast::OneOrMorePath;
+using sparql::ast::PathKind;
+using sparql::ast::PredicatePath;
+using sparql::ast::PropertyPathExpr;
+using sparql::ast::Query;
+using sparql::ast::SequencePath;
+using sparql::ast::VariablePath;
 
 namespace {
 const PropertyPathExpr &predicateOf(const Query &q, std::size_t elementIndex = 0, std::size_t tripleIndex = 0) {

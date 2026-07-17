@@ -8,7 +8,8 @@
 
 #include "sparql-parser/Parser.h"
 
-using namespace sparql;
+using sparql::ParseError;
+using sparql::Parser;
 
 namespace {
 void expectParseErrorWithLocation(const std::string &path) {

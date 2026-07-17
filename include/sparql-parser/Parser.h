@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -35,7 +36,7 @@ public:
 
 private:
 	// ---- token-stream plumbing ----------------------------------------
-	void initLexer(std::string text);
+	void initLexer(const std::string &text);
 	const Token &cur() const {
 		return current_;
 	}
@@ -160,7 +161,7 @@ private:
 	std::unique_ptr<Lexer> lexer_;
 	Token current_;
 	ast::Prologue *prologue_ = nullptr; // points at the Prologue of the query currently being built
-	unsigned long blankNodeCounter_ = 0;
+	uint64_t blankNodeCounter_ = 0;
 };
 
 } // namespace sparql

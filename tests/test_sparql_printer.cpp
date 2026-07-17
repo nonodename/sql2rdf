@@ -10,12 +10,12 @@
 #include "sparql-parser/Parser.h"
 #include "sparql-parser/PrettyPrinter.h"
 
-using namespace sparql;
+using sparql::Parser;
 
 namespace {
-std::string printToString(const ast::Query &q) {
+std::string printToString(const sparql::ast::Query &q) {
 	std::ostringstream oss;
-	print(oss, q);
+	sparql::print(oss, q);
 	return oss.str();
 }
 } // namespace
@@ -34,7 +34,7 @@ TEST_CASE("operator<< delegates to print() and produces identical output") {
 	Parser parser;
 	auto q = parser.parseFile(SOURCE_SPARQL_DIR "ask_query.rq");
 	std::ostringstream a, b;
-	print(a, *q);
+	sparql::print(a, *q);
 	b << *q;
 	REQUIRE(a.str() == b.str());
 	REQUIRE(a.str().find("Query [ASK]") != std::string::npos);

@@ -8,8 +8,29 @@
 
 #include "sparql-parser/Parser.h"
 
-using namespace sparql;
-using namespace sparql::ast;
+using sparql::Parser;
+using sparql::ast::BasicGraphPattern;
+using sparql::ast::Bind;
+using sparql::ast::BlankNode;
+using sparql::ast::ElementKind;
+using sparql::ast::ExistsExpr;
+using sparql::ast::ExprKind;
+using sparql::ast::Filter;
+using sparql::ast::GraphGraphPattern;
+using sparql::ast::GroupGraphPattern;
+using sparql::ast::InlineData;
+using sparql::ast::Iri;
+using sparql::ast::MinusGraphPattern;
+using sparql::ast::OptionalGraphPattern;
+using sparql::ast::PathKind;
+using sparql::ast::PredicatePath;
+using sparql::ast::Query;
+using sparql::ast::QueryForm;
+using sparql::ast::RdfLiteral;
+using sparql::ast::ServiceGraphPattern;
+using sparql::ast::SubSelectElement;
+using sparql::ast::TermKind;
+using sparql::ast::UnionGraphPattern;
 
 namespace {
 const BasicGraphPattern &firstBgp(const GroupGraphPattern &g) {
@@ -45,10 +66,12 @@ TEST_CASE("RDF collections desugar into an rdf:first/rdf:rest/rdf:nil chain (spe
 	int firstCount = 0, restCount = 0;
 	for (const auto &tp : bgp.triples) {
 		const auto &pred = static_cast<const PredicatePath &>(*tp.predicate);
-		if (pred.iri->value == "http://www.w3.org/1999/02/22-rdf-syntax-ns#first")
+		if (pred.iri->value == "http://www.w3.org/1999/02/22-rdf-syntax-ns#first") {
 			++firstCount;
-		if (pred.iri->value == "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest")
+		}
+		if (pred.iri->value == "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest") {
 			++restCount;
+		}
 	}
 	REQUIRE(firstCount == 4);
 	REQUIRE(restCount == 4);
@@ -70,12 +93,15 @@ TEST_CASE("Blank node property lists '[ ... ]' generate a fresh blank node subje
 	int pCount = 0, qCount = 0, linksCount = 0;
 	for (const auto &tp : bgp.triples) {
 		const auto &pred = static_cast<const PredicatePath &>(*tp.predicate);
-		if (pred.iri->value == "http://example.org/ns#p")
+		if (pred.iri->value == "http://example.org/ns#p") {
 			++pCount;
-		if (pred.iri->value == "http://example.org/ns#q")
+		}
+		if (pred.iri->value == "http://example.org/ns#q") {
 			++qCount;
-		if (pred.iri->value == "http://example.org/ns#links")
+		}
+		if (pred.iri->value == "http://example.org/ns#links") {
 			++linksCount;
+		}
 	}
 	REQUIRE(pCount == 1);
 	REQUIRE(qCount == 1);
@@ -128,8 +154,9 @@ TEST_CASE("MINUS wraps its inner pattern (spec 8.2)") {
 	REQUIRE(q->distinct);
 	bool sawMinus = false;
 	for (const auto &el : q->where->elements) {
-		if (el->kind() == ElementKind::MinusGraphPattern)
+		if (el->kind() == ElementKind::MinusGraphPattern) {
 			sawMinus = true;
+		}
 	}
 	REQUIRE(sawMinus);
 }

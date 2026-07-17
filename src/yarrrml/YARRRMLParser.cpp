@@ -37,6 +37,33 @@
 #include <vector>
 
 namespace yarrrml {
+static const char *const RR_TERM_TYPE = "http://www.w3.org/ns/r2rml#termType";
+static const char *const RR_IRI_TERM_TYPE = "http://www.w3.org/ns/r2rml#IRI";
+static const char *const RR_LITERAL_TERM_TYPE = "http://www.w3.org/ns/r2rml#Literal";
+static const char *const RR_BLANKNODE_TERM_TYPE = "http://www.w3.org/ns/r2rml#BlankNode";
+static const char *const RR_LANGUAGE_TERM_TYPE = "http://www.w3.org/ns/r2rml#Language";
+static const char *const RR_TABLE_NAME = "http://www.w3.org/ns/r2rml#tableName";
+static const char *const RR_LOGICAL_TABLE = "http://www.w3.org/ns/r2rml#logicalTable";
+static const char *const RR_SQL_QUERY = "http://www.w3.org/ns/r2rml#sqlQuery";
+static const char *const RR_DATATYPE = "http://www.w3.org/ns/r2rml#datatype";
+static const char *const RR_TEMPLATE = "http://www.w3.org/ns/r2rml#template";
+static const char *const RR_COLUMN = "http://www.w3.org/ns/r2rml#column";
+static const char *const RR_CONSTANT = "http://www.w3.org/ns/r2rml#constant";
+static const char *const RR_PARENTTRIPLESMAP = "http://www.w3.org/ns/r2rml#parentTriplesMap";
+static const char *const RR_JOIN_CONDITION = "http://www.w3.org/ns/r2rml#joinCondition";
+static const char *const RR_CHILD = "http://www.w3.org/ns/r2rml#child";
+static const char *const RR_PARENT = "http://www.w3.org/ns/r2rml#parent";
+static const char *const RR_CLASS = "http://www.w3.org/ns/r2rml#class";
+static const char *const RR_PREDICATE = "http://www.w3.org/ns/r2rml#predicate";
+static const char *const RR_PREDICATE_MAP = "http://www.w3.org/ns/r2rml#predicateMap";
+static const char *const RR_OBJECT = "http://www.w3.org/ns/r2rml#object";
+static const char *const RR_OBJECT_MAP = "http://www.w3.org/ns/r2rml#objectMap";
+static const char *const RR_SUBJECT = "http://www.w3.org/ns/r2rml#subject";
+static const char *const RR_SUBJECT_MAP = "http://www.w3.org/ns/r2rml#subjectMap";
+static const char *const RR_LANGUAGE = "http://www.w3.org/ns/r2rml#language";
+static const char *const RR_PREDICATE_OBJECT_MAP = "http://www.w3.org/ns/r2rml#predicateObjectMap";
+static const char *const RR_TRIPLES_MAP = "http://www.w3.org/ns/r2rml#triplesMap";
+static const char *const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
 namespace {
 
@@ -326,9 +353,6 @@ std::string extractColumnRef(const YAML::Node &param) {
 // Turtle-parsing paths use.
 // ---------------------------------------------------------------------------
 
-const std::string RR = "http://www.w3.org/ns/r2rml#";
-const std::string RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-
 /// A reference to a node already known to a translation step: either a named
 /// IRI (possibly relative, e.g. "#TriplesMap1") or a blank node minted via
 /// BlankNodeMinter. `valid == false` denotes "no node" (nothing to link).
@@ -404,28 +428,28 @@ NodeRef emitValueSpecAsMap(r2rml::TripleCollector &collector, BlankNodeMinter &b
 	NodeRef node = blanks.next();
 	switch (vs.kind) {
 	case VKind::Column:
-		emitLiteralTriple(collector, node, RR + "column", vs.text);
+		emitLiteralTriple(collector, node, RR_COLUMN, vs.text);
 		if (vs.forceIri) {
-			emitUriTriple(collector, node, RR + "termType", NodeRef::uri(RR + "IRI"));
+			emitUriTriple(collector, node, RR_TERM_TYPE, NodeRef::uri(RR_IRI_TERM_TYPE));
 		}
 		break;
 	case VKind::Template:
-		emitLiteralTriple(collector, node, RR + "template", vs.text);
+		emitLiteralTriple(collector, node, RR_TEMPLATE, vs.text);
 		break;
 	case VKind::ConstIri:
 		// Per R2RML, rr:constant with an IRI object carries no datatype/language.
-		emitUriTriple(collector, node, RR + "constant", NodeRef::uri(resolveIri(vs.text, prefixes)));
+		emitUriTriple(collector, node, RR_CONSTANT, NodeRef::uri(resolveIri(vs.text, prefixes)));
 		return node;
 	case VKind::ConstLit:
 	default:
-		emitLiteralTriple(collector, node, RR + "constant", vs.text);
+		emitLiteralTriple(collector, node, RR_CONSTANT, vs.text);
 		break;
 	}
 	if (!extra.datatypeIri.empty()) {
-		emitUriTriple(collector, node, RR + "datatype", NodeRef::uri(extra.datatypeIri));
+		emitUriTriple(collector, node, RR_DATATYPE, NodeRef::uri(extra.datatypeIri));
 	}
 	if (!extra.language.empty()) {
-		emitLiteralTriple(collector, node, RR + "language", extra.language);
+		emitLiteralTriple(collector, node, RR_LANGUAGE, extra.language);
 	}
 	return node;
 }
@@ -448,12 +472,12 @@ PredicateResult buildPredicateResult(r2rml::TripleCollector &collector, BlankNod
 	switch (vs.kind) {
 	case VKind::Template: {
 		NodeRef node = blanks.next();
-		emitLiteralTriple(collector, node, RR + "template", vs.text);
+		emitLiteralTriple(collector, node, RR_TEMPLATE, vs.text);
 		return PredicateResult {false, "", node};
 	}
 	case VKind::Column: {
 		NodeRef node = blanks.next();
-		emitLiteralTriple(collector, node, RR + "column", vs.text);
+		emitLiteralTriple(collector, node, RR_COLUMN, vs.text);
 		return PredicateResult {false, "", node};
 	}
 	case VKind::ConstIri:
@@ -498,8 +522,7 @@ NodeRef emitObjectNode(r2rml::TripleCollector &collector, BlankNodeMinter &blank
 		YAML::Node mappingRefNode = objNode["mapping"];
 		if (mappingRefNode && mappingRefNode.IsScalar()) {
 			NodeRef node = blanks.next();
-			emitUriTriple(collector, node, RR + "parentTriplesMap",
-			              NodeRef::uri("#" + mappingRefNode.as<std::string>()));
+			emitUriTriple(collector, node, RR_PARENTTRIPLESMAP, NodeRef::uri("#" + mappingRefNode.as<std::string>()));
 
 			YAML::Node condNode = firstOf(objNode, {"condition", "conditions"});
 			for (const YAML::Node &c : flattenList(condNode)) {
@@ -527,9 +550,9 @@ NodeRef emitObjectNode(r2rml::TripleCollector &collector, BlankNodeMinter &blank
 					continue;
 				}
 				NodeRef jc = blanks.next();
-				emitLiteralTriple(collector, jc, RR + "child", childCol);
-				emitLiteralTriple(collector, jc, RR + "parent", parentCol);
-				emitUriTriple(collector, node, RR + "joinCondition", jc);
+				emitLiteralTriple(collector, jc, RR_CHILD, childCol);
+				emitLiteralTriple(collector, jc, RR_PARENT, parentCol);
+				emitUriTriple(collector, node, RR_JOIN_CONDITION, jc);
 			}
 			return node;
 		}
@@ -592,11 +615,11 @@ void emitPredObjPair(r2rml::TripleCollector &collector, BlankNodeMinter &blanks,
 			if (objMap.valid) {
 				NodeRef pom = blanks.next();
 				if (predResult.isConstant) {
-					emitUriTriple(collector, pom, RR + "predicate", NodeRef::uri(predResult.constantIri));
+					emitUriTriple(collector, pom, RR_PREDICATE, NodeRef::uri(predResult.constantIri));
 				} else {
-					emitUriTriple(collector, pom, RR + "predicateMap", predResult.mapNode);
+					emitUriTriple(collector, pom, RR_PREDICATE_MAP, predResult.mapNode);
 				}
-				emitUriTriple(collector, pom, RR + "objectMap", objMap);
+				emitUriTriple(collector, pom, RR_OBJECT_MAP, objMap);
 				res.pomNodes.push_back(pom);
 			}
 		}
@@ -686,13 +709,13 @@ NodeRef emitLogicalTable(r2rml::TripleCollector &collector, BlankNodeMinter &bla
 	YAML::Node queryNode = src["query"];
 	if (queryNode && queryNode.IsScalar()) {
 		NodeRef node = blanks.next();
-		emitLiteralTriple(collector, node, RR + "sqlQuery", queryNode.as<std::string>());
+		emitLiteralTriple(collector, node, RR_SQL_QUERY, queryNode.as<std::string>());
 		return node;
 	}
 	YAML::Node tableNode = src["table"];
 	if (tableNode && tableNode.IsScalar()) {
 		NodeRef node = blanks.next();
-		emitLiteralTriple(collector, node, RR + "tableName", tableNode.as<std::string>());
+		emitLiteralTriple(collector, node, RR_TABLE_NAME, tableNode.as<std::string>());
 		return node;
 	}
 
@@ -740,19 +763,19 @@ NodeRef emitSubjectMap(r2rml::TripleCollector &collector, BlankNodeMinter &blank
 	if (haveValue) {
 		switch (valueKind) {
 		case VKind::Column:
-			emitLiteralTriple(collector, node, RR + "column", valueText);
+			emitLiteralTriple(collector, node, RR_COLUMN, valueText);
 			break;
 		case VKind::Template:
-			emitLiteralTriple(collector, node, RR + "template", valueText);
+			emitLiteralTriple(collector, node, RR_TEMPLATE, valueText);
 			break;
 		case VKind::ConstIri:
 		default:
-			emitUriTriple(collector, node, RR + "constant", NodeRef::uri(resolveIri(valueText, prefixes)));
+			emitUriTriple(collector, node, RR_CONSTANT, NodeRef::uri(resolveIri(valueText, prefixes)));
 			break;
 		}
 	}
 	for (const std::string &c : classIris) {
-		emitUriTriple(collector, node, RR + "class", NodeRef::uri(c));
+		emitUriTriple(collector, node, RR_CLASS, NodeRef::uri(c));
 	}
 	return node;
 }
@@ -787,18 +810,18 @@ void emitOneMapping(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, 
 		// Still a syntactically valid (but semantically inert) TriplesMap: the
 		// R2RML object model only recognises a resource as a TriplesMap when it
 		// carries rr:logicalTable/subjectMap/predicateObjectMap/subject.
-		emitUriTriple(collector, subject, RDF_TYPE, NodeRef::uri(RR + "TriplesMap"));
+		emitUriTriple(collector, subject, RDF_TYPE, NodeRef::uri(RR_TRIPLES_MAP));
 		return;
 	}
 
 	if (logicalTable.valid) {
-		emitUriTriple(collector, subject, RR + "logicalTable", logicalTable);
+		emitUriTriple(collector, subject, RR_LOGICAL_TABLE, logicalTable);
 	}
 	if (subjectMap.valid) {
-		emitUriTriple(collector, subject, RR + "subjectMap", subjectMap);
+		emitUriTriple(collector, subject, RR_SUBJECT_MAP, subjectMap);
 	}
 	for (const NodeRef &pom : poResult.pomNodes) {
-		emitUriTriple(collector, subject, RR + "predicateObjectMap", pom);
+		emitUriTriple(collector, subject, RR_PREDICATE_OBJECT_MAP, pom);
 	}
 }
 

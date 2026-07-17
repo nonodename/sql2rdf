@@ -23,7 +23,8 @@ namespace r2rml {
 // ---------------------------------------------------------------------------
 class DuckDBSQLValue : public SQLValue {
 public:
-	explicit DuckDBSQLValue(duckdb::Value val) : val_(std::move(val)) {
+	explicit DuckDBSQLValue(duckdb::Value val) // NOLINT(performance-unnecessary-value-param)
+	    : val_(std::move(val)) {
 	}
 
 	bool isNull() const override {
