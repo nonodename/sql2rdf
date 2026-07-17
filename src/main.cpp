@@ -12,6 +12,8 @@
 #include "r2rml/MappingParser.h"
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/TriplesMap.h"
+#include "sparql-parser/Parser.h"
+#include "sparql-parser/PrettyPrinter.h"
 #include "yarrrml/YARRRMLParser.h"
 
 static void printHelp(const char *programName) {
@@ -30,6 +32,9 @@ static void printHelp(const char *programName) {
 	          << "  -y                   Force the mapping file to be parsed as YARRRML,\n"
 	          << "                       regardless of its extension\n"
 	          << "  -P                   Print the parsed mapping to stderr\n"
+	          << "  -Q <file.rq>         Parse a SPARQL query file and print its AST to\n"
+	          << "                       stdout, then exit (bypasses the mapping/database/\n"
+	          << "                       output pipeline entirely)\n"
 	          << "  -h                   Show this help message\n";
 }
 
@@ -45,6 +50,7 @@ int main(int argc, char *argv[]) {
 	const char *mappingFile = nullptr;
 	const char *databaseFile = nullptr;
 	const char *outputFile = nullptr;
+	const char *sparqlQueryFile = nullptr;
 
 	for (int i = 1; i < argc; ++i) {
 		if (std::strcmp(argv[i], "-h") == 0 || std::strcmp(argv[i], "--help") == 0) {
@@ -54,6 +60,12 @@ int main(int argc, char *argv[]) {
 			printMapping = true;
 		} else if (std::strcmp(argv[i], "-y") == 0) {
 			forceYarrrml = true;
+		} else if (std::strcmp(argv[i], "-Q") == 0) {
+			if (++i >= argc) {
+				std::cerr << "Error: -Q requires a SPARQL query file argument\n";
+				return 1;
+			}
+			sparqlQueryFile = argv[i];
 		} else if (std::strcmp(argv[i], "-f") == 0) {
 			if (++i >= argc) {
 				std::cerr << "Error: -f requires a format argument"
@@ -85,6 +97,18 @@ int main(int argc, char *argv[]) {
 			printHelp(argv[0]);
 			return 1;
 		}
+	}
+
+	if (sparqlQueryFile) {
+		try {
+			sparql::Parser parser;
+			std::unique_ptr<sparql::ast::Query> query = parser.parseFile(sparqlQueryFile);
+			sparql::print(std::cout, *query);
+		} catch (const std::exception &e) {
+			std::cerr << "Error: failed to parse SPARQL query '" << sparqlQueryFile << "': " << e.what() << "\n";
+			return 1;
+		}
+		return 0;
 	}
 
 	if (!mappingFile || !databaseFile || !outputFile) {

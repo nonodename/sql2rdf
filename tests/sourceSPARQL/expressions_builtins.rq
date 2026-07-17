@@ -1,0 +1,17 @@
+PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
+
+SELECT ?name
+WHERE {
+  ?x foaf:name ?name ;
+     foaf:mbox ?mbox .
+  FILTER (
+    regex(?name, "^ali", "i") &&
+    STRLEN(?name) > 2 &&
+    CONTAINS(STR(?mbox), "@") &&
+    bound(?mbox) &&
+    isIRI(?mbox) &&
+    !isBLANK(?x) &&
+    xsd:integer("1") = 1
+  )
+}

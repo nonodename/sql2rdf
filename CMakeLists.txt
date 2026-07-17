@@ -119,12 +119,13 @@ if(SQL2RDF_BUILD_TESTS)
   # Include headers for tests and link to Catch2 and serd
   target_include_directories(test_runner PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/external/serd/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   if(UNIX)
-    target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml sql2rdf_yarrrml serd m)
+    target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql serd m)
   else()
-    target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml sql2rdf_yarrrml serd)
+    target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql serd)
   endif()
   target_compile_definitions(test_runner PRIVATE SOURCE_R2RML_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/sourceR2RML/")
   target_compile_definitions(test_runner PRIVATE SOURCE_YARRRML_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/sourceYARRRML/")
+  target_compile_definitions(test_runner PRIVATE SOURCE_SPARQL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/sourceSPARQL/")
 
   # Register individual Catch2 test cases with CTest
   catch_discover_tests(test_runner)
@@ -188,10 +189,32 @@ target_include_directories(sql2rdf_yarrrml PUBLIC
 target_link_libraries(sql2rdf_yarrrml PUBLIC sql2rdf_r2rml)
 target_link_libraries(sql2rdf_yarrrml PRIVATE yaml-cpp::yaml-cpp)
 
+# ----------------------------------------------------------------------------
+# SPARQL 1.1 Query grammar parser - a standalone library with no dependency
+# on r2rml/yarrrml/DuckDB/yaml-cpp/serd (genuinely independent of the
+# mapping-conversion domain; only <string>/<vector>/<memory>/<stdexcept>).
+# ----------------------------------------------------------------------------
+set(SPARQL_SOURCES
+  src/sparql-parser/Lexer.cpp
+  src/sparql-parser/ParseError.cpp
+  src/sparql-parser/Ast.cpp
+  src/sparql-parser/Parser.cpp
+  src/sparql-parser/ParserGraphPatterns.cpp
+  src/sparql-parser/ParserPaths.cpp
+  src/sparql-parser/ParserExpressions.cpp
+  src/sparql-parser/PrettyPrinter.cpp
+)
+add_library(sql2rdf_sparql STATIC ${SPARQL_SOURCES})
+add_library(sql2rdf::sparql ALIAS sql2rdf_sparql)
+target_include_directories(sql2rdf_sparql PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
 # Specify main executable sources and link to the library (requires DuckDB)
 if(SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB))
   add_executable(${PROJECT_NAME} src/main.cpp src/DuckDBConnection.cpp)
-  target_link_libraries(${PROJECT_NAME} PRIVATE sql2rdf_r2rml sql2rdf_yarrrml duckdb)
+  target_link_libraries(${PROJECT_NAME} PRIVATE sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql duckdb)
   target_include_directories(${PROJECT_NAME} PRIVATE include src)
 endif()
 
