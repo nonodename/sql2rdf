@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SQL2RDF++ converts relational database tables to RDF using [R2RML](https://www.w3.org/TR/r2rml/) mappings, with [YARRRML](https://rml.io/yarrrml/spec/) (YAML) accepted as a friendlier front-end. The long-term goal is to lift the core library into a DuckDB extension, so the core must stay free of DuckDB and YAML dependencies (see layering below).
 
+The repo also includes `sql2rdf_sparql`, a standalone SPARQL 1.1 Query grammar parser (`namespace sparql::`). It has no relationship to the R2RML/YARRRML mapping pipeline — it doesn't depend on `sql2rdf_r2rml`/`sql2rdf_yarrrml`/DuckDB/yaml-cpp/Serd, and nothing in the mapping pipeline depends on it. It exists to parse and inspect `.rq` query files; the CLI exposes it via a separate `-Q <file.rq>` flag that parses-and-prints an AST, bypassing the mapping/DB/output pipeline entirely.
+
 Language standard is C++11 (`CMAKE_CXX_STANDARD 11` in CMakeLists.txt). Do not use C++14+ features in library or test code.
 
 ## Setup and build
@@ -22,6 +24,7 @@ Common targets:
 ```sh
 cmake --build build --target sql2rdf_r2rml   # core library (no DuckDB, no yaml-cpp)
 cmake --build build --target sql2rdf_yarrrml # YARRRML→R2RML translator library
+cmake --build build --target sql2rdf_sparql  # standalone SPARQL query parser library
 cmake --build build --target test_runner     # tests (no DuckDB needed)
 cmake --build build --target SQL2RDF++       # CLI (requires DuckDB installed, e.g. `brew install duckdb`)
 cmake --build build                          # everything
@@ -40,7 +43,7 @@ ctest --test-dir build                       # alternative: run via CTest
 ctest --test-dir build -R "<regex>"          # or filter by name via CTest
 ```
 
-Test fixtures: R2RML Turtle mappings in `tests/sourceR2RML/`, YARRRML equivalents plus feature/error fixtures in `tests/sourceYARRRML/`. The directories are passed to the test binary as compile definitions `SOURCE_R2RML_DIR` / `SOURCE_YARRRML_DIR`, so tests reference fixtures by bare filename. Fixtures are based on the examples in the W3C R2RML spec.
+Test fixtures: R2RML Turtle mappings in `tests/sourceR2RML/`, YARRRML equivalents plus feature/error fixtures in `tests/sourceYARRRML/`, SPARQL query fixtures (valid queries and `invalid_*.rq` error cases) in `tests/sourceSPARQL/`. The directories are passed to the test binary as compile definitions `SOURCE_R2RML_DIR` / `SOURCE_YARRRML_DIR` / `SOURCE_SPARQL_DIR`, so tests reference fixtures by bare filename. R2RML/YARRRML fixtures are based on the examples in the W3C R2RML spec.
 
 ## Lint / format
 
@@ -61,6 +64,8 @@ Strict dependency layering — this is the most important constraint when adding
 1. **`sql2rdf_r2rml`** (`src/r2rml/`, headers in `include/r2rml/`, namespace `r2rml::`) — the core R2RML engine. Links only Serd (vendored C library, `external/serd` submodule). Must never depend on DuckDB or yaml-cpp.
 2. **`sql2rdf_yarrrml`** (`src/yarrrml/YARRRMLParser.cpp`) — translates YARRRML YAML into R2RML Turtle **text**, which is then fed to the same `R2RMLParser` used for `.ttl` files, so both formats produce identical output. Links yaml-cpp PRIVATE so it doesn't leak to consumers.
 3. **`SQL2RDF++` CLI** (`src/main.cpp`, `src/DuckDBConnection.*`) — the only code that touches DuckDB. `DuckDBConnection.h` deliberately lives in `src/`, not `include/`.
+
+**`sql2rdf_sparql`** (`src/sparql-parser/`, headers in `include/sparql-parser/`, namespace `sparql::`) sits outside this layering entirely — a standalone SPARQL 1.1 Query grammar parser (recursive descent, one-token lookahead) with no dependency on `sql2rdf_r2rml`/`sql2rdf_yarrrml`/DuckDB/yaml-cpp/Serd, only the C++ standard library. `Lexer`/`Parser` produce an AST (`include/sparql-parser/ast/`); `PrettyPrinter` renders it back to text; `ParseError` reports failures. SPARQL *Update* grammar is explicitly out of scope — only the *Query* grammar is supported. Keep it standalone: do not introduce a dependency from `sql2rdf_sparql` on the R2RML/YARRRML code, or vice versa, unless a future task explicitly wires SPARQL into the mapping pipeline.
 
 Key abstractions in the core:
 

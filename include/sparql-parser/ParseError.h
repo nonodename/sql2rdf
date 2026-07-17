@@ -15,14 +15,22 @@ class ParseError : public std::runtime_error {
 public:
 	ParseError(const std::string &message, std::size_t line, std::size_t column, const std::string &nearText);
 
-	std::size_t line() const noexcept { return line_; }
-	std::size_t column() const noexcept { return column_; }
-	const std::string &nearText() const noexcept { return nearText_; }
-	const std::string &message() const noexcept { return message_; }
+	std::size_t line() const noexcept {
+		return line_;
+	}
+	std::size_t column() const noexcept {
+		return column_;
+	}
+	const std::string &nearText() const noexcept {
+		return nearText_;
+	}
+	const std::string &message() const noexcept {
+		return message_;
+	}
 
 private:
 	static std::string format(const std::string &message, std::size_t line, std::size_t column,
-	                           const std::string &nearText);
+	                          const std::string &nearText);
 
 	std::string message_;
 	std::size_t line_;

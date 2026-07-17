@@ -38,7 +38,7 @@ TEST_CASE("Multiple GROUP BY conditions are all captured") {
 TEST_CASE("ORDER BY ASC()/DESC() and a bare variable (implicit ASC)") {
 	Parser parser;
 	auto q = parser.parseString("SELECT ?name WHERE { ?x <urn:name> ?name ; <urn:emp> ?emp } "
-	                             "ORDER BY ?name DESC(?emp)");
+	                            "ORDER BY ?name DESC(?emp)");
 	REQUIRE(q->solutionModifier.orderBy.size() == 2);
 	REQUIRE(q->solutionModifier.orderBy[0].direction == OrderDirection::Asc);
 	REQUIRE(q->solutionModifier.orderBy[1].direction == OrderDirection::Desc);

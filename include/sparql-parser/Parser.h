@@ -36,7 +36,9 @@ public:
 private:
 	// ---- token-stream plumbing ----------------------------------------
 	void initLexer(std::string text);
-	const Token &cur() const { return current_; }
+	const Token &cur() const {
+		return current_;
+	}
 	void advance();
 	bool check(TokenType type) const;
 	bool checkKeyword(const char *kw) const;
@@ -104,7 +106,7 @@ private:
 	void parseTriplesSameSubject(std::vector<ast::TriplePattern> &out, bool pathMode);
 	void parsePropertyListNotEmpty(const ast::Term &subject, std::vector<ast::TriplePattern> &out, bool pathMode);
 	void parseObjectList(const ast::Term &subject, const ast::PropertyPathExpr &predicate,
-	                      std::vector<ast::TriplePattern> &out, bool pathMode);
+	                     std::vector<ast::TriplePattern> &out, bool pathMode);
 	std::unique_ptr<ast::Term> parseDataBlockValue();
 	std::unique_ptr<ast::PropertyPathExpr> parseVerbSimple();
 	/// Dispatches to a bare-variable predicate, parsePath() (path mode), or

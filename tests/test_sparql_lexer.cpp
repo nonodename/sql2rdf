@@ -17,7 +17,8 @@ std::vector<Token> tokenize(const std::string &text) {
 	for (;;) {
 		Token t = lexer.next();
 		tokens.push_back(t);
-		if (t.type == TokenType::Eof) break;
+		if (t.type == TokenType::Eof)
+			break;
 	}
 	return tokens;
 }
@@ -144,7 +145,7 @@ TEST_CASE("Lexer comments run to end of line and are skipped") {
 	auto tokens = tokenize("?x # a comment with < and { in it\n?y");
 	REQUIRE(tokens[0].type == TokenType::Var1);
 	REQUIRE(tokens[0].text == "x");
-	REQUIRE(tokens[1].type == TokenType::Var2 || tokens[1].type == TokenType::Var1);
+	REQUIRE((tokens[1].type == TokenType::Var2 || tokens[1].type == TokenType::Var1));
 	REQUIRE(tokens[1].text == "y");
 }
 

@@ -79,10 +79,13 @@ enum class BuiltinFunction {
 
 class Expression {
 public:
-	explicit Expression(ExprKind kind) : kind_(kind) {}
+	explicit Expression(ExprKind kind) : kind_(kind) {
+	}
 	virtual ~Expression() = default;
 
-	ExprKind kind() const { return kind_; }
+	ExprKind kind() const {
+		return kind_;
+	}
 
 private:
 	ExprKind kind_;
@@ -90,21 +93,25 @@ private:
 
 class LiteralExpr : public Expression {
 public:
-	explicit LiteralExpr(std::unique_ptr<RdfLiteral> literal) : Expression(ExprKind::Literal), literal(std::move(literal)) {}
+	explicit LiteralExpr(std::unique_ptr<RdfLiteral> literal)
+	    : Expression(ExprKind::Literal), literal(std::move(literal)) {
+	}
 
 	std::unique_ptr<RdfLiteral> literal;
 };
 
 class VarExpr : public Expression {
 public:
-	explicit VarExpr(std::unique_ptr<Var> var) : Expression(ExprKind::VarRef), var(std::move(var)) {}
+	explicit VarExpr(std::unique_ptr<Var> var) : Expression(ExprKind::VarRef), var(std::move(var)) {
+	}
 
 	std::unique_ptr<Var> var;
 };
 
 class IriExpr : public Expression {
 public:
-	explicit IriExpr(std::unique_ptr<Iri> iri) : Expression(ExprKind::IriRef), iri(std::move(iri)) {}
+	explicit IriExpr(std::unique_ptr<Iri> iri) : Expression(ExprKind::IriRef), iri(std::move(iri)) {
+	}
 
 	std::unique_ptr<Iri> iri;
 };
@@ -112,7 +119,8 @@ public:
 class UnaryExpr : public Expression {
 public:
 	UnaryExpr(UnaryOp op, std::unique_ptr<Expression> operand)
-	    : Expression(ExprKind::Unary), op(op), operand(std::move(operand)) {}
+	    : Expression(ExprKind::Unary), op(op), operand(std::move(operand)) {
+	}
 
 	UnaryOp op;
 	std::unique_ptr<Expression> operand;
@@ -121,7 +129,8 @@ public:
 class BinaryExpr : public Expression {
 public:
 	BinaryExpr(BinaryOp op, std::unique_ptr<Expression> left, std::unique_ptr<Expression> right)
-	    : Expression(ExprKind::Binary), op(op), left(std::move(left)), right(std::move(right)) {}
+	    : Expression(ExprKind::Binary), op(op), left(std::move(left)), right(std::move(right)) {
+	}
 
 	BinaryOp op;
 	std::unique_ptr<Expression> left;
@@ -132,7 +141,8 @@ public:
 class InExpr : public Expression {
 public:
 	InExpr(std::unique_ptr<Expression> lhs, std::vector<std::unique_ptr<Expression>> list, bool negated)
-	    : Expression(ExprKind::In), lhs(std::move(lhs)), list(std::move(list)), negated(negated) {}
+	    : Expression(ExprKind::In), lhs(std::move(lhs)), list(std::move(list)), negated(negated) {
+	}
 
 	std::unique_ptr<Expression> lhs;
 	std::vector<std::unique_ptr<Expression>> list;
@@ -144,7 +154,8 @@ public:
 class FunctionCallExpr : public Expression {
 public:
 	FunctionCallExpr(std::unique_ptr<Iri> iri, std::vector<std::unique_ptr<Expression>> args, bool distinct)
-	    : Expression(ExprKind::FunctionCall), iri(std::move(iri)), args(std::move(args)), distinct(distinct) {}
+	    : Expression(ExprKind::FunctionCall), iri(std::move(iri)), args(std::move(args)), distinct(distinct) {
+	}
 
 	std::unique_ptr<Iri> iri;
 	std::vector<std::unique_ptr<Expression>> args;
@@ -154,7 +165,8 @@ public:
 class BuiltInCallExpr : public Expression {
 public:
 	BuiltInCallExpr(BuiltinFunction fn, std::vector<std::unique_ptr<Expression>> args)
-	    : Expression(ExprKind::BuiltInCall), fn(fn), args(std::move(args)) {}
+	    : Expression(ExprKind::BuiltInCall), fn(fn), args(std::move(args)) {
+	}
 
 	BuiltinFunction fn;
 	std::vector<std::unique_ptr<Expression>> args;
@@ -164,7 +176,8 @@ public:
 /// `star` is true (COUNT(*)).
 class AggregateExpr : public Expression {
 public:
-	AggregateExpr() : Expression(ExprKind::Aggregate) {}
+	AggregateExpr() : Expression(ExprKind::Aggregate) {
+	}
 
 	AggregateKind aggKind = AggregateKind::Count;
 	bool distinct = false;
@@ -178,7 +191,8 @@ public:
 class ExistsExpr : public Expression {
 public:
 	ExistsExpr(bool negated, std::unique_ptr<GroupGraphPattern> pattern)
-	    : Expression(ExprKind::Exists), negated(negated), pattern(std::move(pattern)) {}
+	    : Expression(ExprKind::Exists), negated(negated), pattern(std::move(pattern)) {
+	}
 
 	bool negated;
 	std::unique_ptr<GroupGraphPattern> pattern;

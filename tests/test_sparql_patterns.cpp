@@ -20,7 +20,7 @@ const BasicGraphPattern &firstBgp(const GroupGraphPattern &g) {
 TEST_CASE("Predicate-object lists and object lists share a subject/predicate (spec 4.2.1/4.2.2)") {
 	Parser parser;
 	auto q = parser.parseString("PREFIX : <http://ex/>\n"
-	                             "SELECT * WHERE { ?x :name ?n ; :nick \"A\", \"B\" }");
+	                            "SELECT * WHERE { ?x :name ?n ; :nick \"A\", \"B\" }");
 	const auto &bgp = firstBgp(*q->where);
 	REQUIRE(bgp.triples.size() == 3);
 	REQUIRE(bgp.triples[1].predicate->kind() == PathKind::Predicate);
@@ -45,8 +45,10 @@ TEST_CASE("RDF collections desugar into an rdf:first/rdf:rest/rdf:nil chain (spe
 	int firstCount = 0, restCount = 0;
 	for (const auto &tp : bgp.triples) {
 		const auto &pred = static_cast<const PredicatePath &>(*tp.predicate);
-		if (pred.iri->value == "http://www.w3.org/1999/02/22-rdf-syntax-ns#first") ++firstCount;
-		if (pred.iri->value == "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest") ++restCount;
+		if (pred.iri->value == "http://www.w3.org/1999/02/22-rdf-syntax-ns#first")
+			++firstCount;
+		if (pred.iri->value == "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest")
+			++restCount;
 	}
 	REQUIRE(firstCount == 4);
 	REQUIRE(restCount == 4);
@@ -68,9 +70,12 @@ TEST_CASE("Blank node property lists '[ ... ]' generate a fresh blank node subje
 	int pCount = 0, qCount = 0, linksCount = 0;
 	for (const auto &tp : bgp.triples) {
 		const auto &pred = static_cast<const PredicatePath &>(*tp.predicate);
-		if (pred.iri->value == "http://example.org/ns#p") ++pCount;
-		if (pred.iri->value == "http://example.org/ns#q") ++qCount;
-		if (pred.iri->value == "http://example.org/ns#links") ++linksCount;
+		if (pred.iri->value == "http://example.org/ns#p")
+			++pCount;
+		if (pred.iri->value == "http://example.org/ns#q")
+			++qCount;
+		if (pred.iri->value == "http://example.org/ns#links")
+			++linksCount;
 	}
 	REQUIRE(pCount == 1);
 	REQUIRE(qCount == 1);
@@ -106,7 +111,7 @@ TEST_CASE("UNION with two branches produces a UnionGraphPattern with 2 branches 
 TEST_CASE("Chained UNION (three alternatives) accumulates into one UnionGraphPattern") {
 	Parser parser;
 	auto q = parser.parseString("PREFIX : <http://ex/>\n"
-	                             "SELECT * WHERE { { ?s :p1 ?v } UNION { ?s :p2 ?v } UNION { ?s :p3 ?v } }");
+	                            "SELECT * WHERE { { ?s :p1 ?v } UNION { ?s :p2 ?v } UNION { ?s :p3 ?v } }");
 	const auto &u = static_cast<const UnionGraphPattern &>(*q->where->elements[0]);
 	REQUIRE(u.branches.size() == 3);
 }
@@ -123,7 +128,8 @@ TEST_CASE("MINUS wraps its inner pattern (spec 8.2)") {
 	REQUIRE(q->distinct);
 	bool sawMinus = false;
 	for (const auto &el : q->where->elements) {
-		if (el->kind() == ElementKind::MinusGraphPattern) sawMinus = true;
+		if (el->kind() == ElementKind::MinusGraphPattern)
+			sawMinus = true;
 	}
 	REQUIRE(sawMinus);
 }
@@ -131,7 +137,7 @@ TEST_CASE("MINUS wraps its inner pattern (spec 8.2)") {
 TEST_CASE("FILTER EXISTS / NOT EXISTS carry their nested GroupGraphPattern (spec 8.1)") {
 	Parser parser;
 	auto q = parser.parseString("PREFIX : <http://ex/>\n"
-	                             "SELECT ?p WHERE { ?p a :Person . FILTER NOT EXISTS { ?p :name ?n } }");
+	                            "SELECT ?p WHERE { ?p a :Person . FILTER NOT EXISTS { ?p :name ?n } }");
 	const auto &filter = static_cast<const Filter &>(*q->where->elements[1]);
 	REQUIRE(filter.constraint->kind() == ExprKind::Exists);
 	const auto &exists = static_cast<const ExistsExpr &>(*filter.constraint);

@@ -44,10 +44,13 @@ enum class ElementKind {
 /// buckets) to preserve source order, which matters for FILTER/BIND scope.
 class GroupElement {
 public:
-	explicit GroupElement(ElementKind kind) : kind_(kind) {}
+	explicit GroupElement(ElementKind kind) : kind_(kind) {
+	}
 	virtual ~GroupElement() = default;
 
-	ElementKind kind() const { return kind_; }
+	ElementKind kind() const {
+		return kind_;
+	}
 
 private:
 	ElementKind kind_;
@@ -55,7 +58,8 @@ private:
 
 class BasicGraphPattern : public GroupElement {
 public:
-	BasicGraphPattern() : GroupElement(ElementKind::BasicGraphPattern) {}
+	BasicGraphPattern() : GroupElement(ElementKind::BasicGraphPattern) {
+	}
 
 	std::vector<TriplePattern> triples;
 };
@@ -65,7 +69,8 @@ public:
 /// GroupGraphPatternSub) '}').
 class GroupGraphPattern : public GroupElement {
 public:
-	GroupGraphPattern() : GroupElement(ElementKind::GroupGraphPattern) {}
+	GroupGraphPattern() : GroupElement(ElementKind::GroupGraphPattern) {
+	}
 
 	std::vector<std::unique_ptr<GroupElement>> elements;
 };
@@ -76,21 +81,24 @@ public:
 /// actual UNION.
 class UnionGraphPattern : public GroupElement {
 public:
-	UnionGraphPattern() : GroupElement(ElementKind::UnionGraphPattern) {}
+	UnionGraphPattern() : GroupElement(ElementKind::UnionGraphPattern) {
+	}
 
 	std::vector<std::unique_ptr<GroupGraphPattern>> branches;
 };
 
 class OptionalGraphPattern : public GroupElement {
 public:
-	OptionalGraphPattern() : GroupElement(ElementKind::OptionalGraphPattern) {}
+	OptionalGraphPattern() : GroupElement(ElementKind::OptionalGraphPattern) {
+	}
 
 	std::unique_ptr<GroupGraphPattern> pattern;
 };
 
 class MinusGraphPattern : public GroupElement {
 public:
-	MinusGraphPattern() : GroupElement(ElementKind::MinusGraphPattern) {}
+	MinusGraphPattern() : GroupElement(ElementKind::MinusGraphPattern) {
+	}
 
 	std::unique_ptr<GroupGraphPattern> pattern;
 };
@@ -98,7 +106,8 @@ public:
 /// GRAPH (iri|var) { ... }. `graphNameOrVar` is an Iri or a Var.
 class GraphGraphPattern : public GroupElement {
 public:
-	GraphGraphPattern() : GroupElement(ElementKind::GraphGraphPattern) {}
+	GraphGraphPattern() : GroupElement(ElementKind::GraphGraphPattern) {
+	}
 
 	std::unique_ptr<Term> graphNameOrVar;
 	std::unique_ptr<GroupGraphPattern> pattern;
@@ -108,7 +117,8 @@ public:
 /// federated-query execution semantics are implemented.
 class ServiceGraphPattern : public GroupElement {
 public:
-	ServiceGraphPattern() : GroupElement(ElementKind::ServiceGraphPattern) {}
+	ServiceGraphPattern() : GroupElement(ElementKind::ServiceGraphPattern) {
+	}
 
 	bool silent = false;
 	std::unique_ptr<Term> endpoint;
@@ -117,7 +127,8 @@ public:
 
 class Filter : public GroupElement {
 public:
-	Filter() : GroupElement(ElementKind::Filter) {}
+	Filter() : GroupElement(ElementKind::Filter) {
+	}
 	~Filter() override; // out-of-line: Expression is only forward-declared here
 
 	std::unique_ptr<Expression> constraint;
@@ -125,7 +136,8 @@ public:
 
 class Bind : public GroupElement {
 public:
-	Bind() : GroupElement(ElementKind::Bind) {}
+	Bind() : GroupElement(ElementKind::Bind) {
+	}
 	~Bind() override; // out-of-line: Expression is only forward-declared here
 
 	std::unique_ptr<Var> var;
@@ -137,7 +149,8 @@ public:
 /// A null entry in a row represents UNDEF.
 class InlineData : public GroupElement {
 public:
-	InlineData() : GroupElement(ElementKind::InlineData) {}
+	InlineData() : GroupElement(ElementKind::InlineData) {
+	}
 
 	std::vector<std::unique_ptr<Var>> vars;
 	std::vector<std::vector<std::unique_ptr<Term>>> rows;
@@ -149,7 +162,8 @@ public:
 class SubSelectElement : public GroupElement {
 public:
 	explicit SubSelectElement(std::unique_ptr<Query> query)
-	    : GroupElement(ElementKind::SubSelect), query(std::move(query)) {}
+	    : GroupElement(ElementKind::SubSelect), query(std::move(query)) {
+	}
 	~SubSelectElement() override; // out-of-line: Query is only forward-declared here
 
 	std::unique_ptr<Query> query;

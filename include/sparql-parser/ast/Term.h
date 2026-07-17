@@ -12,10 +12,13 @@ enum class TermKind { Iri, Var, BlankNode, Literal };
 /// as expression leaves: Iri, Var, BlankNode, RdfLiteral.
 class Term {
 public:
-	explicit Term(TermKind kind) : kind_(kind) {}
+	explicit Term(TermKind kind) : kind_(kind) {
+	}
 	virtual ~Term() = default;
 
-	TermKind kind() const { return kind_; }
+	TermKind kind() const {
+		return kind_;
+	}
 
 private:
 	TermKind kind_;
@@ -27,7 +30,9 @@ private:
 /// the original text as written, kept for the pretty printer.
 class Iri : public Term {
 public:
-	Iri(std::string value, std::string lexicalForm) : Term(TermKind::Iri), value(std::move(value)), lexicalForm(std::move(lexicalForm)) {}
+	Iri(std::string value, std::string lexicalForm)
+	    : Term(TermKind::Iri), value(std::move(value)), lexicalForm(std::move(lexicalForm)) {
+	}
 
 	std::string value;
 	std::string lexicalForm;
@@ -35,7 +40,8 @@ public:
 
 class Var : public Term {
 public:
-	explicit Var(std::string name) : Term(TermKind::Var), name(std::move(name)) {}
+	explicit Var(std::string name) : Term(TermKind::Var), name(std::move(name)) {
+	}
 
 	std::string name;
 };
@@ -43,7 +49,8 @@ public:
 class BlankNode : public Term {
 public:
 	explicit BlankNode(std::string label, bool anonymous = false)
-	    : Term(TermKind::BlankNode), label(std::move(label)), anonymous(anonymous) {}
+	    : Term(TermKind::BlankNode), label(std::move(label)), anonymous(anonymous) {
+	}
 
 	std::string label;
 	bool anonymous;
@@ -54,10 +61,11 @@ public:
 /// by giving `datatype` the corresponding xsd: IRI at parse time.
 class RdfLiteral : public Term {
 public:
-	explicit RdfLiteral(std::string lexicalForm) : Term(TermKind::Literal), lexicalForm(std::move(lexicalForm)) {}
+	explicit RdfLiteral(std::string lexicalForm) : Term(TermKind::Literal), lexicalForm(std::move(lexicalForm)) {
+	}
 
 	std::string lexicalForm;
-	std::string languageTag;    // empty if none
+	std::string languageTag;       // empty if none
 	std::unique_ptr<Iri> datatype; // null if simple literal (no datatype, no language tag)
 };
 

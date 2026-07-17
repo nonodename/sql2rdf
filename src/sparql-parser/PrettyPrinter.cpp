@@ -9,7 +9,8 @@ using namespace ast;
 namespace {
 
 void printIndent(std::ostream &os, int indent) {
-	for (int i = 0; i < indent; ++i) os << "  ";
+	for (int i = 0; i < indent; ++i)
+		os << "  ";
 }
 
 std::string termStr(const Term &t) {
@@ -63,12 +64,14 @@ std::string pathStr(const PropertyPathExpr &p) {
 		std::string s = "!(";
 		bool first = true;
 		for (const auto &f : n.forward) {
-			if (!first) s += "|";
+			if (!first)
+				s += "|";
 			s += f->lexicalForm;
 			first = false;
 		}
 		for (const auto &inv : n.inverse) {
-			if (!first) s += "|";
+			if (!first)
+				s += "|";
 			s += "^" + inv->lexicalForm;
 			first = false;
 		}
@@ -80,89 +83,160 @@ std::string pathStr(const PropertyPathExpr &p) {
 
 const char *binaryOpSymbol(BinaryOp op) {
 	switch (op) {
-	case BinaryOp::Or: return "||";
-	case BinaryOp::And: return "&&";
-	case BinaryOp::Eq: return "=";
-	case BinaryOp::Ne: return "!=";
-	case BinaryOp::Lt: return "<";
-	case BinaryOp::Gt: return ">";
-	case BinaryOp::Le: return "<=";
-	case BinaryOp::Ge: return ">=";
-	case BinaryOp::Add: return "+";
-	case BinaryOp::Sub: return "-";
-	case BinaryOp::Mul: return "*";
-	case BinaryOp::Div: return "/";
+	case BinaryOp::Or:
+		return "||";
+	case BinaryOp::And:
+		return "&&";
+	case BinaryOp::Eq:
+		return "=";
+	case BinaryOp::Ne:
+		return "!=";
+	case BinaryOp::Lt:
+		return "<";
+	case BinaryOp::Gt:
+		return ">";
+	case BinaryOp::Le:
+		return "<=";
+	case BinaryOp::Ge:
+		return ">=";
+	case BinaryOp::Add:
+		return "+";
+	case BinaryOp::Sub:
+		return "-";
+	case BinaryOp::Mul:
+		return "*";
+	case BinaryOp::Div:
+		return "/";
 	}
 	return "?";
 }
 
 const char *aggregateName(AggregateKind k) {
 	switch (k) {
-	case AggregateKind::Count: return "COUNT";
-	case AggregateKind::Sum: return "SUM";
-	case AggregateKind::Min: return "MIN";
-	case AggregateKind::Max: return "MAX";
-	case AggregateKind::Avg: return "AVG";
-	case AggregateKind::Sample: return "SAMPLE";
-	case AggregateKind::GroupConcat: return "GROUP_CONCAT";
+	case AggregateKind::Count:
+		return "COUNT";
+	case AggregateKind::Sum:
+		return "SUM";
+	case AggregateKind::Min:
+		return "MIN";
+	case AggregateKind::Max:
+		return "MAX";
+	case AggregateKind::Avg:
+		return "AVG";
+	case AggregateKind::Sample:
+		return "SAMPLE";
+	case AggregateKind::GroupConcat:
+		return "GROUP_CONCAT";
 	}
 	return "?";
 }
 
 const char *builtinName(BuiltinFunction fn) {
 	switch (fn) {
-	case BuiltinFunction::Str: return "STR";
-	case BuiltinFunction::Lang: return "LANG";
-	case BuiltinFunction::LangMatches: return "LANGMATCHES";
-	case BuiltinFunction::Datatype: return "DATATYPE";
-	case BuiltinFunction::Bound: return "BOUND";
-	case BuiltinFunction::IriFn: return "IRI";
-	case BuiltinFunction::UriFn: return "URI";
-	case BuiltinFunction::Bnode: return "BNODE";
-	case BuiltinFunction::Rand: return "RAND";
-	case BuiltinFunction::Abs: return "ABS";
-	case BuiltinFunction::Ceil: return "CEIL";
-	case BuiltinFunction::Floor: return "FLOOR";
-	case BuiltinFunction::Round: return "ROUND";
-	case BuiltinFunction::Concat: return "CONCAT";
-	case BuiltinFunction::Strlen: return "STRLEN";
-	case BuiltinFunction::Substr: return "SUBSTR";
-	case BuiltinFunction::Ucase: return "UCASE";
-	case BuiltinFunction::Lcase: return "LCASE";
-	case BuiltinFunction::EncodeForUri: return "ENCODE_FOR_URI";
-	case BuiltinFunction::Contains: return "CONTAINS";
-	case BuiltinFunction::Strstarts: return "STRSTARTS";
-	case BuiltinFunction::Strends: return "STRENDS";
-	case BuiltinFunction::Strbefore: return "STRBEFORE";
-	case BuiltinFunction::Strafter: return "STRAFTER";
-	case BuiltinFunction::Replace: return "REPLACE";
-	case BuiltinFunction::Regex: return "REGEX";
-	case BuiltinFunction::Year: return "YEAR";
-	case BuiltinFunction::Month: return "MONTH";
-	case BuiltinFunction::Day: return "DAY";
-	case BuiltinFunction::Hours: return "HOURS";
-	case BuiltinFunction::Minutes: return "MINUTES";
-	case BuiltinFunction::Seconds: return "SECONDS";
-	case BuiltinFunction::Timezone: return "TIMEZONE";
-	case BuiltinFunction::Tz: return "TZ";
-	case BuiltinFunction::Now: return "NOW";
-	case BuiltinFunction::Uuid: return "UUID";
-	case BuiltinFunction::Struuid: return "STRUUID";
-	case BuiltinFunction::Md5: return "MD5";
-	case BuiltinFunction::Sha1: return "SHA1";
-	case BuiltinFunction::Sha256: return "SHA256";
-	case BuiltinFunction::Sha384: return "SHA384";
-	case BuiltinFunction::Sha512: return "SHA512";
-	case BuiltinFunction::Coalesce: return "COALESCE";
-	case BuiltinFunction::If: return "IF";
-	case BuiltinFunction::Strlang: return "STRLANG";
-	case BuiltinFunction::Strdt: return "STRDT";
-	case BuiltinFunction::SameTerm: return "sameTerm";
-	case BuiltinFunction::IsIri: return "isIRI";
-	case BuiltinFunction::IsUri: return "isURI";
-	case BuiltinFunction::IsBlank: return "isBLANK";
-	case BuiltinFunction::IsLiteral: return "isLITERAL";
-	case BuiltinFunction::IsNumeric: return "isNUMERIC";
+	case BuiltinFunction::Str:
+		return "STR";
+	case BuiltinFunction::Lang:
+		return "LANG";
+	case BuiltinFunction::LangMatches:
+		return "LANGMATCHES";
+	case BuiltinFunction::Datatype:
+		return "DATATYPE";
+	case BuiltinFunction::Bound:
+		return "BOUND";
+	case BuiltinFunction::IriFn:
+		return "IRI";
+	case BuiltinFunction::UriFn:
+		return "URI";
+	case BuiltinFunction::Bnode:
+		return "BNODE";
+	case BuiltinFunction::Rand:
+		return "RAND";
+	case BuiltinFunction::Abs:
+		return "ABS";
+	case BuiltinFunction::Ceil:
+		return "CEIL";
+	case BuiltinFunction::Floor:
+		return "FLOOR";
+	case BuiltinFunction::Round:
+		return "ROUND";
+	case BuiltinFunction::Concat:
+		return "CONCAT";
+	case BuiltinFunction::Strlen:
+		return "STRLEN";
+	case BuiltinFunction::Substr:
+		return "SUBSTR";
+	case BuiltinFunction::Ucase:
+		return "UCASE";
+	case BuiltinFunction::Lcase:
+		return "LCASE";
+	case BuiltinFunction::EncodeForUri:
+		return "ENCODE_FOR_URI";
+	case BuiltinFunction::Contains:
+		return "CONTAINS";
+	case BuiltinFunction::Strstarts:
+		return "STRSTARTS";
+	case BuiltinFunction::Strends:
+		return "STRENDS";
+	case BuiltinFunction::Strbefore:
+		return "STRBEFORE";
+	case BuiltinFunction::Strafter:
+		return "STRAFTER";
+	case BuiltinFunction::Replace:
+		return "REPLACE";
+	case BuiltinFunction::Regex:
+		return "REGEX";
+	case BuiltinFunction::Year:
+		return "YEAR";
+	case BuiltinFunction::Month:
+		return "MONTH";
+	case BuiltinFunction::Day:
+		return "DAY";
+	case BuiltinFunction::Hours:
+		return "HOURS";
+	case BuiltinFunction::Minutes:
+		return "MINUTES";
+	case BuiltinFunction::Seconds:
+		return "SECONDS";
+	case BuiltinFunction::Timezone:
+		return "TIMEZONE";
+	case BuiltinFunction::Tz:
+		return "TZ";
+	case BuiltinFunction::Now:
+		return "NOW";
+	case BuiltinFunction::Uuid:
+		return "UUID";
+	case BuiltinFunction::Struuid:
+		return "STRUUID";
+	case BuiltinFunction::Md5:
+		return "MD5";
+	case BuiltinFunction::Sha1:
+		return "SHA1";
+	case BuiltinFunction::Sha256:
+		return "SHA256";
+	case BuiltinFunction::Sha384:
+		return "SHA384";
+	case BuiltinFunction::Sha512:
+		return "SHA512";
+	case BuiltinFunction::Coalesce:
+		return "COALESCE";
+	case BuiltinFunction::If:
+		return "IF";
+	case BuiltinFunction::Strlang:
+		return "STRLANG";
+	case BuiltinFunction::Strdt:
+		return "STRDT";
+	case BuiltinFunction::SameTerm:
+		return "sameTerm";
+	case BuiltinFunction::IsIri:
+		return "isIRI";
+	case BuiltinFunction::IsUri:
+		return "isURI";
+	case BuiltinFunction::IsBlank:
+		return "isBLANK";
+	case BuiltinFunction::IsLiteral:
+		return "isLITERAL";
+	case BuiltinFunction::IsNumeric:
+		return "isNUMERIC";
 	}
 	return "?";
 }
@@ -188,7 +262,8 @@ std::string exprStr(const Expression &e) {
 		const auto &in = static_cast<const InExpr &>(e);
 		std::string s = exprStr(*in.lhs) + (in.negated ? " NOT IN (" : " IN (");
 		for (std::size_t i = 0; i < in.list.size(); ++i) {
-			if (i) s += ", ";
+			if (i)
+				s += ", ";
 			s += exprStr(*in.list[i]);
 		}
 		return s + ")";
@@ -196,9 +271,11 @@ std::string exprStr(const Expression &e) {
 	case ExprKind::FunctionCall: {
 		const auto &f = static_cast<const FunctionCallExpr &>(e);
 		std::string s = f.iri->lexicalForm + "(";
-		if (f.distinct) s += "DISTINCT ";
+		if (f.distinct)
+			s += "DISTINCT ";
 		for (std::size_t i = 0; i < f.args.size(); ++i) {
-			if (i) s += ", ";
+			if (i)
+				s += ", ";
 			s += exprStr(*f.args[i]);
 		}
 		return s + ")";
@@ -207,7 +284,8 @@ std::string exprStr(const Expression &e) {
 		const auto &b = static_cast<const BuiltInCallExpr &>(e);
 		std::string s = std::string(builtinName(b.fn)) + "(";
 		for (std::size_t i = 0; i < b.args.size(); ++i) {
-			if (i) s += ", ";
+			if (i)
+				s += ", ";
 			s += exprStr(*b.args[i]);
 		}
 		return s + ")";
@@ -215,13 +293,15 @@ std::string exprStr(const Expression &e) {
 	case ExprKind::Aggregate: {
 		const auto &a = static_cast<const AggregateExpr &>(e);
 		std::string s = std::string(aggregateName(a.aggKind)) + "(";
-		if (a.distinct) s += "DISTINCT ";
+		if (a.distinct)
+			s += "DISTINCT ";
 		if (a.star) {
 			s += "*";
 		} else if (a.arg) {
 			s += exprStr(*a.arg);
 		}
-		if (a.hasSeparator) s += "; SEPARATOR=\"" + a.separator + "\"";
+		if (a.hasSeparator)
+			s += "; SEPARATOR=\"" + a.separator + "\"";
 		return s + ")";
 	}
 	case ExprKind::Exists: {
@@ -249,7 +329,8 @@ void printGroupGraphPattern(std::ostream &os, int indent, const GroupGraphPatter
 			const auto &b = static_cast<const BasicGraphPattern &>(*el);
 			printIndent(os, indent + 1);
 			os << "BasicGraphPattern\n";
-			for (const auto &tp : b.triples) printTriplePattern(os, indent + 2, tp);
+			for (const auto &tp : b.triples)
+				printTriplePattern(os, indent + 2, tp);
 			break;
 		}
 		case ElementKind::GroupGraphPattern:
@@ -259,7 +340,8 @@ void printGroupGraphPattern(std::ostream &os, int indent, const GroupGraphPatter
 			const auto &u = static_cast<const UnionGraphPattern &>(*el);
 			printIndent(os, indent + 1);
 			os << "Union\n";
-			for (const auto &br : u.branches) printGroupGraphPattern(os, indent + 2, *br);
+			for (const auto &br : u.branches)
+				printGroupGraphPattern(os, indent + 2, *br);
 			break;
 		}
 		case ElementKind::OptionalGraphPattern:
@@ -306,7 +388,8 @@ void printGroupGraphPattern(std::ostream &os, int indent, const GroupGraphPatter
 			printIndent(os, indent + 1);
 			os << "Values (";
 			for (std::size_t i = 0; i < v.vars.size(); ++i) {
-				if (i) os << " ";
+				if (i)
+					os << " ";
 				os << "?" << v.vars[i]->name;
 			}
 			os << ") " << v.rows.size() << " row(s)\n";
@@ -324,9 +407,12 @@ void printGroupGraphPattern(std::ostream &os, int indent, const GroupGraphPatter
 void printQuery(std::ostream &os, int indent, const Query &q) {
 	printIndent(os, indent);
 	const char *formName = "SELECT";
-	if (q.form == QueryForm::Construct) formName = "CONSTRUCT";
-	else if (q.form == QueryForm::Describe) formName = "DESCRIBE";
-	else if (q.form == QueryForm::Ask) formName = "ASK";
+	if (q.form == QueryForm::Construct)
+		formName = "CONSTRUCT";
+	else if (q.form == QueryForm::Describe)
+		formName = "DESCRIBE";
+	else if (q.form == QueryForm::Ask)
+		formName = "ASK";
 	os << "Query [" << formName << (q.distinct ? " DISTINCT" : "") << (q.reduced ? " REDUCED" : "") << "]\n";
 
 	if (!q.prologue.baseIri.empty() || !q.prologue.prefixes.empty()) {
@@ -364,7 +450,8 @@ void printQuery(std::ostream &os, int indent, const Query &q) {
 	} else if (q.form == QueryForm::Construct) {
 		printIndent(os, indent + 1);
 		os << "ConstructTemplate\n";
-		for (const auto &tp : q.constructTemplate) printTriplePattern(os, indent + 2, tp);
+		for (const auto &tp : q.constructTemplate)
+			printTriplePattern(os, indent + 2, tp);
 	} else if (q.form == QueryForm::Describe) {
 		printIndent(os, indent + 1);
 		os << "Describe" << (q.describeStar ? " *" : "") << "\n";
@@ -387,7 +474,8 @@ void printQuery(std::ostream &os, int indent, const Query &q) {
 		for (const auto &g : sm.groupBy) {
 			printIndent(os, indent + 2);
 			os << exprStr(*g.expr);
-			if (g.asVar) os << " AS ?" << g.asVar->name;
+			if (g.asVar)
+				os << " AS ?" << g.asVar->name;
 			os << "\n";
 		}
 	}
@@ -419,7 +507,8 @@ void printQuery(std::ostream &os, int indent, const Query &q) {
 		printIndent(os, indent + 1);
 		os << "Values (";
 		for (std::size_t i = 0; i < q.valuesClause->vars.size(); ++i) {
-			if (i) os << " ";
+			if (i)
+				os << " ";
 			os << "?" << q.valuesClause->vars[i]->name;
 		}
 		os << ") " << q.valuesClause->rows.size() << " row(s)\n";
@@ -428,7 +517,9 @@ void printQuery(std::ostream &os, int indent, const Query &q) {
 
 } // namespace
 
-void print(std::ostream &os, const Query &query) { printQuery(os, 0, query); }
+void print(std::ostream &os, const Query &query) {
+	printQuery(os, 0, query);
+}
 
 std::ostream &operator<<(std::ostream &os, const Query &query) {
 	print(os, query);

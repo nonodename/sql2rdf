@@ -58,23 +58,37 @@ const KeywordFn kTwoArgBuiltins[] = {
 
 const char *kZeroArgKeywords[] = {"RAND", "NOW", "UUID", "STRUUID"};
 const BuiltinFunction kZeroArgFns[] = {BuiltinFunction::Rand, BuiltinFunction::Now, BuiltinFunction::Uuid,
-                                        BuiltinFunction::Struuid};
+                                       BuiltinFunction::Struuid};
 
 const char *kExpressionStartKeywords[] = {
-    "TRUE",       "FALSE",     "COUNT",     "SUM",        "MIN",       "MAX",         "AVG",
-    "SAMPLE",     "GROUP_CONCAT", "NOT",    "EXISTS",     "BOUND",     "IF",          "COALESCE",
-    "CONCAT",     "BNODE",     "RAND",      "NOW",        "UUID",      "STRUUID",     "STR",
-    "LANG",       "DATATYPE",  "IRI",       "URI",        "ABS",       "CEIL",        "FLOOR",
-    "ROUND",      "STRLEN",    "UCASE",     "LCASE",      "ENCODE_FOR_URI", "YEAR",   "MONTH",
-    "DAY",        "HOURS",     "MINUTES",   "SECONDS",    "TIMEZONE",  "TZ",          "MD5",
-    "SHA1",       "SHA256",    "SHA384",    "SHA512",     "ISIRI",     "ISURI",       "ISBLANK",
-    "ISLITERAL",  "ISNUMERIC", "LANGMATCHES", "CONTAINS", "STRSTARTS", "STRENDS",     "STRBEFORE",
-    "STRAFTER",   "STRLANG",   "STRDT",     "SAMETERM",   "SUBSTR",    "REGEX",       "REPLACE",
+    "TRUE",        "FALSE",     "COUNT",
+    "SUM",         "MIN",       "MAX",
+    "AVG",         "SAMPLE",    "GROUP_CONCAT",
+    "NOT",         "EXISTS",    "BOUND",
+    "IF",          "COALESCE",  "CONCAT",
+    "BNODE",       "RAND",      "NOW",
+    "UUID",        "STRUUID",   "STR",
+    "LANG",        "DATATYPE",  "IRI",
+    "URI",         "ABS",       "CEIL",
+    "FLOOR",       "ROUND",     "STRLEN",
+    "UCASE",       "LCASE",     "ENCODE_FOR_URI",
+    "YEAR",        "MONTH",     "DAY",
+    "HOURS",       "MINUTES",   "SECONDS",
+    "TIMEZONE",    "TZ",        "MD5",
+    "SHA1",        "SHA256",    "SHA384",
+    "SHA512",      "ISIRI",     "ISURI",
+    "ISBLANK",     "ISLITERAL", "ISNUMERIC",
+    "LANGMATCHES", "CONTAINS",  "STRSTARTS",
+    "STRENDS",     "STRBEFORE", "STRAFTER",
+    "STRLANG",     "STRDT",     "SAMETERM",
+    "SUBSTR",      "REGEX",     "REPLACE",
 };
 
 } // namespace
 
-std::unique_ptr<Expression> Parser::parseExpression() { return parseConditionalOrExpression(); }
+std::unique_ptr<Expression> Parser::parseExpression() {
+	return parseConditionalOrExpression();
+}
 
 std::unique_ptr<Expression> Parser::parseConditionalOrExpression() {
 	std::unique_ptr<Expression> left = parseConditionalAndExpression();
@@ -92,7 +106,9 @@ std::unique_ptr<Expression> Parser::parseConditionalAndExpression() {
 	return left;
 }
 
-std::unique_ptr<Expression> Parser::parseValueLogical() { return parseRelationalExpression(); }
+std::unique_ptr<Expression> Parser::parseValueLogical() {
+	return parseRelationalExpression();
+}
 
 std::unique_ptr<Expression> Parser::parseRelationalExpression() {
 	std::unique_ptr<Expression> left = parseNumericExpression();
@@ -126,7 +142,9 @@ std::unique_ptr<Expression> Parser::parseRelationalExpression() {
 	return left;
 }
 
-std::unique_ptr<Expression> Parser::parseNumericExpression() { return parseAdditiveExpression(); }
+std::unique_ptr<Expression> Parser::parseNumericExpression() {
+	return parseAdditiveExpression();
+}
 
 std::unique_ptr<Expression> Parser::parseAdditiveExpression() {
 	std::unique_ptr<Expression> left = parseMultiplicativeExpression();
@@ -151,8 +169,10 @@ std::unique_ptr<Expression> Parser::parseAdditiveExpression() {
 			advance();
 			std::unique_ptr<RdfLiteral> lit(new RdfLiteral(unsignedLex));
 			const char *dt = XSD_DOUBLE_EXPR;
-			if (t == TokenType::Integer) dt = XSD_INTEGER_EXPR;
-			else if (t == TokenType::Decimal) dt = XSD_DECIMAL_EXPR;
+			if (t == TokenType::Integer)
+				dt = XSD_INTEGER_EXPR;
+			else if (t == TokenType::Decimal)
+				dt = XSD_DECIMAL_EXPR;
 			lit->datatype = makeIri(dt, "");
 			std::unique_ptr<Expression> rhs(new LiteralExpr(std::move(lit)));
 			rhs = continueMultiplicativeFrom(std::move(rhs));
@@ -203,7 +223,8 @@ std::unique_ptr<Expression> Parser::parsePrimaryExpression() {
 	if (check(TokenType::Var1) || check(TokenType::Var2)) {
 		return std::unique_ptr<Expression>(new VarExpr(parseVar()));
 	}
-	if (check(TokenType::StringLiteral)) return std::unique_ptr<Expression>(new LiteralExpr(parseRdfLiteral()));
+	if (check(TokenType::StringLiteral))
+		return std::unique_ptr<Expression>(new LiteralExpr(parseRdfLiteral()));
 	if (check(TokenType::Integer) || check(TokenType::Decimal) || check(TokenType::Double)) {
 		return std::unique_ptr<Expression>(new LiteralExpr(parseNumericLiteral()));
 	}
@@ -229,14 +250,17 @@ std::unique_ptr<Expression> Parser::parseIriOrFunctionCall() {
 std::vector<std::unique_ptr<Expression>> Parser::parseArgList(bool *distinctOut) {
 	std::vector<std::unique_ptr<Expression>> args;
 	if (matchType(TokenType::Nil)) {
-		if (distinctOut) *distinctOut = false;
+		if (distinctOut)
+			*distinctOut = false;
 		return args;
 	}
 	expectType(TokenType::LParen, "'(' to start an argument list");
-	if (distinctOut) *distinctOut = matchKeyword("DISTINCT");
+	if (distinctOut)
+		*distinctOut = matchKeyword("DISTINCT");
 	if (!check(TokenType::RParen)) {
 		args.push_back(parseExpression());
-		while (matchType(TokenType::Comma)) args.push_back(parseExpression());
+		while (matchType(TokenType::Comma))
+			args.push_back(parseExpression());
 	}
 	expectType(TokenType::RParen, "')' closing an argument list");
 	return args;
@@ -244,10 +268,12 @@ std::vector<std::unique_ptr<Expression>> Parser::parseArgList(bool *distinctOut)
 
 std::vector<std::unique_ptr<Expression>> Parser::parseExpressionList() {
 	std::vector<std::unique_ptr<Expression>> list;
-	if (matchType(TokenType::Nil)) return list;
+	if (matchType(TokenType::Nil))
+		return list;
 	expectType(TokenType::LParen, "'(' to start an expression list");
 	list.push_back(parseExpression());
-	while (matchType(TokenType::Comma)) list.push_back(parseExpression());
+	while (matchType(TokenType::Comma))
+		list.push_back(parseExpression());
 	expectType(TokenType::RParen, "')' closing an expression list");
 	return list;
 }
@@ -257,9 +283,11 @@ std::unique_ptr<Expression> Parser::parseBuiltinArgsN(BuiltinFunction fn, int mi
 	expectType(TokenType::LParen, "'(' to start this function's argument list");
 	std::vector<std::unique_ptr<Expression>> args;
 	args.push_back(parseExpression());
-	while (static_cast<int>(args.size()) < maxArgs && matchType(TokenType::Comma)) args.push_back(parseExpression());
+	while (static_cast<int>(args.size()) < maxArgs && matchType(TokenType::Comma))
+		args.push_back(parseExpression());
 	expectType(TokenType::RParen, "')' closing this function's argument list");
-	if (static_cast<int>(args.size()) < minArgs) error("too few arguments to function call");
+	if (static_cast<int>(args.size()) < minArgs)
+		error("too few arguments to function call");
 	return std::unique_ptr<Expression>(new BuiltInCallExpr(fn, std::move(args)));
 }
 
@@ -286,13 +314,20 @@ std::unique_ptr<Expression> Parser::parseAggregate(AggregateKind kind) {
 }
 
 std::unique_ptr<Expression> Parser::parseBuiltInCallOrAggregateOrExists() {
-	if (checkKeyword("COUNT")) return parseAggregate(AggregateKind::Count);
-	if (checkKeyword("SUM")) return parseAggregate(AggregateKind::Sum);
-	if (checkKeyword("MIN")) return parseAggregate(AggregateKind::Min);
-	if (checkKeyword("MAX")) return parseAggregate(AggregateKind::Max);
-	if (checkKeyword("AVG")) return parseAggregate(AggregateKind::Avg);
-	if (checkKeyword("SAMPLE")) return parseAggregate(AggregateKind::Sample);
-	if (checkKeyword("GROUP_CONCAT")) return parseAggregate(AggregateKind::GroupConcat);
+	if (checkKeyword("COUNT"))
+		return parseAggregate(AggregateKind::Count);
+	if (checkKeyword("SUM"))
+		return parseAggregate(AggregateKind::Sum);
+	if (checkKeyword("MIN"))
+		return parseAggregate(AggregateKind::Min);
+	if (checkKeyword("MAX"))
+		return parseAggregate(AggregateKind::Max);
+	if (checkKeyword("AVG"))
+		return parseAggregate(AggregateKind::Avg);
+	if (checkKeyword("SAMPLE"))
+		return parseAggregate(AggregateKind::Sample);
+	if (checkKeyword("GROUP_CONCAT"))
+		return parseAggregate(AggregateKind::GroupConcat);
 
 	if (checkKeyword("NOT")) {
 		advance();
@@ -348,18 +383,24 @@ std::unique_ptr<Expression> Parser::parseBuiltInCallOrAggregateOrExists() {
 		if (checkKeyword(kZeroArgKeywords[i])) {
 			advance();
 			matchType(TokenType::Nil);
-			return std::unique_ptr<Expression>(new BuiltInCallExpr(kZeroArgFns[i], std::vector<std::unique_ptr<Expression>>()));
+			return std::unique_ptr<Expression>(
+			    new BuiltInCallExpr(kZeroArgFns[i], std::vector<std::unique_ptr<Expression>>()));
 		}
 	}
 	for (const auto &e : kOneArgBuiltins) {
-		if (checkKeyword(e.kw)) return parseBuiltinArgsN(e.fn, 1, 1);
+		if (checkKeyword(e.kw))
+			return parseBuiltinArgsN(e.fn, 1, 1);
 	}
 	for (const auto &e : kTwoArgBuiltins) {
-		if (checkKeyword(e.kw)) return parseBuiltinArgsN(e.fn, 2, 2);
+		if (checkKeyword(e.kw))
+			return parseBuiltinArgsN(e.fn, 2, 2);
 	}
-	if (checkKeyword("SUBSTR")) return parseBuiltinArgsN(BuiltinFunction::Substr, 2, 3);
-	if (checkKeyword("REGEX")) return parseBuiltinArgsN(BuiltinFunction::Regex, 2, 3);
-	if (checkKeyword("REPLACE")) return parseBuiltinArgsN(BuiltinFunction::Replace, 3, 4);
+	if (checkKeyword("SUBSTR"))
+		return parseBuiltinArgsN(BuiltinFunction::Substr, 2, 3);
+	if (checkKeyword("REGEX"))
+		return parseBuiltinArgsN(BuiltinFunction::Regex, 2, 3);
+	if (checkKeyword("REPLACE"))
+		return parseBuiltinArgsN(BuiltinFunction::Replace, 3, 4);
 
 	error("expected a built-in function call, aggregate, or EXISTS/NOT EXISTS");
 	return nullptr;
@@ -372,9 +413,11 @@ bool Parser::startsExpression() const {
 	    check(TokenType::PnameLn) || check(TokenType::Bang) || check(TokenType::Plus) || check(TokenType::Minus)) {
 		return true;
 	}
-	if (current_.type != TokenType::Keyword) return false;
+	if (current_.type != TokenType::Keyword)
+		return false;
 	for (const char *kw : kExpressionStartKeywords) {
-		if (current_.keyword == kw) return true;
+		if (current_.keyword == kw)
+			return true;
 	}
 	return false;
 }

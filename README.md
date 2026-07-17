@@ -12,6 +12,7 @@ The project is structured as a reusable library plus a thin CLI application:
 |--------|------|-------------------|-------------|
 | `sql2rdf_r2rml` | static library | none | Core R2RML implementation. Links only [Serd](https://drobilla.net/software/serd/) (embedded). Suitable for use in other projects, including a DuckDB extension. |
 | `sql2rdf_yarrrml` | static library | none | YARRRML → R2RML translator. Publicly links `sql2rdf_r2rml` and privately links [yaml-cpp](https://github.com/jbeder/yaml-cpp) (fetched via CMake `FetchContent`), so consumers of `sql2rdf_r2rml` alone stay free of the YAML dependency. |
+| `sql2rdf_sparql` | static library | none | Standalone SPARQL 1.1 Query grammar parser. No dependency on `sql2rdf_r2rml`, `sql2rdf_yarrrml`, DuckDB, yaml-cpp, or Serd — only the C++ standard library. |
 | `SQL2RDF++` | executable | required | CLI application. Compiles the DuckDB adapter (`DuckDBConnection`) and links the system or embedded DuckDB library. Gated by `SQL2RDF_BUILD_CLI` (default: ON when building standalone, OFF when consumed via `FetchContent`). |
 | `test_runner` | executable | none | Test suite using [Catch2](https://github.com/catchorg/Catch2). All tests run against a mock SQL backend — no DuckDB required. Gated by `SQL2RDF_BUILD_TESTS` (default: ON when building standalone, OFF when consumed via `FetchContent`). |
 | `format` | utility | none | Apply `clang-format` to all project C++ sources in-place. Only defined when building standalone. |
@@ -59,9 +60,10 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(sql2rdf)
 
 target_link_libraries(myapp PRIVATE sql2rdf::r2rml)   # or sql2rdf::yarrrml which will give you both that and r2rml
+# target_link_libraries(myapp PRIVATE sql2rdf::sparql) # standalone SPARQL query parser, unrelated to r2rml/yarrrml
 ```
 
-By default this gets you only `sql2rdf_r2rml`/`sql2rdf_yarrrml` (exposed under the namespaced `sql2rdf::r2rml`/`sql2rdf::yarrrml` ALIAS targets, plus their `serd`/`yaml-cpp` dependencies) — no `test_runner`, no `SQL2RDF++` CLI, no Catch2 fetch, and no DuckDB probing or fetch. The `format`/`format-check`/`tidy` dev-utility targets are also skipped, avoiding a target-name collision with any identically-named targets in the consuming project.
+By default this gets you only `sql2rdf_r2rml`/`sql2rdf_yarrrml`/`sql2rdf_sparql` (exposed under the namespaced `sql2rdf::r2rml`/`sql2rdf::yarrrml`/`sql2rdf::sparql` ALIAS targets, plus their `serd`/`yaml-cpp` dependencies) — no `test_runner`, no `SQL2RDF++` CLI, no Catch2 fetch, and no DuckDB probing or fetch. The `format`/`format-check`/`tidy` dev-utility targets are also skipped, avoiding a target-name collision with any identically-named targets in the consuming project.
 
 If your own project already defines a `serd` target (e.g. from its own `FetchContent`/`find_package` of Serd), sql2rdf will reuse it instead of vendoring a second copy — just make sure that target exists before `FetchContent_MakeAvailable(sql2rdf)` runs.
 
@@ -86,7 +88,8 @@ git submodule update --init --recursive
 Then (assuming you already have DuckDB installed on your system)
 ```sh
 cmake -B build
-cmake --build build --target sql2rdf_r2rml   # library only
+cmake --build build --target sql2rdf_r2rml    # library only
+cmake --build build --target sql2rdf_sparql   # SPARQL query parser library only
 cmake --build build --target SQL2RDF++        # CLI app (requires DuckDB)
 cmake --build build --target test_runner      # tests (no DuckDB needed)
 cmake --build build                           # all of the above
@@ -136,7 +139,7 @@ See the GitHub Actions workflow for the exact install steps used in CI for each 
 
 ## Testing
 
-Tests are based on the example tables and mapping configurations from the [W3C R2RML specification](https://www.w3.org/TR/r2rml/). Example mapping files are in `tests/sourceR2RML/`. YARRRML equivalents of the same examples, plus feature/error-handling fixtures, are in `tests/sourceYARRRML/`.
+Tests are based on the example tables and mapping configurations from the [W3C R2RML specification](https://www.w3.org/TR/r2rml/). Example mapping files are in `tests/sourceR2RML/`. YARRRML equivalents of the same examples, plus feature/error-handling fixtures, are in `tests/sourceYARRRML/`. SPARQL query fixtures (valid queries and `invalid_*.rq` error cases) are in `tests/sourceSPARQL/`.
 
 All tests run against a mock SQL backend (`MockSQL.h`) — no DuckDB installation is required to run them.
 
@@ -173,6 +176,16 @@ Supported subset:
 
 Non-fatal issues (unsupported keys, a mapping with no/multiple sources, an unresolved join-condition function, skipped `graphs`, ...) are collected into `R2RMLMapping::parseErrors` in the default lenient mode, or raised as a `std::runtime_error` when parsing in strict mode (`ignoreNonFatalErrors=false`). Fatal problems (unreadable file, YAML syntax errors, a missing `mappings` key) always throw.
 
+## SPARQL query parsing
+
+`sql2rdf_sparql` (namespace `sparql::`) is a standalone recursive-descent parser for the [SPARQL 1.1 Query grammar](https://www.w3.org/TR/sparql11-query/#sparqlGrammar). It has no dependency on the R2RML/YARRRML/DuckDB code and is not currently used by the mapping-to-RDF conversion pipeline — it exists to parse and inspect `.rq` query files.
+
+Supported: all four query forms (`SELECT`/`CONSTRUCT`/`DESCRIBE`/`ASK`), prologue (`BASE`/`PREFIX`), dataset clauses, group graph patterns (`OPTIONAL`/`MINUS`/`UNION`/`GRAPH`/`SERVICE`/`FILTER`/`BIND`/`VALUES`), subqueries, solution modifiers (`GROUP BY`/`HAVING`/`ORDER BY`/`LIMIT`/`OFFSET`), the full property path algebra (alternative/sequence/inverse/negated property sets), triples including collections and blank-node property lists, the full expression grammar with aggregates (`COUNT`/`SUM`/`MIN`/`MAX`/`AVG`/`SAMPLE`/`GROUP_CONCAT`) and builtin functions, and `EXISTS`. SPARQL *Update* is out of scope.
+
+`sparql::Parser::parseFile`/`parseString` produce an AST (`include/sparql-parser/ast/`); `sparql::print` (`PrettyPrinter.h`) renders it back to text. Parse errors are reported via `sparql::ParseError`.
+
+The CLI exposes this parser directly via `-Q <file.rq>`, which parses the query and prints its AST to stdout, then exits without touching the mapping/database/output pipeline. See [Usage](#usage) below.
+
 ## Usage
 
 ```sh
@@ -192,4 +205,9 @@ Options:
                        regardless of its extension
   -P                   Print the parsed mapping to stderr
   -h                   Show this help message
+
+Usage: ./SQL2RDF++ -Q <query.rq>
+
+Parses a SPARQL query file and prints its AST to stdout, independent of the
+mapping/database/output pipeline above.
 ```

@@ -13,7 +13,9 @@ const char *RDF_TYPE_PATH = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 // '^' (Inverse, unary), '*'/'+'/'?' (unary postfix), negated property sets,
 // groups, then a bare IRI/'a'.
 
-std::unique_ptr<PropertyPathExpr> Parser::parsePath() { return parsePathAlternative(); }
+std::unique_ptr<PropertyPathExpr> Parser::parsePath() {
+	return parsePathAlternative();
+}
 
 std::unique_ptr<PropertyPathExpr> Parser::parsePathAlternative() {
 	std::unique_ptr<PropertyPathExpr> left = parsePathSequence();
@@ -34,15 +36,19 @@ std::unique_ptr<PropertyPathExpr> Parser::parsePathSequence() {
 }
 
 std::unique_ptr<PropertyPathExpr> Parser::parsePathEltOrInverse() {
-	if (matchType(TokenType::Caret)) return std::unique_ptr<PropertyPathExpr>(new InversePath(parsePathElt()));
+	if (matchType(TokenType::Caret))
+		return std::unique_ptr<PropertyPathExpr>(new InversePath(parsePathElt()));
 	return parsePathElt();
 }
 
 std::unique_ptr<PropertyPathExpr> Parser::parsePathElt() {
 	std::unique_ptr<PropertyPathExpr> p = parsePathPrimary();
-	if (matchType(TokenType::Question)) return std::unique_ptr<PropertyPathExpr>(new ZeroOrOnePath(std::move(p)));
-	if (matchType(TokenType::Star)) return std::unique_ptr<PropertyPathExpr>(new ZeroOrMorePath(std::move(p)));
-	if (matchType(TokenType::Plus)) return std::unique_ptr<PropertyPathExpr>(new OneOrMorePath(std::move(p)));
+	if (matchType(TokenType::Question))
+		return std::unique_ptr<PropertyPathExpr>(new ZeroOrOnePath(std::move(p)));
+	if (matchType(TokenType::Star))
+		return std::unique_ptr<PropertyPathExpr>(new ZeroOrMorePath(std::move(p)));
+	if (matchType(TokenType::Plus))
+		return std::unique_ptr<PropertyPathExpr>(new OneOrMorePath(std::move(p)));
 	return p;
 }
 
@@ -50,7 +56,8 @@ std::unique_ptr<PropertyPathExpr> Parser::parsePathPrimary() {
 	if (matchType(TokenType::A)) {
 		return std::unique_ptr<PropertyPathExpr>(new PredicatePath(makeIri(RDF_TYPE_PATH, "a")));
 	}
-	if (matchType(TokenType::Bang)) return parsePathNegatedPropertySet();
+	if (matchType(TokenType::Bang))
+		return parsePathNegatedPropertySet();
 	if (matchType(TokenType::LParen)) {
 		std::unique_ptr<PropertyPathExpr> inner = parsePath();
 		expectType(TokenType::RParen, "')' closing a grouped property path");
@@ -66,17 +73,22 @@ std::unique_ptr<PropertyPathExpr> Parser::parsePathNegatedPropertySet() {
 			for (;;) {
 				bool inv = matchType(TokenType::Caret);
 				std::unique_ptr<Iri> iri = matchType(TokenType::A) ? makeIri(RDF_TYPE_PATH, "a") : parseIri();
-				if (inv) n->inverse.push_back(std::move(iri));
-				else n->forward.push_back(std::move(iri));
-				if (!matchType(TokenType::Pipe)) break;
+				if (inv)
+					n->inverse.push_back(std::move(iri));
+				else
+					n->forward.push_back(std::move(iri));
+				if (!matchType(TokenType::Pipe))
+					break;
 			}
 		}
 		expectType(TokenType::RParen, "')' closing a negated property set");
 	} else {
 		bool inv = matchType(TokenType::Caret);
 		std::unique_ptr<Iri> iri = matchType(TokenType::A) ? makeIri(RDF_TYPE_PATH, "a") : parseIri();
-		if (inv) n->inverse.push_back(std::move(iri));
-		else n->forward.push_back(std::move(iri));
+		if (inv)
+			n->inverse.push_back(std::move(iri));
+		else
+			n->forward.push_back(std::move(iri));
 	}
 	return std::unique_ptr<PropertyPathExpr>(n.release());
 }

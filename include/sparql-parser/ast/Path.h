@@ -30,10 +30,13 @@ enum class PathKind {
 /// deliberate AST simplification).
 class PropertyPathExpr {
 public:
-	explicit PropertyPathExpr(PathKind kind) : kind_(kind) {}
+	explicit PropertyPathExpr(PathKind kind) : kind_(kind) {
+	}
 	virtual ~PropertyPathExpr() = default;
 
-	PathKind kind() const { return kind_; }
+	PathKind kind() const {
+		return kind_;
+	}
 
 private:
 	PathKind kind_;
@@ -41,14 +44,16 @@ private:
 
 class PredicatePath : public PropertyPathExpr {
 public:
-	explicit PredicatePath(std::unique_ptr<Iri> iri) : PropertyPathExpr(PathKind::Predicate), iri(std::move(iri)) {}
+	explicit PredicatePath(std::unique_ptr<Iri> iri) : PropertyPathExpr(PathKind::Predicate), iri(std::move(iri)) {
+	}
 
 	std::unique_ptr<Iri> iri;
 };
 
 class VariablePath : public PropertyPathExpr {
 public:
-	explicit VariablePath(std::unique_ptr<Var> var) : PropertyPathExpr(PathKind::Variable), var(std::move(var)) {}
+	explicit VariablePath(std::unique_ptr<Var> var) : PropertyPathExpr(PathKind::Variable), var(std::move(var)) {
+	}
 
 	std::unique_ptr<Var> var;
 };
@@ -56,7 +61,8 @@ public:
 class InversePath : public PropertyPathExpr {
 public:
 	explicit InversePath(std::unique_ptr<PropertyPathExpr> child)
-	    : PropertyPathExpr(PathKind::Inverse), child(std::move(child)) {}
+	    : PropertyPathExpr(PathKind::Inverse), child(std::move(child)) {
+	}
 
 	std::unique_ptr<PropertyPathExpr> child;
 };
@@ -64,7 +70,8 @@ public:
 class SequencePath : public PropertyPathExpr {
 public:
 	SequencePath(std::unique_ptr<PropertyPathExpr> left, std::unique_ptr<PropertyPathExpr> right)
-	    : PropertyPathExpr(PathKind::Sequence), left(std::move(left)), right(std::move(right)) {}
+	    : PropertyPathExpr(PathKind::Sequence), left(std::move(left)), right(std::move(right)) {
+	}
 
 	std::unique_ptr<PropertyPathExpr> left;
 	std::unique_ptr<PropertyPathExpr> right;
@@ -73,7 +80,8 @@ public:
 class AlternativePath : public PropertyPathExpr {
 public:
 	AlternativePath(std::unique_ptr<PropertyPathExpr> left, std::unique_ptr<PropertyPathExpr> right)
-	    : PropertyPathExpr(PathKind::Alternative), left(std::move(left)), right(std::move(right)) {}
+	    : PropertyPathExpr(PathKind::Alternative), left(std::move(left)), right(std::move(right)) {
+	}
 
 	std::unique_ptr<PropertyPathExpr> left;
 	std::unique_ptr<PropertyPathExpr> right;
@@ -82,7 +90,8 @@ public:
 class ZeroOrMorePath : public PropertyPathExpr {
 public:
 	explicit ZeroOrMorePath(std::unique_ptr<PropertyPathExpr> child)
-	    : PropertyPathExpr(PathKind::ZeroOrMore), child(std::move(child)) {}
+	    : PropertyPathExpr(PathKind::ZeroOrMore), child(std::move(child)) {
+	}
 
 	std::unique_ptr<PropertyPathExpr> child;
 };
@@ -90,7 +99,8 @@ public:
 class OneOrMorePath : public PropertyPathExpr {
 public:
 	explicit OneOrMorePath(std::unique_ptr<PropertyPathExpr> child)
-	    : PropertyPathExpr(PathKind::OneOrMore), child(std::move(child)) {}
+	    : PropertyPathExpr(PathKind::OneOrMore), child(std::move(child)) {
+	}
 
 	std::unique_ptr<PropertyPathExpr> child;
 };
@@ -98,7 +108,8 @@ public:
 class ZeroOrOnePath : public PropertyPathExpr {
 public:
 	explicit ZeroOrOnePath(std::unique_ptr<PropertyPathExpr> child)
-	    : PropertyPathExpr(PathKind::ZeroOrOne), child(std::move(child)) {}
+	    : PropertyPathExpr(PathKind::ZeroOrOne), child(std::move(child)) {
+	}
 
 	std::unique_ptr<PropertyPathExpr> child;
 };
@@ -107,7 +118,8 @@ public:
 /// per grammar rules 95-96.
 class NegatedPropertySet : public PropertyPathExpr {
 public:
-	NegatedPropertySet() : PropertyPathExpr(PathKind::NegatedPropertySet) {}
+	NegatedPropertySet() : PropertyPathExpr(PathKind::NegatedPropertySet) {
+	}
 
 	std::vector<std::unique_ptr<Iri>> forward; // iri_1 .. iri_j (not inverted)
 	std::vector<std::unique_ptr<Iri>> inverse; // ^iri_j+1 .. ^iri_n
