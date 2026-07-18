@@ -42,32 +42,33 @@
 namespace r2rml {
 
 // ---------------------------------------------------------------------------
-// R2RML namespace prefix
+// R2RML namespace prefix (shared with YARRRMLParser.cpp; see vocab in
+// MappingParser.h)
 // ---------------------------------------------------------------------------
-static const char *const RR_TERM_TYPE = "http://www.w3.org/ns/r2rml#termType";
-static const char *const RR_IRI_TERM_TYPE = "http://www.w3.org/ns/r2rml#IRI";
-static const char *const RR_LITERAL_TERM_TYPE = "http://www.w3.org/ns/r2rml#Literal";
-static const char *const RR_BLANKNODE_TERM_TYPE = "http://www.w3.org/ns/r2rml#BlankNode";
-static const char *const RR_LANGUAGE_TERM_TYPE = "http://www.w3.org/ns/r2rml#language";
-static const char *const RR_TABLE_NAME = "http://www.w3.org/ns/r2rml#tableName";
-static const char *const RR_LOGICAL_TABLE = "http://www.w3.org/ns/r2rml#logicalTable";
-static const char *const RR_SQL_QUERY = "http://www.w3.org/ns/r2rml#sqlQuery";
-static const char *const RR_DATATYPE = "http://www.w3.org/ns/r2rml#datatype";
-static const char *const RR_TEMPLATE = "http://www.w3.org/ns/r2rml#template";
-static const char *const RR_COLUMN = "http://www.w3.org/ns/r2rml#column";
-static const char *const RR_CONSTANT = "http://www.w3.org/ns/r2rml#constant";
-static const char *const RR_PARENTTRIPLESMAP = "http://www.w3.org/ns/r2rml#parentTriplesMap";
-static const char *const RR_JOIN_CONDITION = "http://www.w3.org/ns/r2rml#joinCondition";
-static const char *const RR_CHILD = "http://www.w3.org/ns/r2rml#child";
-static const char *const RR_PARENT = "http://www.w3.org/ns/r2rml#parent";
-static const char *const RR_CLASS = "http://www.w3.org/ns/r2rml#class";
-static const char *const RR_PREDICATE = "http://www.w3.org/ns/r2rml#predicate";
-static const char *const RR_PREDICATE_MAP = "http://www.w3.org/ns/r2rml#predicateMap";
-static const char *const RR_OBJECT = "http://www.w3.org/ns/r2rml#object";
-static const char *const RR_OBJECT_MAP = "http://www.w3.org/ns/r2rml#objectMap";
-static const char *const RR_SUBJECT = "http://www.w3.org/ns/r2rml#subject";
-static const char *const RR_SUBJECT_MAP = "http://www.w3.org/ns/r2rml#subjectMap";
-static const char *const RR_PREDICATE_OBJECT_MAP = "http://www.w3.org/ns/r2rml#predicateObjectMap";
+using vocab::RR_BLANKNODE_TERM_TYPE;
+using vocab::RR_CHILD;
+using vocab::RR_CLASS;
+using vocab::RR_COLUMN;
+using vocab::RR_CONSTANT;
+using vocab::RR_DATATYPE;
+using vocab::RR_IRI_TERM_TYPE;
+using vocab::RR_JOIN_CONDITION;
+using vocab::RR_LANGUAGE;
+using vocab::RR_LITERAL_TERM_TYPE;
+using vocab::RR_LOGICAL_TABLE;
+using vocab::RR_OBJECT;
+using vocab::RR_OBJECT_MAP;
+using vocab::RR_PARENT;
+using vocab::RR_PARENTTRIPLESMAP;
+using vocab::RR_PREDICATE;
+using vocab::RR_PREDICATE_MAP;
+using vocab::RR_PREDICATE_OBJECT_MAP;
+using vocab::RR_SQL_QUERY;
+using vocab::RR_SUBJECT;
+using vocab::RR_SUBJECT_MAP;
+using vocab::RR_TABLE_NAME;
+using vocab::RR_TEMPLATE;
+using vocab::RR_TERM_TYPE;
 
 // ---------------------------------------------------------------------------
 // Raw triple-store types
@@ -388,7 +389,7 @@ public:
 	// languageTag.
 	// ------------------------------------------------------------------
 	void applyLanguage(const std::string &nodeKey, TermMap &tm) {
-		std::string lang = getFirstLiteral(ts, nodeKey, RR_LANGUAGE_TERM_TYPE);
+		std::string lang = getFirstLiteral(ts, nodeKey, RR_LANGUAGE);
 		if (!lang.empty()) {
 			tm.languageTag = std::unique_ptr<std::string>(new std::string(lang));
 		}

@@ -37,31 +37,39 @@
 #include <vector>
 
 namespace yarrrml {
-static const char *const RR_TERM_TYPE = "http://www.w3.org/ns/r2rml#termType";
-static const char *const RR_IRI_TERM_TYPE = "http://www.w3.org/ns/r2rml#IRI";
-static const char *const RR_LITERAL_TERM_TYPE = "http://www.w3.org/ns/r2rml#Literal";
-static const char *const RR_BLANKNODE_TERM_TYPE = "http://www.w3.org/ns/r2rml#BlankNode";
-static const char *const RR_LANGUAGE_TERM_TYPE = "http://www.w3.org/ns/r2rml#Language";
-static const char *const RR_TABLE_NAME = "http://www.w3.org/ns/r2rml#tableName";
-static const char *const RR_LOGICAL_TABLE = "http://www.w3.org/ns/r2rml#logicalTable";
-static const char *const RR_SQL_QUERY = "http://www.w3.org/ns/r2rml#sqlQuery";
-static const char *const RR_DATATYPE = "http://www.w3.org/ns/r2rml#datatype";
-static const char *const RR_TEMPLATE = "http://www.w3.org/ns/r2rml#template";
-static const char *const RR_COLUMN = "http://www.w3.org/ns/r2rml#column";
-static const char *const RR_CONSTANT = "http://www.w3.org/ns/r2rml#constant";
-static const char *const RR_PARENTTRIPLESMAP = "http://www.w3.org/ns/r2rml#parentTriplesMap";
-static const char *const RR_JOIN_CONDITION = "http://www.w3.org/ns/r2rml#joinCondition";
-static const char *const RR_CHILD = "http://www.w3.org/ns/r2rml#child";
-static const char *const RR_PARENT = "http://www.w3.org/ns/r2rml#parent";
-static const char *const RR_CLASS = "http://www.w3.org/ns/r2rml#class";
-static const char *const RR_PREDICATE = "http://www.w3.org/ns/r2rml#predicate";
-static const char *const RR_PREDICATE_MAP = "http://www.w3.org/ns/r2rml#predicateMap";
-static const char *const RR_OBJECT = "http://www.w3.org/ns/r2rml#object";
-static const char *const RR_OBJECT_MAP = "http://www.w3.org/ns/r2rml#objectMap";
-static const char *const RR_SUBJECT = "http://www.w3.org/ns/r2rml#subject";
-static const char *const RR_SUBJECT_MAP = "http://www.w3.org/ns/r2rml#subjectMap";
-static const char *const RR_LANGUAGE = "http://www.w3.org/ns/r2rml#language";
-static const char *const RR_PREDICATE_OBJECT_MAP = "http://www.w3.org/ns/r2rml#predicateObjectMap";
+
+// ---------------------------------------------------------------------------
+// R2RML namespace prefix (shared with R2RMLParser.cpp; see vocab in
+// MappingParser.h)
+// ---------------------------------------------------------------------------
+using r2rml::vocab::RR_BLANKNODE_TERM_TYPE;
+using r2rml::vocab::RR_CHILD;
+using r2rml::vocab::RR_CLASS;
+using r2rml::vocab::RR_COLUMN;
+using r2rml::vocab::RR_CONSTANT;
+using r2rml::vocab::RR_DATATYPE;
+using r2rml::vocab::RR_IRI_TERM_TYPE;
+using r2rml::vocab::RR_JOIN_CONDITION;
+using r2rml::vocab::RR_LANGUAGE;
+using r2rml::vocab::RR_LITERAL_TERM_TYPE;
+using r2rml::vocab::RR_LOGICAL_TABLE;
+using r2rml::vocab::RR_OBJECT;
+using r2rml::vocab::RR_OBJECT_MAP;
+using r2rml::vocab::RR_PARENT;
+using r2rml::vocab::RR_PARENTTRIPLESMAP;
+using r2rml::vocab::RR_PREDICATE;
+using r2rml::vocab::RR_PREDICATE_MAP;
+using r2rml::vocab::RR_PREDICATE_OBJECT_MAP;
+using r2rml::vocab::RR_SQL_QUERY;
+using r2rml::vocab::RR_SUBJECT;
+using r2rml::vocab::RR_SUBJECT_MAP;
+using r2rml::vocab::RR_TABLE_NAME;
+using r2rml::vocab::RR_TEMPLATE;
+using r2rml::vocab::RR_TERM_TYPE;
+
+// YARRRML-only: not part of the shared vocab since R2RMLParser.cpp has no
+// use for them (it reads rr:triplesMap/rdf:type from Turtle text via Serd,
+// not by emitting these as literal predicate strings).
 static const char *const RR_TRIPLES_MAP = "http://www.w3.org/ns/r2rml#triplesMap";
 static const char *const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
