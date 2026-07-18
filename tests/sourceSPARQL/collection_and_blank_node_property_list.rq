@@ -1,0 +1,8 @@
+PREFIX : <http://example.org/ns#>
+
+SELECT ?element
+WHERE {
+  :list :hasMember (1 ?x 3 4) .
+  [ :p "v" ; :q "w" ] :links :list .
+  :list :rest*/:first ?element .
+}

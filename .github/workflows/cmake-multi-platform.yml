@@ -209,6 +209,10 @@ jobs:
       # Test suite - no DuckDB dependency (uses mock SQL backend)
       run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} --target test_runner
 
+    - name: Build tests (sparql2sql_duckdb_tests)
+      # Execution-correctness tests against a real DuckDB - registered with CTest whenever DuckDB is found
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} --target sparql2sql_duckdb_tests
+
     - name: Test
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
       # Execute tests defined by the CMake configuration. Note that --build-config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).

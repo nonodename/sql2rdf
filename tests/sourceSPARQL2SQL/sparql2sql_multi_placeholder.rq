@@ -1,0 +1,5 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?o
+WHERE {
+  ?o a ex:Order .
+}

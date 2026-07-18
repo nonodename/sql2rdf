@@ -1,0 +1,4 @@
+PREFIX ex: <http://example.com/ns#>
+ASK {
+  ?e ex:department ?d .
+}

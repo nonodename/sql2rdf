@@ -26,6 +26,7 @@ public:
 
 	std::unique_ptr<SQLValue> getValue(const std::string &columnName) const override;
 	bool isNull(const std::string &columnName) const override;
+	std::vector<std::string> columnNames() const override;
 	std::unique_ptr<SQLRow> clone() const override;
 
 private:

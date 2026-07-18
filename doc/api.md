@@ -191,6 +191,7 @@ public:
     explicit SQLRow(std::map<std::string, SQLValue> columns);
     SQLValue getValue(const std::string& columnName) const;
     bool isNull(const std::string& columnName) const;
+    std::vector<std::string> columnNames() const;  // e.g. for printing result headers
 };
 ```
 
@@ -327,7 +328,7 @@ public:
 | `ConstantTermMap` | `rr:constant` | Always returns the same fixed `SerdNode` |
 | `ColumnTermMap` | `rr:column` | Reads the value of the named column |
 | `TemplateTermMap` | `rr:template` | Expands an RFC 6570 URI template with column values |
-| `SubjectMap` | `rr:subjectMap` | Like `TermMap`; also carries `classIRIs` and `graphMaps` |
+| `SubjectMap` | `rr:subjectMap` | Abstract; carries `classIRIs`/`graphMaps` plus `valueTermMap()`, returning the underlying `rr:template`/`rr:column`/`rr:constant` strategy that actually determines the subject's value |
 | `PredicateMap` | `rr:predicateMap` | No additional behaviour |
 | `ObjectMap` | `rr:objectMap` | No additional behaviour |
 | `GraphMap` | `rr:graphMap` | Generates named-graph IRIs |
@@ -384,13 +385,142 @@ The check cascades: `R2RMLMapping::isValidInsideOut()` → `TriplesMap::isValidI
 
 ---
 
+## SPARQL-to-SQL Translation
+
+`sql2rdf_sparql2sql` (namespace `sparql2sql::`) translates an already-parsed SPARQL query
+(`sparql::ast::Query`, from `sql2rdf_sparql`) against an already-parsed R2RML mapping
+(`r2rml::R2RMLMapping`, from `sql2rdf_r2rml`) into a SQL string for a given `SqlDialect`. It uses
+the mapping's `TriplesMap`/`PredicateObjectMap`/`TermMap` structure *in reverse*: for each SPARQL
+triple pattern it enumerates every mapping source that could produce a matching triple, generates
+one SQL relation per candidate, and composes per-pattern relations via the SPARQL algebra
+(AND→inner join, OPTIONAL→left outer join, UNION→schema-extending union, MINUS→anti-join,
+FILTER/BIND→applied against everything bound so far).
+
+### Quick Start
+
+```cpp
+#include "sparql-parser/Parser.h"
+#include "r2rml/R2RMLParser.h"
+#include "sparql2sql/Translator.h"
+#include "sparql2sql/DuckDbDialect.h"
+
+sparql::Parser sparqlParser;
+std::unique_ptr<sparql::ast::Query> query = sparqlParser.parseFile("query.rq");
+
+r2rml::R2RMLParser mappingParser;
+r2rml::R2RMLMapping mapping = mappingParser.parse("mapping.ttl");
+
+sparql2sql::DuckDbDialect dialect;
+std::string sql = sparql2sql::translateQuery(*query, mapping, dialect);
+// sql is a single "SELECT ..." (or, for ASK, "SELECT EXISTS(...) AS ask") statement,
+// ready to hand to r2rml::DuckDBConnection::execute() or any other SQLConnection.
+```
+
+### API
+
+```cpp
+#include "sparql2sql/Translator.h"
+
+std::string sparql2sql::translateQuery(const sparql::ast::Query& query,
+                                        const r2rml::R2RMLMapping& mapping,
+                                        const sparql2sql::SqlDialect& dialect);
+```
+
+```cpp
+#include "sparql2sql/DialectFactory.h"
+
+std::unique_ptr<sparql2sql::SqlDialect> sparql2sql::createDialect(const std::string& name);
+// "duckdb" -> DuckDbDialect; anything else throws std::runtime_error naming the supported set.
+```
+
+```cpp
+#include "sparql2sql/TranslationError.h"
+
+class TranslationError : public std::runtime_error {
+public:
+    explicit TranslationError(const std::string& message);
+};
+// Thrown for any SPARQL construct/expression the translator cannot express as SQL against the
+// supplied mapping (see "Known limitations" below). Derives from std::runtime_error, like
+// sparql::ParseError, so existing `catch (const std::exception&)` sites keep working.
+```
+
+The CLI exposes this via `-T <file.rq> [--dialect <name>]` (default dialect: `duckdb`), paired
+with the mapping-file positional argument. If the database-file positional is also given, the
+translated SQL is additionally executed against it via `r2rml::DuckDBConnection` and the result
+rows are printed; see `-h` for exact stdout/stderr routing.
+
+### Supported SPARQL subset / Known limitations
+
+- **Query forms**: only `SELECT` and `ASK`. `CONSTRUCT`/`DESCRIBE` throw `TranslationError`
+  (they produce an RDF graph, not a row set — a different translation shape, not yet implemented).
+- **Property paths**: only a constant IRI/`a` or a bare variable in predicate position. Any other
+  path operator (`/`, `|`, `*`, `+`, `?`, `^`, negated property sets) throws `TranslationError`
+  naming the unsupported kind.
+- **No `GRAPH`/named graphs**: this R2RML mapping model never populates `rr:graph`/`rr:graphMap`,
+  so `GRAPH` patterns have nothing to translate against and always throw.
+- **No `SERVICE`** (federated query): always throws, matching `sql2rdf_sparql`'s own "no
+  federated-query execution semantics" stance.
+- **Every SPARQL variable is a plain SQL `VARCHAR`** holding the RDF term's lexical string form
+  (IRI string / literal lexical form / blank node label) — no term-kind, datatype, or language
+  dimension is tracked. This is the single biggest scope simplification and disables/approximates:
+  - `isIRI()`/`isBLANK()`/`isLITERAL()`/`datatype()`/`lang()`/`langMatches()`/`STRLANG()`/
+    `STRDT()`/`IRI()`/`URI()`/`BNODE()` — all throw `TranslationError` (would need the missing
+    term-kind dimension).
+  - `sameTerm()` is approximated as plain string equality (not full type/datatype/language
+    matching).
+  - `ORDER BY` and `MIN()`/`MAX()` sort/compare **lexicographically**, not numerically, for
+    variables that happen to hold numbers — there is no static per-variable type inference across
+    the UNION-ALL-combined candidate relations that make up a triple pattern's translation.
+  - Numeric comparisons/arithmetic (`<`, `>`, `+`, aggregates, etc.) go through
+    `TRY_CAST(... AS DOUBLE)` at point of use; `=`/`<>`/`<`/`>`/`<=`/`>=` fall back to a plain
+    VARCHAR comparison when either side isn't numeric-castable, so e.g. `FILTER(?name < "M")`
+    (string ordering) still works correctly.
+- **Template matching (`rr:template`) assumes RFC3986-unreserved-only column values**: forward
+  R2RML generation percent-encodes substituted column values, but the translator's reverse
+  direction (reconstructing/matching a template) does not apply percent-encoding — correct as
+  long as template-referenced columns hold only unreserved characters (typical for numeric/simple
+  string IDs), not guaranteed in general.
+- **Deferred builtin functions** (throw `TranslationError`): `ENCODE_FOR_URI()`; date/time
+  accessors (`YEAR()`/`MONTH()`/`DAY()`/`HOURS()`/`MINUTES()`/`SECONDS()`/`TIMEZONE()`/`TZ()`);
+  non-deterministic/context functions (`NOW()`/`RAND()`/`UUID()`/`STRUUID()`); `SHA384()`/`SHA512()`
+  (DuckDB has no built-in scalar function for either); any non-builtin (IRI-named) function call.
+  `MD5()`/`SHA1()`/`SHA256()`/`ABS()`/`CEIL()`/`FLOOR()`/`ROUND()`/`CONCAT()`/`STRLEN()`/`SUBSTR()`/
+  `UCASE()`/`LCASE()`/`CONTAINS()`/`STRSTARTS()`/`STRENDS()`/`STRBEFORE()`/`STRAFTER()`/`REPLACE()`/
+  `REGEX()`/`COALESCE()`/`IF()`/`isNUMERIC()`/`bound()` are all implemented.
+- **Out-of-scope variable references** in FILTER/BIND/ORDER BY/HAVING throw `TranslationError` at
+  translation time, rather than emulating SPARQL's precise per-row unbound-variable/type-error
+  semantics.
+- **`BIND`'s new variable is conservatively marked "optional"** whenever any variable it
+  references is itself optional, even for expressions (like `COALESCE`) that would actually
+  guarantee a non-null result — always safe (over-approximating optionality never produces wrong
+  SQL, just occasionally-unnecessary null-safety machinery), just not maximally precise.
+- **Subquery (`{ SELECT ... }`) variables are always conservatively marked "optional"** in the
+  enclosing pattern, for the same reason.
+
+### Dialects
+
+`SqlDialect` (`include/sparql2sql/SqlDialect.h`) abstracts only the handful of SQL syntax points
+that actually vary across engines and are exercised by the translator (identifier/string quoting,
+`LIMIT`/`OFFSET` syntax, `EXISTS`, numeric try-cast, regex match, string/any-value aggregation,
+and DuckDB's `UNION [ALL] BY NAME` schema-extending union). Constructs close enough to universal
+across engines are emitted directly rather than routed through the dialect. `DuckDbDialect` is
+currently the only implementation; add a new one by implementing `SqlDialect` and registering it
+in `createDialect()` (`src/sparql2sql/DialectFactory.cpp`).
+
+---
+
 ## Build Targets
 
 | Target | Type | DuckDB required | Description |
 |--------|------|-----------------|-------------|
 | `sql2rdf_r2rml` | static library | No | Core R2RML library; link this in your project |
+| `sql2rdf_yarrrml` | static library | No | YARRRML→R2RML translator (links yaml-cpp privately) |
+| `sql2rdf_sparql` | static library | No | Standalone SPARQL 1.1 Query grammar parser |
+| `sql2rdf_sparql2sql` | static library | No | SPARQL-to-SQL translator (see below) |
 | `SQL2RDF++` | executable | Yes | CLI application |
 | `test_runner` | executable | No | Catch2 unit tests |
+| `sparql2sql_duckdb_tests` | executable | Yes | SPARQL-to-SQL real-DuckDB execution validation tests (`tests/duckdb/`) |
 
 To link the core library from CMake:
 

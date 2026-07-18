@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?d (COUNT(?e) AS ?cnt)
+WHERE {
+  ?e ex:department ?d .
+}
+GROUP BY ?d
