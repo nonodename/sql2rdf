@@ -288,6 +288,10 @@ public:
 		return SERD_NODE_NULL;
 	}
 
+	const TermMap *valueTermMap() const override {
+		return valueMap.get();
+	}
+
 	std::ostream &print(std::ostream &os) const override {
 		os << "SubjectMap {";
 		if (valueMap) {

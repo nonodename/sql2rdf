@@ -36,6 +36,15 @@ bool MapSQLRow::isNull(const std::string &columnName) const {
 	return it->second->isNull();
 }
 
+std::vector<std::string> MapSQLRow::columnNames() const {
+	std::vector<std::string> names;
+	names.reserve(columns_.size());
+	for (const auto &p : columns_) {
+		names.push_back(p.first);
+	}
+	return names;
+}
+
 std::unique_ptr<SQLRow> MapSQLRow::clone() const {
 	std::map<std::string, std::unique_ptr<SQLValue>> cloned;
 	for (const auto &p : columns_) {

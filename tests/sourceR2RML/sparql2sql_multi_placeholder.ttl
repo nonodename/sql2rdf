@@ -1,0 +1,21 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Toy fixture for the SPARQL-to-SQL translator's template inversion logic:
+#  - subject template with two placeholders separated by an unambiguous
+#    literal delimiter ("/") -> exercises InversionKind::PerColumnMatch.
+#  - ex:code object template with two placeholders with NO delimiter between
+#    them -> exercises InversionKind::WholeTemplateMatch (per-column split is
+#    undecidable, so inversion must fall back to matching the whole
+#    reconstructed expression).
+
+<#OrderTriplesMap>
+    rr:logicalTable [ rr:tableName "ORDERS" ];
+    rr:subjectMap [
+        rr:template "http://ex.org/order/{CUSTID}/{ORDERID}";
+        rr:class ex:Order;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:code;
+        rr:objectMap [ rr:template "{CUSTID}{ORDERID}" ];
+    ].

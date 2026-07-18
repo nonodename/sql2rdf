@@ -1,0 +1,22 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Toy fixture for the SPARQL-to-SQL translator: the ex:self predicate's
+# object map reuses the exact same template as the subject map, so every
+# generated triple is (x, ex:self, x). Used to exercise the same-variable-
+# in-one-triple-pattern self-join guard via a query like "?e ex:self ?e".
+
+<#SelfRefTriplesMap>
+    rr:logicalTable [ rr:tableName "WIDGETS" ];
+    rr:subjectMap [
+        rr:template "http://ex.org/widget/{ID}";
+        rr:class ex:Widget;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:self;
+        rr:objectMap [ rr:template "http://ex.org/widget/{ID}" ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:name;
+        rr:objectMap [ rr:column "NAME" ];
+    ].

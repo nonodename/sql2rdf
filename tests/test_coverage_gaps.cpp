@@ -122,6 +122,10 @@ public:
 		}
 		return SERD_NODE_NULL;
 	}
+
+	const TermMap *valueTermMap() const override {
+		return valueMap.get();
+	}
 };
 
 // Mirrors R2RMLParser.cpp's private ConcreteReferencingObjectMap.

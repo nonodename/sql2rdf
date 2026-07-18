@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?e
+WHERE {
+  ?e ex:name ?n .
+  MINUS { ?e ex:department ?d . }
+}

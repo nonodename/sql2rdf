@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?p ?n
+WHERE {
+  ?p ex:status ex:Active .
+  ?p ex:name ?n .
+}

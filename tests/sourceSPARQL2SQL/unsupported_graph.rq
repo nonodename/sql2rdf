@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?e ?n
+WHERE {
+  GRAPH ?g {
+    ?e ex:name ?n .
+  }
+}

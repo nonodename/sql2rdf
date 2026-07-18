@@ -119,13 +119,14 @@ if(SQL2RDF_BUILD_TESTS)
   # Include headers for tests and link to Catch2 and serd
   target_include_directories(test_runner PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/external/serd/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   if(UNIX)
-    target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql serd m)
+    target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql sql2rdf_sparql2sql serd m)
   else()
-    target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql serd)
+    target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql sql2rdf_sparql2sql serd)
   endif()
   target_compile_definitions(test_runner PRIVATE SOURCE_R2RML_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/sourceR2RML/")
   target_compile_definitions(test_runner PRIVATE SOURCE_YARRRML_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/sourceYARRRML/")
   target_compile_definitions(test_runner PRIVATE SOURCE_SPARQL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/sourceSPARQL/")
+  target_compile_definitions(test_runner PRIVATE SOURCE_SPARQL2SQL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/sourceSPARQL2SQL/")
 
   # Register individual Catch2 test cases with CTest
   catch_discover_tests(test_runner)
@@ -211,10 +212,55 @@ target_include_directories(sql2rdf_sparql PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 
+# ----------------------------------------------------------------------------
+# SPARQL-to-SQL translator - uses an R2RML mapping in reverse to translate a
+# SPARQL query into SQL for a given dialect. The one deliberate bridge between
+# sql2rdf_sparql and sql2rdf_r2rml; neither of those depend on this, only the
+# other way around. No DuckDB/yaml-cpp dependency of its own, so it's safe to
+# link into the plain (DuckDB-free) test_runner.
+# ----------------------------------------------------------------------------
+set(SPARQL2SQL_SOURCES
+  src/sparql2sql/TranslationError.cpp
+  src/sparql2sql/SqlDialect.cpp
+  src/sparql2sql/DuckDbDialect.cpp
+  src/sparql2sql/DialectFactory.cpp
+  src/sparql2sql/TemplateUtil.cpp
+  src/sparql2sql/TermMapSql.cpp
+  src/sparql2sql/TranslatedPattern.cpp
+  src/sparql2sql/TriplePatternTranslator.cpp
+  src/sparql2sql/ExpressionTranslator.cpp
+  src/sparql2sql/PatternFolder.cpp
+  src/sparql2sql/Translator.cpp
+)
+add_library(sql2rdf_sparql2sql STATIC ${SPARQL2SQL_SOURCES})
+add_library(sql2rdf::sparql2sql ALIAS sql2rdf_sparql2sql)
+target_include_directories(sql2rdf_sparql2sql PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(sql2rdf_sparql2sql PUBLIC sql2rdf_r2rml sql2rdf_sparql)
+
+# ----------------------------------------------------------------------------
+# DuckDB-backed SQLConnection - a small static library (requires DuckDB) so
+# both the CLI and the DuckDB-execution validation test target (see below)
+# can link a real SQLConnection without compiling DuckDBConnection.cpp
+# twice. Deliberately lives outside include/ (its public header is under
+# src/) so DuckDB never becomes a dependency of anything reachable from the
+# plain, DuckDB-free test_runner target.
+# ----------------------------------------------------------------------------
+if(SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB))
+  add_library(sql2rdf_duckdb STATIC src/DuckDBConnection.cpp)
+  target_include_directories(sql2rdf_duckdb PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+  )
+  target_link_libraries(sql2rdf_duckdb PUBLIC sql2rdf_r2rml duckdb)
+endif()
+
 # Specify main executable sources and link to the library (requires DuckDB)
 if(SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB))
-  add_executable(${PROJECT_NAME} src/main.cpp src/DuckDBConnection.cpp)
-  target_link_libraries(${PROJECT_NAME} PRIVATE sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql duckdb)
+  add_executable(${PROJECT_NAME} src/main.cpp)
+  target_link_libraries(${PROJECT_NAME} PRIVATE sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql sql2rdf_sparql2sql sql2rdf_duckdb duckdb)
   target_include_directories(${PROJECT_NAME} PRIVATE include src)
 endif()
 
@@ -250,6 +296,38 @@ if(SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB))
   else()
     target_link_libraries(${PROJECT_NAME} PRIVATE serd)
   endif()
+endif()
+
+# ----------------------------------------------------------------------------
+# SPARQL-to-SQL DuckDB-execution validation suite - the one other place
+# (besides the CLI) that needs a real DuckDB. Kept as its own gated,
+# separately-registered CTest target so the plain test_runner/`ctest` suite
+# stays exactly as DuckDB-free as CLAUDE.md promises: this target simply
+# doesn't exist (and isn't registered with CTest) when DuckDB isn't
+# available, and no DuckDB-touching source file is ever compiled into
+# test_runner.
+# ----------------------------------------------------------------------------
+if(SQL2RDF_BUILD_TESTS AND SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB))
+  file(GLOB SPARQL2SQL_DUCKDB_TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/duckdb/*.cpp")
+  add_executable(sparql2sql_duckdb_tests ${SPARQL2SQL_DUCKDB_TEST_SOURCES})
+  target_include_directories(sparql2sql_duckdb_tests PRIVATE
+    include src ${CMAKE_CURRENT_SOURCE_DIR}/external/serd/include ${CMAKE_CURRENT_SOURCE_DIR}/tests
+  )
+  if(UNIX)
+    target_link_libraries(sparql2sql_duckdb_tests PRIVATE
+      Catch2::Catch2WithMain sql2rdf_r2rml sql2rdf_sparql sql2rdf_sparql2sql sql2rdf_duckdb duckdb serd m
+    )
+  else()
+    target_link_libraries(sparql2sql_duckdb_tests PRIVATE
+      Catch2::Catch2WithMain sql2rdf_r2rml sql2rdf_sparql sql2rdf_sparql2sql sql2rdf_duckdb duckdb serd
+    )
+  endif()
+  target_compile_definitions(sparql2sql_duckdb_tests PRIVATE
+    SOURCE_R2RML_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/sourceR2RML/"
+    SOURCE_SPARQL2SQL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/sourceSPARQL2SQL/"
+  )
+  add_dependencies(sparql2sql_duckdb_tests serd)
+  catch_discover_tests(sparql2sql_duckdb_tests)
 endif()
 
 if(SQL2RDF_IS_TOP_LEVEL)
