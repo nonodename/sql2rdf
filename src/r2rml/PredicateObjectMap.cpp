@@ -9,18 +9,8 @@
 
 #include <algorithm>
 #include <ostream>
-#include <stdexcept>
 
 namespace r2rml {
-
-namespace {
-void checkWriteStatus(SerdStatus status) {
-	if (status != SERD_SUCCESS) {
-		throw std::runtime_error(std::string("R2RML: failed to write RDF statement: ") +
-		                         reinterpret_cast<const char *>(serd_strerror(status)));
-	}
-}
-} // namespace
 
 PredicateObjectMap::PredicateObjectMap() = default;
 PredicateObjectMap::~PredicateObjectMap() = default;
@@ -131,40 +121,44 @@ bool PredicateObjectMap::isValidInsideOut() const {
 	});
 }
 
-std::ostream &operator<<(std::ostream &os, const PredicateObjectMap &pom) {
+std::ostream &PredicateObjectMap::print(std::ostream &os) const {
 	os << "PredicateObjectMap { predicates=[";
-	for (std::size_t i = 0; i < pom.predicateMaps.size(); ++i) {
+	for (std::size_t i = 0; i < predicateMaps.size(); ++i) {
 		if (i) {
 			os << ", ";
 		}
-		if (pom.predicateMaps[i]) {
-			os << *pom.predicateMaps[i];
+		if (predicateMaps[i]) {
+			os << *predicateMaps[i];
 		}
 	}
 	os << "] objects=[";
-	for (std::size_t i = 0; i < pom.objectMaps.size(); ++i) {
+	for (std::size_t i = 0; i < objectMaps.size(); ++i) {
 		if (i) {
 			os << ", ";
 		}
-		if (pom.objectMaps[i]) {
-			os << *pom.objectMaps[i];
+		if (objectMaps[i]) {
+			os << *objectMaps[i];
 		}
 	}
 	os << "]";
-	if (!pom.graphMaps.empty()) {
+	if (!graphMaps.empty()) {
 		os << " graphMaps=[";
-		for (std::size_t i = 0; i < pom.graphMaps.size(); ++i) {
+		for (std::size_t i = 0; i < graphMaps.size(); ++i) {
 			if (i) {
 				os << ", ";
 			}
-			if (pom.graphMaps[i]) {
-				os << *pom.graphMaps[i];
+			if (graphMaps[i]) {
+				os << *graphMaps[i];
 			}
 		}
 		os << "]";
 	}
 	os << " }";
 	return os;
+}
+
+std::ostream &operator<<(std::ostream &os, const PredicateObjectMap &pom) {
+	return pom.print(os);
 }
 
 } // namespace r2rml

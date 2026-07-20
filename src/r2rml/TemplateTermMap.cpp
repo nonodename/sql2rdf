@@ -2,36 +2,10 @@
 #include "r2rml/SQLRow.h"
 #include "r2rml/SQLValue.h"
 
-#include <cstdio>
-#include <cstring>
 #include <ostream>
 #include <string>
 
 namespace r2rml {
-
-namespace {
-
-/// Percent-encode a string per RFC 3986 unreserved-character rules.
-/// Encodes all bytes that are not unreserved (A-Z a-z 0-9 - _ . ~).
-std::string percentEncode(const std::string &value) {
-	static const char unreserved[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	                                 "abcdefghijklmnopqrstuvwxyz"
-	                                 "0123456789-_.~";
-	std::string out;
-	out.reserve(value.size());
-	for (unsigned char c : value) {
-		if (std::strchr(unreserved, static_cast<char>(c))) {
-			out += static_cast<char>(c);
-		} else {
-			char buf[4];
-			std::snprintf(buf, sizeof(buf), "%%%02X", static_cast<unsigned>(c));
-			out += buf;
-		}
-	}
-	return out;
-}
-
-} // anonymous namespace
 
 TemplateTermMap::TemplateTermMap(const std::string &templ) : templateString(templ) {
 }

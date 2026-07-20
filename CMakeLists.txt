@@ -146,6 +146,7 @@ set(R2RML_SOURCES
   src/r2rml/LogicalTable.cpp
   src/r2rml/BaseTableOrView.cpp
   src/r2rml/R2RMLView.cpp
+  src/r2rml/AbstractMap.cpp
   src/r2rml/TriplesMap.cpp
   src/r2rml/PredicateObjectMap.cpp
   src/r2rml/TermMap.cpp

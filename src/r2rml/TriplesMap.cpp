@@ -8,18 +8,8 @@
 
 #include <algorithm>
 #include <ostream>
-#include <stdexcept>
 
 namespace r2rml {
-
-namespace {
-void checkWriteStatus(SerdStatus status) {
-	if (status != SERD_SUCCESS) {
-		throw std::runtime_error(std::string("R2RML: failed to write RDF statement: ") +
-		                         reinterpret_cast<const char *>(serd_strerror(status)));
-	}
-}
-} // namespace
 
 static const uint8_t RDF_TYPE_URI[] = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
@@ -91,26 +81,26 @@ bool TriplesMap::isValidInsideOut() const {
 	                   [](const std::unique_ptr<PredicateObjectMap> &pom) { return pom && pom->isValidInsideOut(); });
 }
 
-std::ostream &operator<<(std::ostream &os, const TriplesMap &tm) {
-	os << "TriplesMap <" << tm.id << "> {\n";
+std::ostream &TriplesMap::print(std::ostream &os) const {
+	os << "TriplesMap <" << id << "> {\n";
 	os << "  logicalTable: ";
-	if (tm.logicalTable) {
-		os << *tm.logicalTable;
+	if (logicalTable) {
+		os << *logicalTable;
 	} else {
 		os << "(none)";
 	}
 	os << "\n";
 	os << "  subjectMap: ";
-	if (tm.subjectMap) {
-		os << *tm.subjectMap;
+	if (subjectMap) {
+		os << *subjectMap;
 	} else {
 		os << "(none)";
 	}
 	os << "\n";
-	for (std::size_t i = 0; i < tm.predicateObjectMaps.size(); ++i) {
+	for (std::size_t i = 0; i < predicateObjectMaps.size(); ++i) {
 		os << "  predicateObjectMap[" << i << "]: ";
-		if (tm.predicateObjectMaps[i]) {
-			os << *tm.predicateObjectMaps[i];
+		if (predicateObjectMaps[i]) {
+			os << *predicateObjectMaps[i];
 		} else {
 			os << "(none)";
 		}
@@ -118,6 +108,10 @@ std::ostream &operator<<(std::ostream &os, const TriplesMap &tm) {
 	}
 	os << "}";
 	return os;
+}
+
+std::ostream &operator<<(std::ostream &os, const TriplesMap &tm) {
+	return tm.print(os);
 }
 
 } // namespace r2rml

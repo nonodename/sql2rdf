@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AbstractMap.h"
+
 #include <string>
 #include <memory>
 #include <ostream>
@@ -20,7 +22,7 @@ enum class TermType { IRI, BlankNode, Literal };
  * or graph).  Subclasses implement specific mapping strategies (constant,
  * column, template, etc.)
  */
-class TermMap {
+class TermMap : public AbstractMap {
 public:
 	virtual ~TermMap();
 
@@ -50,7 +52,7 @@ public:
 	 * Write a human-readable representation to the given stream.
 	 * Subclasses should override this and call TermMap::print for base fields.
 	 */
-	virtual std::ostream &print(std::ostream &os) const;
+	std::ostream &print(std::ostream &os) const override;
 
 	friend std::ostream &operator<<(std::ostream &os, const TermMap &tm);
 
