@@ -24,7 +24,7 @@ enum class TermType { IRI, BlankNode, Literal };
  */
 class TermMap : public AbstractMap {
 public:
-	virtual ~TermMap();
+	~TermMap() override;
 
 	/**
 	 * Given a row and a Serd environment, produce an RDF term as a SerdNode.

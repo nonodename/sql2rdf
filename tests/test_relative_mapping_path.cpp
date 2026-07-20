@@ -38,11 +38,11 @@
 #ifdef _WIN32
 #include <direct.h>
 #define R2RDF_TEST_GETCWD _getcwd
-#define R2RDF_TEST_CHDIR _chdir
+#define R2RDF_TEST_CHDIR  _chdir
 #else
 #include <unistd.h>
 #define R2RDF_TEST_GETCWD getcwd
-#define R2RDF_TEST_CHDIR chdir
+#define R2RDF_TEST_CHDIR  chdir
 #endif
 
 using r2rml::ConstantTermMap;

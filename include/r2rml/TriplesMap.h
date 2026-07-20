@@ -25,7 +25,7 @@ class R2RMLMapping;
 class TriplesMap : public AbstractMap {
 public:
 	TriplesMap();
-	~TriplesMap(); // NOLINT(performance-trivially-destructible)
+	~TriplesMap() override; // NOLINT(performance-trivially-destructible)
 
 	/**
 	 * Process the supplied row, emitting zero or more triples via the
