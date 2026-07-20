@@ -9,8 +9,18 @@
 
 #include <algorithm>
 #include <ostream>
+#include <stdexcept>
 
 namespace r2rml {
+
+namespace {
+void checkWriteStatus(SerdStatus status) {
+	if (status != SERD_SUCCESS) {
+		throw std::runtime_error(std::string("R2RML: failed to write RDF statement: ") +
+		                         reinterpret_cast<const char *>(serd_strerror(status)));
+	}
+}
+} // namespace
 
 PredicateObjectMap::PredicateObjectMap() = default;
 PredicateObjectMap::~PredicateObjectMap() = default;
@@ -56,8 +66,8 @@ void PredicateObjectMap::processRow(const SQLRow &row, const SerdNode &subject, 
 					if (object.type == SERD_NOTHING) {
 						continue;
 					}
-					serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &predicate, &object, nullptr,
-					                            nullptr);
+					checkWriteStatus(serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &predicate, &object,
+					                                             nullptr, nullptr));
 				}
 			} else {
 				// Regular term map.
@@ -86,7 +96,8 @@ void PredicateObjectMap::processRow(const SQLRow &row, const SerdNode &subject, 
 					}
 				}
 
-				serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &predicate, &object, datatype, lang);
+				checkWriteStatus(
+				    serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &predicate, &object, datatype, lang));
 			}
 		}
 	}

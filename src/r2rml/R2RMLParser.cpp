@@ -39,7 +39,49 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace r2rml {
+
+std::string toAbsoluteFilePath(const std::string &path) {
+	if (path.empty()) {
+		return path;
+	}
+
+#ifdef _WIN32
+	bool isAbsolute = path[0] == '\\' || path[0] == '/' || (path.size() >= 2 && path[1] == ':');
+	const char separator = '\\';
+#else
+	bool isAbsolute = path[0] == '/';
+	const char separator = '/';
+#endif
+	if (isAbsolute) {
+		return path;
+	}
+
+	char buffer[4096];
+#ifdef _WIN32
+	char *cwd = _getcwd(buffer, sizeof(buffer));
+#else
+	char *cwd = getcwd(buffer, sizeof(buffer));
+#endif
+	if (!cwd) {
+		// Can't determine the working directory; return as-is so the caller's
+		// existing (broken) behaviour is unchanged rather than masked.
+		return path;
+	}
+
+	std::string absolutePath(cwd);
+	if (!absolutePath.empty() && absolutePath.back() != separator) {
+		absolutePath += separator;
+	}
+	absolutePath += path;
+	return absolutePath;
+}
 
 // ---------------------------------------------------------------------------
 // R2RML namespace prefix (shared with YARRRMLParser.cpp; see vocab in
@@ -711,7 +753,11 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreN
 	serd_reader_set_error_sink(reader, cbError, nullptr);
 
 	// Convert the filesystem path to a file URI and use it as the document base.
-	SerdNode fileUriNode = serd_node_new_file_uri(reinterpret_cast<const uint8_t *>(mappingFilePath.c_str()),
+	// serd_node_new_file_uri only recognises absolute paths; resolve relative
+	// paths against the current working directory first so the base URI it
+	// produces always has a "file://" scheme.
+	std::string absoluteMappingFilePath = toAbsoluteFilePath(mappingFilePath);
+	SerdNode fileUriNode = serd_node_new_file_uri(reinterpret_cast<const uint8_t *>(absoluteMappingFilePath.c_str()),
 	                                              /*hostname=*/nullptr, /*out=*/nullptr, /*escape=*/true);
 
 	if (fileUriNode.buf) {

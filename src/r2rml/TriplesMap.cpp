@@ -8,8 +8,18 @@
 
 #include <algorithm>
 #include <ostream>
+#include <stdexcept>
 
 namespace r2rml {
+
+namespace {
+void checkWriteStatus(SerdStatus status) {
+	if (status != SERD_SUCCESS) {
+		throw std::runtime_error(std::string("R2RML: failed to write RDF statement: ") +
+		                         reinterpret_cast<const char *>(serd_strerror(status)));
+	}
+}
+} // namespace
 
 static const uint8_t RDF_TYPE_URI[] = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
@@ -45,7 +55,8 @@ void TriplesMap::generateTriples(const SQLRow &row, SerdWriter &rdfWriter, const
 		SerdNode rdfType = serd_node_from_string(SERD_URI, RDF_TYPE_URI);
 		for (const std::string &classIRI : subjectMap->classIRIs) {
 			SerdNode classNode = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(classIRI.c_str()));
-			serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &rdfType, &classNode, nullptr, nullptr);
+			checkWriteStatus(
+			    serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &rdfType, &classNode, nullptr, nullptr));
 		}
 	}
 
