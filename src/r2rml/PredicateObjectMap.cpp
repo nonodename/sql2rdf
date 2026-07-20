@@ -56,8 +56,8 @@ void PredicateObjectMap::processRow(const SQLRow &row, const SerdNode &subject, 
 					if (object.type == SERD_NOTHING) {
 						continue;
 					}
-					serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &predicate, &object, nullptr,
-					                            nullptr);
+					checkWriteStatus(serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &predicate, &object,
+					                                             nullptr, nullptr));
 				}
 			} else {
 				// Regular term map.
@@ -86,7 +86,8 @@ void PredicateObjectMap::processRow(const SQLRow &row, const SerdNode &subject, 
 					}
 				}
 
-				serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &predicate, &object, datatype, lang);
+				checkWriteStatus(
+				    serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &predicate, &object, datatype, lang));
 			}
 		}
 	}
@@ -120,40 +121,44 @@ bool PredicateObjectMap::isValidInsideOut() const {
 	});
 }
 
-std::ostream &operator<<(std::ostream &os, const PredicateObjectMap &pom) {
+std::ostream &PredicateObjectMap::print(std::ostream &os) const {
 	os << "PredicateObjectMap { predicates=[";
-	for (std::size_t i = 0; i < pom.predicateMaps.size(); ++i) {
+	for (std::size_t i = 0; i < predicateMaps.size(); ++i) {
 		if (i) {
 			os << ", ";
 		}
-		if (pom.predicateMaps[i]) {
-			os << *pom.predicateMaps[i];
+		if (predicateMaps[i]) {
+			os << *predicateMaps[i];
 		}
 	}
 	os << "] objects=[";
-	for (std::size_t i = 0; i < pom.objectMaps.size(); ++i) {
+	for (std::size_t i = 0; i < objectMaps.size(); ++i) {
 		if (i) {
 			os << ", ";
 		}
-		if (pom.objectMaps[i]) {
-			os << *pom.objectMaps[i];
+		if (objectMaps[i]) {
+			os << *objectMaps[i];
 		}
 	}
 	os << "]";
-	if (!pom.graphMaps.empty()) {
+	if (!graphMaps.empty()) {
 		os << " graphMaps=[";
-		for (std::size_t i = 0; i < pom.graphMaps.size(); ++i) {
+		for (std::size_t i = 0; i < graphMaps.size(); ++i) {
 			if (i) {
 				os << ", ";
 			}
-			if (pom.graphMaps[i]) {
-				os << *pom.graphMaps[i];
+			if (graphMaps[i]) {
+				os << *graphMaps[i];
 			}
 		}
 		os << "]";
 	}
 	os << " }";
 	return os;
+}
+
+std::ostream &operator<<(std::ostream &os, const PredicateObjectMap &pom) {
+	return pom.print(os);
 }
 
 } // namespace r2rml

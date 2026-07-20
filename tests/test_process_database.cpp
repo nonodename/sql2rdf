@@ -24,6 +24,7 @@
 
 #include <map>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -370,4 +371,59 @@ TEST_CASE("processDatabase typed columns - static rr:datatype overrides inferred
 	// The static rr:datatype xsd:string must win over the inferred xsd:integer.
 	REQUIRE(out.find("\"42\"^^<http://www.w3.org/2001/XMLSchema#string>") != std::string::npos);
 	REQUIRE(out.find("\"42\"^^<http://www.w3.org/2001/XMLSchema#integer>") == std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// Regression: an unresolvable/invalid IRI must abort processDatabase() on
+// the first bad row, not repeat the same write failure once per row.
+//
+// Mapping:  invalid_template_subject.ttl
+//           rr:template "not-a-valid-iri-{ID}" has no scheme, so every
+//           generated subject is a relative reference; writing it as
+//           N-Triples with no writer base configured always fails
+//           (TriplesMap::generateTriples / PredicateObjectMap::processRow
+//           now check serd_writer_write_statement's status and throw
+//           std::runtime_error on the first failure).
+// Input:    BADSUBJECT table with 3 rows.
+//
+// Expected: processDatabase() throws std::runtime_error, and nothing from
+// rows 2 or 3 (which would have appeared had it looped through the whole
+// table repeating the error) is ever written.
+// ---------------------------------------------------------------------------
+TEST_CASE("processDatabase throws on the first row with an unresolvable IRI instead of looping over the table") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "invalid_template_subject.ttl");
+	REQUIRE(mapping.isValid());
+
+	MockSQLConnection conn;
+	conn.addResult("BADSUBJECT",
+	               {makeRow({{"ID", StringSQLValue(std::string("1"))}, {"V", StringSQLValue(std::string("x"))}}),
+	                makeRow({{"ID", StringSQLValue(std::string("2"))}, {"V", StringSQLValue(std::string("y"))}}),
+	                makeRow({{"ID", StringSQLValue(std::string("3"))}, {"V", StringSQLValue(std::string("z"))}})});
+
+	SerdChunk chunk {nullptr, 0};
+	SerdEnv *env = serd_env_new(nullptr);
+	SerdWriter *writer = serd_writer_new(SERD_NTRIPLES, (SerdStyle)0, env, nullptr, serd_chunk_sink, &chunk);
+
+	bool threw = false;
+	try {
+		mapping.processDatabase(conn, *writer);
+	} catch (const std::runtime_error &) {
+		threw = true;
+	}
+
+	serd_writer_finish(writer);
+	uint8_t *raw = serd_chunk_sink_finish(&chunk);
+	std::string out;
+	if (raw) {
+		out = std::string(reinterpret_cast<const char *>(raw));
+		serd_free(raw);
+	}
+	serd_writer_free(writer);
+	serd_env_free(env);
+
+	REQUIRE(threw);
+	// Rows 2 and 3 must never have been reached.
+	REQUIRE(out.find("\"y\"") == std::string::npos);
+	REQUIRE(out.find("\"z\"") == std::string::npos);
 }

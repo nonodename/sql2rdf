@@ -1,0 +1,19 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Regression fixture: rr:template with no scheme produces a subject IRI that
+# is a relative reference (e.g. "not-a-valid-iri-1"), which TemplateTermMap
+# returns verbatim without validating or resolving it against any base.
+# Writing such a subject as N-Triples always fails (serd's write_uri_node
+# requires an absolute scheme). Used to verify that R2RMLMapping::
+# processDatabase() aborts on the first bad row instead of repeating the
+# same write failure once per row across the whole table.
+<#TriplesMap1>
+    rr:logicalTable [ rr:tableName "BADSUBJECT" ];
+    rr:subjectMap [
+        rr:template "not-a-valid-iri-{ID}";
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:value;
+        rr:objectMap [ rr:column "V" ];
+    ].

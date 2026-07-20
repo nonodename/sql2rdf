@@ -9,6 +9,19 @@ namespace r2rml {
 class R2RMLMapping;
 
 /**
+ * Resolve `path` to an absolute filesystem path (prefixing the current
+ * working directory if it isn't already absolute), so that a subsequent
+ * serd_node_new_file_uri() call always produces a proper "file://" URI.
+ * serd only recognises a path as absolute (and therefore worth a scheme) if
+ * it already starts with a directory separator / drive letter; a relative
+ * path like "mapping.ttl" is returned percent-escaped but schemeless, which
+ * later fails every write of an IRI resolved against it. Shared by
+ * R2RMLParser::parse() and YARRRMLParser::parse(), which both build a
+ * document base URI from a caller-supplied mapping file path.
+ */
+std::string toAbsoluteFilePath(const std::string &path);
+
+/**
  * Parses an R2RML mapping file (typically Turtle) and constructs the
  * corresponding C++ object model.
  */

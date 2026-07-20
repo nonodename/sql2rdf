@@ -1,0 +1,15 @@
+# Regression fixture: the po predicate "#name" is a bare relative reference
+# (not an absolute IRI or a known CURIE), so its final IRI depends entirely
+# on correctly resolving the document's base URI. Used to verify that
+# parsing this file via a *relative* filesystem path still produces an
+# absolute "file://" base (see YARRRMLParser::parse()/computeFileBaseUri()).
+prefixes:
+  ex: http://example.com/ns#
+
+mappings:
+  employee:
+    sources:
+      - table: EMP
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - ["#name", $(ENAME)]

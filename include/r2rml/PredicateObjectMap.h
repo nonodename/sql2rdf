@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AbstractMap.h"
+
 #include <memory>
 #include <ostream>
 #include <vector>
@@ -18,10 +20,10 @@ class R2RMLMapping;
  * Encapsulates mapping rules that generate predicate-object pairs (and
  * optionally graph names) for each input row.
  */
-class PredicateObjectMap {
+class PredicateObjectMap : public AbstractMap {
 public:
 	PredicateObjectMap();
-	~PredicateObjectMap(); // NOLINT(performance-trivially-destructible)
+	~PredicateObjectMap() override; // NOLINT(performance-trivially-destructible)
 
 	/**
 	 * Process a single row given a subject node and emit one or more triples
@@ -38,6 +40,8 @@ public:
 	 * not permitted; all other maps must satisfy their own isValid() checks.
 	 */
 	bool isValidInsideOut() const;
+
+	std::ostream &print(std::ostream &os) const override;
 
 	friend std::ostream &operator<<(std::ostream &os, const PredicateObjectMap &pom);
 

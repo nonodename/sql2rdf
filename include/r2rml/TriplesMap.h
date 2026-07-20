@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AbstractMap.h"
+
 #include <memory>
 #include <ostream>
 #include <string>
@@ -20,10 +22,10 @@ class R2RMLMapping;
  * A TriplesMap describes how each row of a logical table is converted into a
  * set of RDF triples sharing a common subject.
  */
-class TriplesMap {
+class TriplesMap : public AbstractMap {
 public:
 	TriplesMap();
-	~TriplesMap(); // NOLINT(performance-trivially-destructible)
+	~TriplesMap() override; // NOLINT(performance-trivially-destructible)
 
 	/**
 	 * Process the supplied row, emitting zero or more triples via the
@@ -41,6 +43,8 @@ public:
 	 * predicate-object maps to also be valid inside-out.
 	 */
 	bool isValidInsideOut() const;
+
+	std::ostream &print(std::ostream &os) const override;
 
 	friend std::ostream &operator<<(std::ostream &os, const TriplesMap &tm);
 

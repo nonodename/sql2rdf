@@ -920,7 +920,13 @@ std::string readFileToString(const std::string &path) {
 }
 
 std::string computeFileBaseUri(const std::string &path) {
-	SerdNode node = serd_node_new_file_uri(reinterpret_cast<const uint8_t *>(path.c_str()), /*hostname=*/nullptr,
+	// serd_node_new_file_uri only recognises absolute paths; resolve relative
+	// paths (the common case for a caller-supplied mapping file) against the
+	// current working directory first so the base URI always has a
+	// "file://" scheme instead of silently being schemeless.
+	std::string absolutePath = r2rml::toAbsoluteFilePath(path);
+	SerdNode node = serd_node_new_file_uri(reinterpret_cast<const uint8_t *>(absolutePath.c_str()),
+	                                       /*hostname=*/nullptr,
 	                                       /*out=*/nullptr, /*escape=*/true);
 	std::string uri;
 	if (node.buf) {

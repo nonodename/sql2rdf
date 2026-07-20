@@ -45,7 +45,8 @@ void TriplesMap::generateTriples(const SQLRow &row, SerdWriter &rdfWriter, const
 		SerdNode rdfType = serd_node_from_string(SERD_URI, RDF_TYPE_URI);
 		for (const std::string &classIRI : subjectMap->classIRIs) {
 			SerdNode classNode = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(classIRI.c_str()));
-			serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &rdfType, &classNode, nullptr, nullptr);
+			checkWriteStatus(
+			    serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &rdfType, &classNode, nullptr, nullptr));
 		}
 	}
 
@@ -80,26 +81,26 @@ bool TriplesMap::isValidInsideOut() const {
 	                   [](const std::unique_ptr<PredicateObjectMap> &pom) { return pom && pom->isValidInsideOut(); });
 }
 
-std::ostream &operator<<(std::ostream &os, const TriplesMap &tm) {
-	os << "TriplesMap <" << tm.id << "> {\n";
+std::ostream &TriplesMap::print(std::ostream &os) const {
+	os << "TriplesMap <" << id << "> {\n";
 	os << "  logicalTable: ";
-	if (tm.logicalTable) {
-		os << *tm.logicalTable;
+	if (logicalTable) {
+		os << *logicalTable;
 	} else {
 		os << "(none)";
 	}
 	os << "\n";
 	os << "  subjectMap: ";
-	if (tm.subjectMap) {
-		os << *tm.subjectMap;
+	if (subjectMap) {
+		os << *subjectMap;
 	} else {
 		os << "(none)";
 	}
 	os << "\n";
-	for (std::size_t i = 0; i < tm.predicateObjectMaps.size(); ++i) {
+	for (std::size_t i = 0; i < predicateObjectMaps.size(); ++i) {
 		os << "  predicateObjectMap[" << i << "]: ";
-		if (tm.predicateObjectMaps[i]) {
-			os << *tm.predicateObjectMaps[i];
+		if (predicateObjectMaps[i]) {
+			os << *predicateObjectMaps[i];
 		} else {
 			os << "(none)";
 		}
@@ -107,6 +108,10 @@ std::ostream &operator<<(std::ostream &os, const TriplesMap &tm) {
 	}
 	os << "}";
 	return os;
+}
+
+std::ostream &operator<<(std::ostream &os, const TriplesMap &tm) {
+	return tm.print(os);
 }
 
 } // namespace r2rml
