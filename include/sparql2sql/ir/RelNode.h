@@ -42,6 +42,7 @@ struct ColumnInfo {
 	Provenance prov = Provenance::Computed;
 	std::string sourceAlias;     ///< FROM-source alias owning the column (PureColumn/TemplateExpr).
 	std::string columnName;      ///< raw column name (PureColumn) - for native-key rewrite + catalog lookup.
+	std::string nativeColumnRef; ///< alias-qualified, dialect-quoted uncast column ref (PureColumn), e.g. t1."ID".
 	std::string tableIdentity;   ///< logical-table identity of the source (PureColumn/TemplateExpr).
 	std::string templateString;  ///< original rr:template (TemplateExpr) - for same-template join detection.
 
@@ -53,10 +54,9 @@ enum class RelKind {
 	Join,        ///< binary Inner/LeftOuter join of two arbitrary relations.
 	AntiJoin,    ///< MINUS (NOT EXISTS).
 	UnionByName, ///< schema-extending union of >=1 relations.
-	Values,      ///< inline VALUES data.
-	Project,     ///< projection/compute over a (composite) child (final SELECT, BIND, subselect).
-	Aggregate,   ///< GROUP BY / aggregate.
-	Limit,       ///< LIMIT/OFFSET.
+	Filter,      ///< a FILTER over a (composite) child: deferred predicate expression.
+	Bind,        ///< a BIND: child columns plus one computed column.
+	Raw,         ///< a pre-rendered SELECT string (VALUES, subselect) with a declared schema.
 	SingleRow,   ///< the fold's identity relation (SELECT 1).
 	Empty        ///< a provably empty relation (WHERE FALSE) with a declared schema.
 };
@@ -159,46 +159,35 @@ public:
 	std::vector<RelNodePtr> arms;
 };
 
-class ValuesNode : public RelNode {
+/// A FILTER: passes through the child's rows that satisfy `predicate`. The
+/// predicate is a borrowed AST expression rendered late against the child's
+/// schema (deferred-expression design), so filter pushdown is re-parenting.
+class FilterNode : public RelNode {
 public:
-	ValuesNode() : RelNode(RelKind::Values) {
-	}
-	/// Each arm is a finished "SELECT <lit> AS v_x, ..." row; combined by the
-	/// renderer (single row => used directly; empty => WHERE FALSE relation).
-	std::vector<std::string> rowSqls;
-};
-
-/// One output column of a Project: either a straight pass-through of a child
-/// variable, or a computed expression (BIND / SELECT `(expr AS ?v)` / group
-/// alias). Computed columns hold a borrowed AST expression rendered late
-/// (deferred-expression design), so filter/bind pushdown is re-parenting.
-struct ProjectItem {
-	std::string outVar;                              ///< output SPARQL variable name.
-	bool passthrough = true;                         ///< true => copy child column `sourceVar`.
-	std::string sourceVar;                           ///< child var to copy (passthrough).
-	const sparql::ast::Expression *expr = nullptr;   ///< computed expression (!passthrough).
-	std::string groupAliasName;                      ///< non-empty => a bare GROUP BY alias reference.
-	bool nonNull = true;
-};
-
-class ProjectNode : public RelNode {
-public:
-	ProjectNode() : RelNode(RelKind::Project) {
+	FilterNode() : RelNode(RelKind::Filter) {
 	}
 	RelNodePtr child;
-	std::vector<ProjectItem> items;
-	bool distinct = false;
+	const sparql::ast::Expression *predicate = nullptr;
 };
 
-class LimitNode : public RelNode {
+/// A BIND: the child's columns plus one computed column `outVar`.
+class BindNode : public RelNode {
 public:
-	LimitNode() : RelNode(RelKind::Limit) {
+	BindNode() : RelNode(RelKind::Bind) {
 	}
 	RelNodePtr child;
-	bool hasLimit = false;
-	long long limit = 0;
-	bool hasOffset = false;
-	long long offset = 0;
+	std::string outVar;
+	const sparql::ast::Expression *expr = nullptr;
+};
+
+/// A leaf holding a pre-rendered, self-contained "SELECT ..." string (used for
+/// inline VALUES and for `{ SELECT ... }` subqueries, whose SQL is produced by
+/// the query-level path). Its schema is declared explicitly.
+class RawRelation : public RelNode {
+public:
+	RawRelation() : RelNode(RelKind::Raw) {
+	}
+	std::string sql;
 };
 
 class SingleRowNode : public RelNode {

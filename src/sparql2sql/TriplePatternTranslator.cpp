@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <set>
 #include <stdexcept>
+#include <utility>
 
 #include "r2rml/BaseTableOrView.h"
+#include "r2rml/ColumnTermMap.h"
+#include "r2rml/ConstantTermMap.h"
 #include "r2rml/JoinCondition.h"
 #include "r2rml/LogicalTable.h"
 #include "r2rml/PredicateObjectMap.h"
@@ -12,12 +15,14 @@
 #include "r2rml/R2RMLView.h"
 #include "r2rml/ReferencingObjectMap.h"
 #include "r2rml/SubjectMap.h"
+#include "r2rml/TemplateTermMap.h"
 #include "r2rml/TermMap.h"
 #include "r2rml/TriplesMap.h"
 #include "sparql-parser/ast/Term.h"
 #include "sparql2sql/SqlDialect.h"
 #include "sparql2sql/TermMapSql.h"
 #include "sparql2sql/TranslationError.h"
+#include "sparql2sql/ir/RelNode.h"
 
 namespace sparql2sql {
 
@@ -26,10 +31,8 @@ namespace {
 const char *const kRdfTypeIri = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
 // A triple-pattern position (subject/predicate/object): either a variable
-// (or blank node, which is treated as an internally-scoped variable - it
-// can never appear in a SELECT/GROUP BY/ORDER BY since those only accept
-// ast::Var, but it still needs to participate in join unification the same
-// way an ordinary variable does) or a bound constant term.
+// (or blank node, treated as an internally-scoped variable) or a bound
+// constant term.
 struct PositionSpec {
 	bool isVar = false;
 	std::string varName;                          // valid iff isVar
@@ -85,21 +88,57 @@ PredicateSpec predicateSpecFor(const sparql::ast::PropertyPathExpr &path) {
 }
 
 // One of the three positions' SQL source: either a fixed constant string, or
-// a real R2RML TermMap evaluated against a given source-table alias.
+// a real R2RML TermMap evaluated against a given source-table alias (with the
+// logical-table identity of that alias, for provenance).
 struct TermSource {
 	bool isConstant = false;
 	std::string constantValue;               // valid iff isConstant
 	const r2rml::TermMap *termMap = nullptr; // valid iff !isConstant
 	std::string alias;                       // valid iff !isConstant
+	std::string tableIdentity;               // valid iff !isConstant
 };
 
-SqlExpr resolveSource(const TermSource &src, const SqlDialect &dialect) {
-	if (src.isConstant) {
-		SqlExpr e;
-		e.expr = dialect.stringLiteral(src.constantValue);
-		return e;
+// A resolved position: its SQL scalar expression plus the structured
+// provenance the optimizer passes need.
+struct Resolved {
+	std::string expr;
+	std::vector<std::string> requiredNonNull;
+	Provenance prov = Provenance::Computed;
+	std::string columnName;
+	std::string templateString;
+	std::string sourceAlias;
+	std::string tableIdentity;
+};
+
+Provenance provenanceOf(const r2rml::TermMap &termMap, std::string &columnName, std::string &templateString) {
+	if (const auto *col = dynamic_cast<const r2rml::ColumnTermMap *>(&termMap)) {
+		columnName = col->columnName;
+		return Provenance::PureColumn;
 	}
-	return termMapToSqlExpr(*src.termMap, src.alias, dialect);
+	if (const auto *tmpl = dynamic_cast<const r2rml::TemplateTermMap *>(&termMap)) {
+		templateString = tmpl->templateString;
+		return Provenance::TemplateExpr;
+	}
+	if (dynamic_cast<const r2rml::ConstantTermMap *>(&termMap)) {
+		return Provenance::ConstantExpr;
+	}
+	return Provenance::Computed;
+}
+
+Resolved resolveSource(const TermSource &src, const SqlDialect &dialect) {
+	Resolved r;
+	if (src.isConstant) {
+		r.expr = dialect.stringLiteral(src.constantValue);
+		r.prov = Provenance::ConstantExpr;
+		return r;
+	}
+	SqlExpr e = termMapToSqlExpr(*src.termMap, src.alias, dialect);
+	r.expr = e.expr;
+	r.requiredNonNull = e.requiredNonNullColumns;
+	r.prov = provenanceOf(*src.termMap, r.columnName, r.templateString);
+	r.sourceAlias = src.alias;
+	r.tableIdentity = src.tableIdentity;
+	return r;
 }
 
 InversionResult resolveInversion(const TermSource &src, const sparql::ast::Term &boundTerm, const SqlDialect &dialect) {
@@ -133,6 +172,19 @@ std::string logicalTableFromSql(const r2rml::LogicalTable &lt, const std::string
 	throw std::logic_error("logicalTableFromSql: unrecognized LogicalTable subtype");
 }
 
+// A stable identity for a logical table, used by self-join elimination to
+// recognize two scans of the same source. Base tables key on their name;
+// views key on their SQL text (never merged in practice, but distinct).
+std::string logicalTableIdentity(const r2rml::LogicalTable &lt) {
+	if (const auto *base = dynamic_cast<const r2rml::BaseTableOrView *>(&lt)) {
+		return base->tableName;
+	}
+	if (const auto *view = dynamic_cast<const r2rml::R2RMLView *>(&lt)) {
+		return "view:" + view->sqlQuery;
+	}
+	return std::string();
+}
+
 void addUnique(std::vector<std::string> &out, const std::vector<std::string> &more) {
 	for (const auto &v : more) {
 		if (std::find(out.begin(), out.end(), v) == out.end()) {
@@ -141,19 +193,20 @@ void addUnique(std::vector<std::string> &out, const std::vector<std::string> &mo
 	}
 }
 
-// Attempt to build one candidate branch's SQL. Appends to `branches` on
-// success; silently does nothing if the candidate is statically prunable
+// Attempt to build one candidate branch's SpjRelation. Appends to `branches`
+// on success; silently does nothing if the candidate is statically prunable
 // (a bound position can never match this candidate's source).
-void tryAddCandidate(std::vector<std::string> &branches, const std::string &fromSql, const TermSource &subjectSrc,
-                     const TermSource &predicateSrc, const TermSource &objectSrc, const PositionSpec &subjectSpec,
-                     const PredicateSpec &predicateSpec, const PositionSpec &objectSpec, TranslationContext &ctx) {
+void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromSql, const std::string &fromAlias,
+                     const std::string &fromIdentity, const TermSource &subjectSrc, const TermSource &predicateSrc,
+                     const TermSource &objectSrc, const PositionSpec &subjectSpec, const PredicateSpec &predicateSpec,
+                     const PositionSpec &objectSpec, TranslationContext &ctx) {
 	const SqlDialect &dialect = ctx.dialect();
 
 	std::vector<std::string> whereConditions;
 	std::vector<std::string> requiredNonNull;
 
-	SqlExpr subjectExpr = resolveSource(subjectSrc, dialect);
-	addUnique(requiredNonNull, subjectExpr.requiredNonNullColumns);
+	Resolved subjectR = resolveSource(subjectSrc, dialect);
+	addUnique(requiredNonNull, subjectR.requiredNonNull);
 	if (!subjectSpec.isVar) {
 		InversionResult inv = resolveInversion(subjectSrc, *subjectSpec.boundTerm, dialect);
 		if (!inv.possible) {
@@ -162,8 +215,8 @@ void tryAddCandidate(std::vector<std::string> &branches, const std::string &from
 		addUnique(whereConditions, inv.whereConditions);
 	}
 
-	SqlExpr predicateExpr = resolveSource(predicateSrc, dialect);
-	addUnique(requiredNonNull, predicateExpr.requiredNonNullColumns);
+	Resolved predicateR = resolveSource(predicateSrc, dialect);
+	addUnique(requiredNonNull, predicateR.requiredNonNull);
 	if (!predicateSpec.isVar) {
 		sparql::ast::Iri predicateBoundTerm(predicateSpec.constantIri, predicateSpec.constantIri);
 		InversionResult inv = resolveInversion(predicateSrc, predicateBoundTerm, dialect);
@@ -173,8 +226,8 @@ void tryAddCandidate(std::vector<std::string> &branches, const std::string &from
 		addUnique(whereConditions, inv.whereConditions);
 	}
 
-	SqlExpr objectExpr = resolveSource(objectSrc, dialect);
-	addUnique(requiredNonNull, objectExpr.requiredNonNullColumns);
+	Resolved objectR = resolveSource(objectSrc, dialect);
+	addUnique(requiredNonNull, objectR.requiredNonNull);
 	if (!objectSpec.isVar) {
 		InversionResult inv = resolveInversion(objectSrc, *objectSpec.boundTerm, dialect);
 		if (!inv.possible) {
@@ -188,15 +241,15 @@ void tryAddCandidate(std::vector<std::string> &branches, const std::string &from
 	struct PositionEntry {
 		bool isVar;
 		std::string varName;
-		std::string expr;
+		const Resolved *resolved;
 	};
 	PositionEntry positions[3] = {
-	    {subjectSpec.isVar, subjectSpec.varName, subjectExpr.expr},
-	    {predicateSpec.isVar, predicateSpec.varName, predicateExpr.expr},
-	    {objectSpec.isVar, objectSpec.varName, objectExpr.expr},
+	    {subjectSpec.isVar, subjectSpec.varName, &subjectR},
+	    {predicateSpec.isVar, predicateSpec.varName, &predicateR},
+	    {objectSpec.isVar, objectSpec.varName, &objectR},
 	};
 
-	std::vector<std::pair<std::string, std::string>> projections; // (var, expr), first occurrence wins
+	std::vector<ColumnInfo> projections; // first occurrence of each var wins
 	for (int i = 0; i < 3; ++i) {
 		if (!positions[i].isVar) {
 			continue;
@@ -204,13 +257,26 @@ void tryAddCandidate(std::vector<std::string> &branches, const std::string &from
 		bool seen = false;
 		for (int j = 0; j < i; ++j) {
 			if (positions[j].isVar && positions[j].varName == positions[i].varName) {
-				whereConditions.push_back(positions[j].expr + " = " + positions[i].expr);
+				whereConditions.push_back(positions[j].resolved->expr + " = " + positions[i].resolved->expr);
 				seen = true;
 				break;
 			}
 		}
 		if (!seen) {
-			projections.emplace_back(positions[i].varName, positions[i].expr);
+			const Resolved &r = *positions[i].resolved;
+			ColumnInfo col;
+			col.var = positions[i].varName;
+			col.renderedExpr = r.expr;
+			col.prov = r.prov;
+			col.sourceAlias = r.sourceAlias;
+			col.columnName = r.columnName;
+			col.tableIdentity = r.tableIdentity;
+			col.templateString = r.templateString;
+			if (r.prov == Provenance::PureColumn && !r.columnName.empty()) {
+				col.nativeColumnRef = r.sourceAlias + "." + dialect.quoteIdentifier(r.columnName);
+			}
+			col.nonNull = true;
+			projections.push_back(col);
 		}
 	}
 
@@ -218,49 +284,45 @@ void tryAddCandidate(std::vector<std::string> &branches, const std::string &from
 		whereConditions.push_back(col + " IS NOT NULL");
 	}
 
-	std::string sql = "SELECT DISTINCT ";
-	if (projections.empty()) {
-		sql += "1 AS " + dialect.quoteIdentifier("_dummy");
-	} else {
-		for (std::size_t i = 0; i < projections.size(); ++i) {
-			if (i > 0) {
-				sql += ", ";
-			}
-			sql += projections[i].second + " AS " + mangleVar(projections[i].first, dialect);
-		}
-	}
-	sql += " FROM " + fromSql;
-	if (!whereConditions.empty()) {
-		sql += " WHERE ";
-		for (std::size_t i = 0; i < whereConditions.size(); ++i) {
-			if (i > 0) {
-				sql += " AND ";
-			}
-			sql += "(" + whereConditions[i] + ")";
-		}
-	}
-	branches.push_back(sql);
+	RelNodePtr node(new SpjRelation());
+	SpjRelation &spj = static_cast<SpjRelation &>(*node);
+	SpjSource source;
+	source.sql = fromSql;
+	source.alias = fromAlias;
+	source.tableIdentity = fromIdentity;
+	spj.sources.push_back(source);
+	spj.whereConds = whereConditions;
+	spj.distinct = true;
+	spj.schema() = projections;
+	branches.push_back(std::move(node));
 }
 
 } // namespace
 
-TranslatedPattern translateTriplePattern(const sparql::ast::TriplePattern &tp, TranslationContext &ctx) {
+RelNodePtr translateTriplePattern(const sparql::ast::TriplePattern &tp, TranslationContext &ctx) {
 	PositionSpec subjectSpec = specFor(*tp.subject);
 	PredicateSpec predicateSpec = predicateSpecFor(*tp.predicate);
 	PositionSpec objectSpec = specFor(*tp.object);
 
-	std::set<std::string> vars;
+	// The pattern's variables, in subject/predicate/object first-occurrence
+	// order (matches the projection order tryAddCandidate produces).
+	std::vector<std::string> varOrder;
+	auto addVar = [&](const std::string &v) {
+		if (std::find(varOrder.begin(), varOrder.end(), v) == varOrder.end()) {
+			varOrder.push_back(v);
+		}
+	};
 	if (subjectSpec.isVar) {
-		vars.insert(subjectSpec.varName);
+		addVar(subjectSpec.varName);
 	}
 	if (predicateSpec.isVar) {
-		vars.insert(predicateSpec.varName);
+		addVar(predicateSpec.varName);
 	}
 	if (objectSpec.isVar) {
-		vars.insert(objectSpec.varName);
+		addVar(objectSpec.varName);
 	}
 
-	std::vector<std::string> branches;
+	std::vector<RelNodePtr> branches;
 
 	for (const auto &tmPtr : ctx.mapping().triplesMaps) {
 		const r2rml::TriplesMap &tm = *tmPtr;
@@ -272,6 +334,7 @@ TranslatedPattern translateTriplePattern(const sparql::ast::TriplePattern &tp, T
 			continue;
 		}
 
+		const std::string childIdentity = logicalTableIdentity(*tm.logicalTable);
 		const bool predicateCouldBeRdfType = predicateSpec.isVar || predicateSpec.constantIri == kRdfTypeIri;
 
 		// --- rr:class candidates: synthetic (subject, rdf:type, classIRI) ---
@@ -281,6 +344,7 @@ TranslatedPattern translateTriplePattern(const sparql::ast::TriplePattern &tp, T
 			TermSource subjectSrc;
 			subjectSrc.termMap = subjectValueMap;
 			subjectSrc.alias = alias;
+			subjectSrc.tableIdentity = childIdentity;
 			for (const std::string &classIri : tm.subjectMap->classIRIs) {
 				TermSource predicateSrc;
 				predicateSrc.isConstant = true;
@@ -288,8 +352,8 @@ TranslatedPattern translateTriplePattern(const sparql::ast::TriplePattern &tp, T
 				TermSource objectSrc;
 				objectSrc.isConstant = true;
 				objectSrc.constantValue = classIri;
-				tryAddCandidate(branches, fromSql, subjectSrc, predicateSrc, objectSrc, subjectSpec, predicateSpec,
-				                objectSpec, ctx);
+				tryAddCandidate(branches, fromSql, alias, childIdentity, subjectSrc, predicateSrc, objectSrc,
+				                subjectSpec, predicateSpec, objectSpec, ctx);
 			}
 		}
 
@@ -336,15 +400,18 @@ TranslatedPattern translateTriplePattern(const sparql::ast::TriplePattern &tp, T
 						TermSource subjectSrc;
 						subjectSrc.termMap = subjectValueMap;
 						subjectSrc.alias = childAlias;
+						subjectSrc.tableIdentity = childIdentity;
 						TermSource predicateSrc;
 						predicateSrc.termMap = predMapPtr.get();
 						predicateSrc.alias = childAlias;
+						predicateSrc.tableIdentity = childIdentity;
 						TermSource objectSrc;
 						objectSrc.termMap = parentSubjectValueMap;
 						objectSrc.alias = parentAlias;
+						objectSrc.tableIdentity = logicalTableIdentity(*parentTm.logicalTable);
 
-						tryAddCandidate(branches, fromSql, subjectSrc, predicateSrc, objectSrc, subjectSpec,
-						                predicateSpec, objectSpec, ctx);
+						tryAddCandidate(branches, fromSql, childAlias, childIdentity, subjectSrc, predicateSrc,
+						                objectSrc, subjectSpec, predicateSpec, objectSpec, ctx);
 						continue;
 					}
 
@@ -353,44 +420,48 @@ TranslatedPattern translateTriplePattern(const sparql::ast::TriplePattern &tp, T
 					TermSource subjectSrc;
 					subjectSrc.termMap = subjectValueMap;
 					subjectSrc.alias = alias;
+					subjectSrc.tableIdentity = childIdentity;
 					TermSource predicateSrc;
 					predicateSrc.termMap = predMapPtr.get();
 					predicateSrc.alias = alias;
+					predicateSrc.tableIdentity = childIdentity;
 					TermSource objectSrc;
 					objectSrc.termMap = objMapPtr.get();
 					objectSrc.alias = alias;
+					objectSrc.tableIdentity = childIdentity;
 
-					tryAddCandidate(branches, fromSql, subjectSrc, predicateSrc, objectSrc, subjectSpec, predicateSpec,
-					                objectSpec, ctx);
+					tryAddCandidate(branches, fromSql, alias, childIdentity, subjectSrc, predicateSrc, objectSrc,
+					                subjectSpec, predicateSpec, objectSpec, ctx);
 				}
 			}
 		}
 	}
 
-	TranslatedPattern result;
 	if (branches.empty()) {
-		if (vars.empty()) {
-			result.sql = "SELECT 1 AS " + ctx.dialect().quoteIdentifier("_dummy") + " WHERE FALSE";
-		} else {
-			std::string sql = "SELECT ";
-			bool first = true;
-			for (const auto &v : vars) {
-				if (!first) {
-					sql += ", ";
-				}
-				first = false;
-				sql += "CAST(NULL AS VARCHAR) AS " + mangleVar(v, ctx.dialect());
-			}
-			sql += " WHERE FALSE";
-			result.sql = sql;
+		RelNodePtr node(new EmptyNode());
+		for (const auto &v : varOrder) {
+			ColumnInfo col;
+			col.var = v;
+			col.nonNull = true;
+			node->schema().push_back(col);
 		}
-	} else if (branches.size() == 1) {
-		result.sql = branches.front();
-	} else {
-		result.sql = ctx.dialect().combineByName(/*all=*/false, branches);
+		return node;
 	}
-	result.boundVars = vars;
-	return result;
+	if (branches.size() == 1) {
+		return std::move(branches.front());
+	}
+
+	RelNodePtr node(new UnionByNameNode());
+	UnionByNameNode &un = static_cast<UnionByNameNode &>(*node);
+	un.all = false; // candidate union dedups (matches combineByName(all=false)).
+	un.arms = std::move(branches);
+	for (const auto &v : varOrder) {
+		ColumnInfo col;
+		col.var = v;
+		col.nonNull = true;
+		un.schema().push_back(col);
+	}
+	return node;
 }
 
 } // namespace sparql2sql

@@ -9,6 +9,9 @@
 #include "sparql2sql/PatternFolder.h"
 #include "sparql2sql/SqlDialect.h"
 #include "sparql2sql/TranslationError.h"
+#include "sparql2sql/ir/Optimizer.h"
+#include "sparql2sql/ir/RelNode.h"
+#include "sparql2sql/ir/SqlRenderer.h"
 
 namespace sparql2sql {
 
@@ -180,10 +183,16 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 
 	const SqlDialect &dialect = ctx.dialect();
 
-	TranslatedPattern source = query.where ? fold(*query.where, ctx) : identityRelation(ctx);
+	RelNodePtr rootNode = query.where ? fold(*query.where, ctx) : identityRelation(ctx);
 	if (query.valuesClause) {
-		source = innerJoin(source, translateInlineData(*query.valuesClause, ctx), ctx);
+		rootNode = innerJoin(std::move(rootNode), translateInlineData(*query.valuesClause, ctx), ctx);
 	}
+	OptimizerOptions opts;
+	opts.topLevelDistinct = (query.distinct || query.reduced) && query.solutionModifier.groupBy.empty() &&
+	                        !queryHasAggregate(query);
+	opts.catalog = ctx.catalog();
+	rootNode = optimize(std::move(rootNode), opts);
+	TranslatedPattern source = renderRelation(*rootNode, ctx);
 
 	std::string alias = ctx.nextAlias();
 
@@ -273,10 +282,15 @@ std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMa
 	TranslationContext ctx(mapping, dialect);
 
 	if (query.form == QueryForm::Ask) {
-		TranslatedPattern source = query.where ? fold(*query.where, ctx) : identityRelation(ctx);
+		RelNodePtr rootNode = query.where ? fold(*query.where, ctx) : identityRelation(ctx);
 		if (query.valuesClause) {
-			source = innerJoin(source, translateInlineData(*query.valuesClause, ctx), ctx);
+			rootNode = innerJoin(std::move(rootNode), translateInlineData(*query.valuesClause, ctx), ctx);
 		}
+		OptimizerOptions askOpts;
+		askOpts.topLevelDistinct = true; // ASK is an existence check: per-pattern DISTINCT is redundant.
+		askOpts.catalog = ctx.catalog();
+		rootNode = optimize(std::move(rootNode), askOpts);
+		TranslatedPattern source = renderRelation(*rootNode, ctx);
 
 		std::string alias = ctx.nextAlias();
 		bool grouping = !query.solutionModifier.groupBy.empty() || queryHasAggregate(query);

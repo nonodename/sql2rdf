@@ -8,6 +8,8 @@
 #include "sparql2sql/PatternFolder.h"
 #include "sparql2sql/SqlDialect.h"
 #include "sparql2sql/TranslationError.h"
+#include "sparql2sql/ir/RelNode.h"
+#include "sparql2sql/ir/SqlRenderer.h"
 
 namespace sparql2sql {
 
@@ -124,7 +126,8 @@ std::set<std::string> setIntersect(const std::set<std::string> &a, const std::se
 
 std::string translateExists(const ExistsExpr &ex, const TranslatedPattern &scope, const std::string &alias,
                             TranslationContext &ctx) {
-	TranslatedPattern nested = fold(*ex.pattern, ctx);
+	RelNodePtr nestedNode = fold(*ex.pattern, ctx);
+	TranslatedPattern nested = renderRelation(*nestedNode, ctx);
 	std::set<std::string> shared = setIntersect(scope.allVars(), nested.allVars());
 	std::string innerAlias = ctx.nextAlias();
 	std::string innerSql;

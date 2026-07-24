@@ -1,13 +1,14 @@
 /**
  * Tests for the SPARQL algebra fold over GroupGraphPattern::elements: the
- * combinators (innerJoin/leftOuterJoin/antiJoin/unionAll) tested directly
- * with hand-built relations, plus integration-level tests driving fold()
- * through parsed .rq/.ttl fixtures for AND/OPTIONAL/UNION/MINUS/VALUES/
- * SubSelect/GRAPH.
+ * combinators (innerJoin/leftOuterJoin/antiJoin/unionAll) tested directly with
+ * hand-built IR relations (rendered to SQL for inspection), plus
+ * integration-level tests driving fold() through parsed .rq/.ttl fixtures for
+ * AND/OPTIONAL/UNION/MINUS/VALUES/SubSelect/GRAPH.
  */
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <initializer_list>
 #include <string>
 
 #ifndef SOURCE_SPARQL2SQL_DIR
@@ -24,16 +25,22 @@
 #include "sparql2sql/PatternFolder.h"
 #include "sparql2sql/TranslationError.h"
 #include "sparql2sql/Translator.h"
+#include "sparql2sql/ir/RelNode.h"
+#include "sparql2sql/ir/SqlRenderer.h"
 
 using r2rml::R2RMLMapping;
 using r2rml::R2RMLParser;
 using sparql::Parser;
 using sparql2sql::antiJoin;
+using sparql2sql::ColumnInfo;
 using sparql2sql::DuckDbDialect;
 using sparql2sql::fold;
 using sparql2sql::identityRelation;
 using sparql2sql::innerJoin;
 using sparql2sql::leftOuterJoin;
+using sparql2sql::RawRelation;
+using sparql2sql::RelNodePtr;
+using sparql2sql::renderRelation;
 using sparql2sql::TranslatedPattern;
 using sparql2sql::translateQuery;
 using sparql2sql::TranslationContext;
@@ -42,17 +49,30 @@ using sparql2sql::unionAll;
 
 namespace {
 
-TranslatedPattern makePattern(const std::string &sql, std::initializer_list<std::string> bound,
-                              std::initializer_list<std::string> optional = {}) {
-	TranslatedPattern p;
-	p.sql = sql;
+// A hand-built leaf relation carrying a placeholder SQL string and a schema
+// (bound + optional variables). Enough to exercise the combinators' bound/
+// optional bookkeeping and rendered join shape without a mapping.
+RelNodePtr makeRel(const std::string &sql, std::initializer_list<std::string> bound,
+                   std::initializer_list<std::string> optional = {}) {
+	RelNodePtr node(new RawRelation());
+	static_cast<RawRelation &>(*node).sql = sql;
 	for (const auto &v : bound) {
-		p.boundVars.insert(v);
+		ColumnInfo c;
+		c.var = v;
+		c.nonNull = true;
+		node->schema().push_back(c);
 	}
 	for (const auto &v : optional) {
-		p.optionalVars.insert(v);
+		ColumnInfo c;
+		c.var = v;
+		c.nonNull = false;
+		node->schema().push_back(c);
 	}
-	return p;
+	return node;
+}
+
+std::string renderedSql(const RelNodePtr &node, TranslationContext &ctx) {
+	return renderRelation(*node, ctx).sql;
 }
 
 } // namespace
@@ -64,11 +84,8 @@ TEST_CASE("innerJoin: identity relation is elided on either side") {
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
 
-	TranslatedPattern p = makePattern("SELECT 1", {"x"});
-	TranslatedPattern id = identityRelation(ctx);
-
-	CHECK(innerJoin(id, p, ctx).sql == p.sql);
-	CHECK(innerJoin(p, id, ctx).sql == p.sql);
+	CHECK(renderedSql(innerJoin(identityRelation(ctx), makeRel("SELECT 1", {"x"}), ctx), ctx) == "SELECT 1");
+	CHECK(renderedSql(innerJoin(makeRel("SELECT 1", {"x"}), identityRelation(ctx), ctx), ctx) == "SELECT 1");
 }
 
 TEST_CASE("innerJoin: a shared variable bound on either side stays bound in the result") {
@@ -76,10 +93,8 @@ TEST_CASE("innerJoin: a shared variable bound on either side stays bound in the 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
 
-	TranslatedPattern left = makePattern("SELECT ...", {"x", "y"});
-	TranslatedPattern right = makePattern("SELECT ...", {}, {"x", "z"}); // x optional on the right
-
-	TranslatedPattern result = innerJoin(left, right, ctx);
+	RelNodePtr node = innerJoin(makeRel("SELECT ...", {"x", "y"}), makeRel("SELECT ...", {}, {"x", "z"}), ctx);
+	TranslatedPattern result = renderRelation(*node, ctx);
 	CHECK(result.boundVars.count("x") == 1); // left guarantees it
 	CHECK(result.boundVars.count("y") == 1);
 	CHECK(result.optionalVars.count("z") == 1);
@@ -94,11 +109,8 @@ TEST_CASE("innerJoin: no COALESCE/null-safety emitted when neither side is optio
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
 
-	TranslatedPattern left = makePattern("SELECT ...", {"x"});
-	TranslatedPattern right = makePattern("SELECT ...", {"x"});
-
-	TranslatedPattern result = innerJoin(left, right, ctx);
-	CHECK(result.sql.find("COALESCE") == std::string::npos);
+	std::string sql = renderedSql(innerJoin(makeRel("SELECT ...", {"x"}), makeRel("SELECT ...", {"x"}), ctx), ctx);
+	CHECK(sql.find("COALESCE") == std::string::npos);
 }
 
 TEST_CASE("leftOuterJoin: only the left side's own guarantee keeps a shared var definitely bound") {
@@ -106,15 +118,14 @@ TEST_CASE("leftOuterJoin: only the left side's own guarantee keeps a shared var 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
 
-	TranslatedPattern left = makePattern("SELECT ...", {"x"});
-	TranslatedPattern right = makePattern("SELECT ...", {"x", "d"}); // x AND d unconditionally bound on the right
-
-	TranslatedPattern result = leftOuterJoin(left, right, ctx);
+	// x AND d unconditionally bound on the right.
+	RelNodePtr node = leftOuterJoin(makeRel("SELECT ...", {"x"}), makeRel("SELECT ...", {"x", "d"}), ctx);
+	TranslatedPattern result = renderRelation(*node, ctx);
 	CHECK(result.sql.find("LEFT OUTER JOIN") != std::string::npos);
 	CHECK(result.boundVars.count("x") == 1); // left's own guarantee
-	// d is unique to the right side; an unmatched left row would NULL it,
-	// so it must be optional in the result regardless of the right side's
-	// own (pre-join) bound-ness.
+	// d is unique to the right side; an unmatched left row would NULL it, so it
+	// must be optional in the result regardless of the right side's own
+	// (pre-join) bound-ness.
 	CHECK(result.optionalVars.count("d") == 1);
 	CHECK(result.boundVars.count("d") == 0);
 }
@@ -124,12 +135,10 @@ TEST_CASE("antiJoin: zero shared variables is a spec-mandated no-op (no SQL chan
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
 
-	TranslatedPattern left = makePattern("SELECT LEFT_MARKER", {"x"});
-	TranslatedPattern right = makePattern("SELECT RIGHT_MARKER", {"y"});
-
-	TranslatedPattern result = antiJoin(left, right, ctx);
-	CHECK(result.sql == left.sql);
-	CHECK(result.sql.find("NOT EXISTS") == std::string::npos);
+	RelNodePtr result = antiJoin(makeRel("SELECT LEFT_MARKER", {"x"}), makeRel("SELECT RIGHT_MARKER", {"y"}), ctx);
+	std::string sql = renderedSql(result, ctx);
+	CHECK(sql == "SELECT LEFT_MARKER");
+	CHECK(sql.find("NOT EXISTS") == std::string::npos);
 }
 
 TEST_CASE("antiJoin: a shared variable produces a NOT EXISTS anti-join") {
@@ -137,12 +146,10 @@ TEST_CASE("antiJoin: a shared variable produces a NOT EXISTS anti-join") {
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
 
-	TranslatedPattern left = makePattern("SELECT ...", {"x"});
-	TranslatedPattern right = makePattern("SELECT ...", {"x"});
-
-	TranslatedPattern result = antiJoin(left, right, ctx);
+	RelNodePtr node = antiJoin(makeRel("SELECT ...", {"x"}), makeRel("SELECT ...", {"x"}), ctx);
+	TranslatedPattern result = renderRelation(*node, ctx);
 	CHECK(result.sql.find("NOT EXISTS") != std::string::npos);
-	CHECK(result.boundVars == left.boundVars);
+	CHECK(result.boundVars.count("x") == 1);
 }
 
 TEST_CASE("unionAll: a variable bound in every branch stays bound; others become optional") {
@@ -150,10 +157,12 @@ TEST_CASE("unionAll: a variable bound in every branch stays bound; others become
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
 
-	TranslatedPattern b1 = makePattern("SELECT ...", {"e", "n"});
-	TranslatedPattern b2 = makePattern("SELECT ...", {"e", "d"});
+	std::vector<RelNodePtr> branches;
+	branches.push_back(makeRel("SELECT ...", {"e", "n"}));
+	branches.push_back(makeRel("SELECT ...", {"e", "d"}));
 
-	TranslatedPattern result = unionAll({b1, b2}, ctx);
+	RelNodePtr node = unionAll(std::move(branches), ctx);
+	TranslatedPattern result = renderRelation(*node, ctx);
 	CHECK(result.boundVars.count("e") == 1);
 	CHECK(result.optionalVars.count("n") == 1);
 	CHECK(result.optionalVars.count("d") == 1);
@@ -171,7 +180,7 @@ TEST_CASE("fold: AND joins consecutive triples on shared variables") {
 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
-	TranslatedPattern result = fold(*q->where, ctx);
+	TranslatedPattern result = renderRelation(*fold(*q->where, ctx), ctx);
 
 	CHECK(result.boundVars.count("p") == 1);
 	CHECK(result.boundVars.count("n") == 1);
@@ -187,7 +196,7 @@ TEST_CASE("fold: OPTIONAL produces a left outer join with the department var opt
 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
-	TranslatedPattern result = fold(*q->where, ctx);
+	TranslatedPattern result = renderRelation(*fold(*q->where, ctx), ctx);
 
 	CHECK(result.sql.find("LEFT OUTER JOIN") != std::string::npos);
 	CHECK(result.boundVars.count("e") == 1);
@@ -204,7 +213,7 @@ TEST_CASE("fold: UNION with mismatched branch schemas leaves the unshared vars o
 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
-	TranslatedPattern result = fold(*q->where, ctx);
+	TranslatedPattern result = renderRelation(*fold(*q->where, ctx), ctx);
 
 	CHECK(result.sql.find("UNION ALL BY NAME") != std::string::npos);
 	CHECK(result.boundVars.count("e") == 1);
@@ -221,7 +230,7 @@ TEST_CASE("fold: MINUS with shared variables emits NOT EXISTS") {
 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
-	TranslatedPattern result = fold(*q->where, ctx);
+	TranslatedPattern result = renderRelation(*fold(*q->where, ctx), ctx);
 	CHECK(result.sql.find("NOT EXISTS") != std::string::npos);
 }
 
@@ -234,7 +243,7 @@ TEST_CASE("fold: MINUS with zero shared variables is a no-op, no NOT EXISTS emit
 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
-	TranslatedPattern result = fold(*q->where, ctx);
+	TranslatedPattern result = renderRelation(*fold(*q->where, ctx), ctx);
 	CHECK(result.sql.find("NOT EXISTS") == std::string::npos);
 }
 
@@ -247,7 +256,7 @@ TEST_CASE("fold: VALUES joins the inline data table on the shared variable") {
 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
-	TranslatedPattern result = fold(*q->where, ctx);
+	TranslatedPattern result = renderRelation(*fold(*q->where, ctx), ctx);
 	CHECK(result.boundVars.count("e") == 1);
 	CHECK(result.boundVars.count("n") == 1);
 	CHECK(result.sql.find("'SMITH'") != std::string::npos);
@@ -263,10 +272,9 @@ TEST_CASE("fold: a subquery element is joined in with its variables treated as o
 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
-	TranslatedPattern result = fold(*q->where, ctx);
-	// ?e is independently guaranteed by the outer ex:name triple pattern,
-	// so it stays bound in spite of the subquery's own conservative
-	// optional-marking.
+	TranslatedPattern result = renderRelation(*fold(*q->where, ctx), ctx);
+	// ?e is independently guaranteed by the outer ex:name triple pattern, so it
+	// stays bound in spite of the subquery's own conservative optional-marking.
 	CHECK(result.boundVars.count("e") == 1);
 	CHECK(result.sql.find("INNER JOIN") != std::string::npos);
 }
