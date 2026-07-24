@@ -423,8 +423,39 @@ std::string sql = sparql2sql::translateQuery(*query, mapping, dialect);
 
 std::string sparql2sql::translateQuery(const sparql::ast::Query& query,
                                         const r2rml::R2RMLMapping& mapping,
-                                        const sparql2sql::SqlDialect& dialect);
+                                        const sparql2sql::SqlDialect& dialect,
+                                        const sparql2sql::TypeCatalog* catalog = nullptr);
 ```
+
+The translator builds a small relational-algebra IR (`sparql2sql/ir/RelNode.h`) rather than
+emitting SQL strings directly, then applies a fixed pipeline of semantics-preserving rewrites
+(`sparql2sql/ir/Optimizer.h`) before rendering once: inner-join **SPJ flattening** (an N-triple
+BGP becomes one flat `SELECT ... FROM a, b, c WHERE ...` instead of N−1 nested subqueries),
+**self-join elimination** (two patterns over the same table bound to the same subject variable
+collapse to a single scan — the subject map is assumed row-unique), and **DISTINCT elimination**
+(the per-pattern `SELECT DISTINCT` is dropped when the enclosing query is `SELECT DISTINCT`/`ASK`).
+Everything below the level of these structural simplifications — join ordering, physical join
+choice, index selection — is deliberately left to the target engine's own optimizer, which does it
+better on the flat, native-typed plan it is handed.
+
+```cpp
+#include "sparql2sql/TypeCatalog.h"
+
+struct sparql2sql::TypeCatalog {
+    std::map<std::string, std::map<std::string, std::string>> columnTypes; // table -> column -> SQL type
+    // ...
+};
+```
+
+`catalog` is optional. When supplied, an equi-join on two **pure base columns** of **comparable
+declared type** (per the catalog) is emitted on the native, uncast columns
+(`t1."capIQCompanyID" = t2."parent"`) instead of the VARCHAR-cast form
+(`CAST(... AS VARCHAR) = CAST(... AS VARCHAR)`) — index-friendly and materially faster on large
+tables. When `catalog` is null, or a column's type is unknown, or the types aren't comparable, the
+join falls back to the always-correct VARCHAR-cast comparison. The catalog is a plain,
+dependency-free data structure: the core library never opens a database; the CLI populates it from
+`information_schema.columns`. Because all downstream variables remain VARCHAR, only the join
+*condition* changes — projected values and result semantics are identical either way.
 
 ```cpp
 #include "sparql2sql/DialectFactory.h"
@@ -446,9 +477,11 @@ public:
 ```
 
 The CLI exposes this via `-T <file.rq> [--dialect <name>]` (default dialect: `duckdb`), paired
-with the mapping-file positional argument. If the database-file positional is also given, the
-translated SQL is additionally executed against it via `r2rml::DuckDBConnection` and the result
-rows are printed; see `-h` for exact stdout/stderr routing.
+with the mapping-file positional argument. If the database-file positional is also given, the CLI
+reads that database's column types into a `TypeCatalog` (so native-typed join keys are enabled),
+translates against it, then executes the SQL via `r2rml::DuckDBConnection` and prints the result
+rows; see `-h` for exact stdout/stderr routing. Without a database file, the SQL alone is printed
+and joins use the VARCHAR-cast fallback.
 
 ### Supported SPARQL subset / Known limitations
 
@@ -476,6 +509,10 @@ rows are printed; see `-h` for exact stdout/stderr routing.
     `TRY_CAST(... AS DOUBLE)` at point of use; `=`/`<>`/`<`/`>`/`<=`/`>=` fall back to a plain
     VARCHAR comparison when either side isn't numeric-castable, so e.g. `FILTER(?name < "M")`
     (string ordering) still works correctly.
+  - The one exception is an equi-**join** key: with a `TypeCatalog`, a join between two pure base
+    columns of comparable declared type is compared on the native (uncast) columns (see the
+    `translateQuery` `catalog` parameter above). This changes only the join condition, not the
+    VARCHAR representation of any projected variable.
 - **Template matching (`rr:template`) assumes RFC3986-unreserved-only column values**: forward
   R2RML generation percent-encodes substituted column values, but the translator's reverse
   direction (reconstructing/matching a template) does not apply percent-encoding — correct as

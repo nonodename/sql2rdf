@@ -188,8 +188,8 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 		rootNode = innerJoin(std::move(rootNode), translateInlineData(*query.valuesClause, ctx), ctx);
 	}
 	OptimizerOptions opts;
-	opts.topLevelDistinct = (query.distinct || query.reduced) && query.solutionModifier.groupBy.empty() &&
-	                        !queryHasAggregate(query);
+	opts.topLevelDistinct =
+	    (query.distinct || query.reduced) && query.solutionModifier.groupBy.empty() && !queryHasAggregate(query);
 	opts.catalog = ctx.catalog();
 	rootNode = optimize(std::move(rootNode), opts);
 	TranslatedPattern source = renderRelation(*rootNode, ctx);
@@ -278,8 +278,8 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 }
 
 std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMapping &mapping,
-                           const SqlDialect &dialect) {
-	TranslationContext ctx(mapping, dialect);
+                           const SqlDialect &dialect, const TypeCatalog *catalog) {
+	TranslationContext ctx(mapping, dialect, catalog);
 
 	if (query.form == QueryForm::Ask) {
 		RelNodePtr rootNode = query.where ? fold(*query.where, ctx) : identityRelation(ctx);

@@ -1,0 +1,33 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Toy fixture for the native-typed-join-key optimization: two independent
+# triples maps whose object columns (COMPANY.CAPIQ, RELATIONS.PARENT) are both
+# BIGINT. A SPARQL query unifying those two objects in a shared variable joins
+# them cross-table WITHOUT any declared R2RML referencing-object-map/foreign
+# key - exactly the case that, given a type catalog, is safe to compare on the
+# native (uncast) integer columns rather than via VARCHAR casts.
+
+<#CompanyTriplesMap>
+    rr:logicalTable [ rr:tableName "COMPANY" ];
+    rr:subjectMap [ rr:template "http://ex.org/co/{ID}" ];
+    rr:predicateObjectMap [
+        rr:predicate ex:capiq;
+        rr:objectMap [ rr:column "CAPIQ" ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:name;
+        rr:objectMap [ rr:column "LEGALNAME" ];
+    ].
+
+<#RelationsTriplesMap>
+    rr:logicalTable [ rr:tableName "RELATIONS" ];
+    rr:subjectMap [ rr:template "http://ex.org/rel/{PARENT}-{CHILD}" ];
+    rr:predicateObjectMap [
+        rr:predicate ex:parent;
+        rr:objectMap [ rr:column "PARENT" ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:child;
+        rr:objectMap [ rr:column "CHILD" ];
+    ].

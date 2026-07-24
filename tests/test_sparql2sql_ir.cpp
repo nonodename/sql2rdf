@@ -8,12 +8,23 @@
 #include "sparql2sql/ir/Optimizer.h"
 #include "sparql2sql/ir/RelNode.h"
 
-using namespace sparql2sql;
+using sparql2sql::ColumnInfo;
+using sparql2sql::EquiKey;
+using sparql2sql::JoinKind;
+using sparql2sql::JoinNode;
+using sparql2sql::optimize;
+using sparql2sql::OptimizerOptions;
+using sparql2sql::Provenance;
+using sparql2sql::RelKind;
+using sparql2sql::RelNodePtr;
+using sparql2sql::SpjRelation;
+using sparql2sql::SpjSource;
+using sparql2sql::TypeCatalog;
 
 namespace {
 
-ColumnInfo pureCol(const std::string &var, const std::string &alias, const std::string &col,
-                   const std::string &table, bool nonNull) {
+ColumnInfo pureCol(const std::string &var, const std::string &alias, const std::string &col, const std::string &table,
+                   bool nonNull) {
 	ColumnInfo c;
 	c.var = var;
 	c.renderedExpr = "CAST(" + alias + ".\"" + col + "\" AS VARCHAR)";
@@ -84,9 +95,9 @@ TEST_CASE("RelNode schema helpers partition bound and optional vars", "[sparql2s
 	rel.schema().push_back(pureCol("id", "t1", "ID", "company", /*nonNull=*/true));
 	rel.schema().push_back(pureCol("name", "t1", "legalName", "company", /*nonNull=*/false));
 
-	CHECK(rel.boundVars() == std::set<std::string>{"id"});
-	CHECK(rel.optionalVars() == std::set<std::string>{"name"});
-	CHECK(rel.allVars() == std::set<std::string>{"id", "name"});
+	CHECK(rel.boundVars() == std::set<std::string> {"id"});
+	CHECK(rel.optionalVars() == std::set<std::string> {"name"});
+	CHECK(rel.allVars() == std::set<std::string> {"id", "name"});
 
 	const ColumnInfo *idCol = rel.column("id");
 	REQUIRE(idCol != nullptr);
@@ -123,7 +134,8 @@ TEST_CASE("TypeCatalog::comparable gates native join keys by type category", "[s
 }
 
 TEST_CASE("optimize: an inner join of two SpjRelations flattens into one multi-source block", "[sparql2sql][ir]") {
-	std::vector<ColumnInfo> leftCols = {pureCol("a", "t1", "A", "company", true), pureCol("k", "t1", "K", "company", true)};
+	std::vector<ColumnInfo> leftCols = {pureCol("a", "t1", "A", "company", true),
+	                                    pureCol("k", "t1", "K", "company", true)};
 	std::vector<ColumnInfo> rightCols = {pureCol("k", "t2", "K2", "relations", true),
 	                                     pureCol("b", "t2", "B", "relations", true)};
 	RelNodePtr join = makeJoin(JoinKind::Inner, makeSpj("t1", "company", leftCols, true),
@@ -144,7 +156,7 @@ TEST_CASE("optimize: an inner join of two SpjRelations flattens into one multi-s
 		}
 	}
 	CHECK(foundJoinEq);
-	CHECK(spj.allVars() == std::set<std::string>{"a", "k", "b"});
+	CHECK(spj.allVars() == std::set<std::string> {"a", "k", "b"});
 }
 
 TEST_CASE("optimize: a left outer join is a flattening boundary (not merged)", "[sparql2sql][ir]") {
@@ -245,7 +257,7 @@ TEST_CASE("optimize: self-join elimination collapses same-table same-subject sca
 	const SpjRelation &spj = static_cast<const SpjRelation &>(*result);
 	// Both PEOPLE scans merged into one source.
 	CHECK(spj.sources.size() == 1);
-	CHECK(spj.allVars() == std::set<std::string>{"p", "a", "b"});
+	CHECK(spj.allVars() == std::set<std::string> {"p", "a", "b"});
 	// ?b's column reference was rewritten from the dropped t2 onto the kept t1.
 	const ColumnInfo *b = spj.column("b");
 	REQUIRE(b != nullptr);

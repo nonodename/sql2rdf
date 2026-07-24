@@ -15,6 +15,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <map>
 #include <string>
 #include <vector>
@@ -35,6 +36,7 @@
 #include "sparql-parser/Parser.h"
 #include "sparql2sql/DuckDbDialect.h"
 #include "sparql2sql/Translator.h"
+#include "sparql2sql/TypeCatalog.h"
 
 using r2rml::DuckDBConnection;
 using r2rml::R2RMLMapping;
@@ -69,7 +71,64 @@ std::unique_ptr<DuckDBConnection> makeSeededDatabase() {
 	conn->execute("CREATE TABLE WIDGETS (ID INTEGER, NAME VARCHAR)");
 	conn->execute("INSERT INTO WIDGETS VALUES (1, 'GADGET')");
 
+	// Cross-table integer join fixture (no declared R2RML FK): COMPANY.CAPIQ
+	// and RELATIONS.PARENT are both BIGINT, unified by a shared SPARQL var.
+	conn->execute("CREATE TABLE COMPANY (ID INTEGER, CAPIQ BIGINT, LEGALNAME VARCHAR)");
+	conn->execute("INSERT INTO COMPANY VALUES (1, 100, 'ACME'), (2, 200, 'GLOBEX')");
+	conn->execute("CREATE TABLE RELATIONS (PARENT BIGINT, CHILD BIGINT)");
+	conn->execute("INSERT INTO RELATIONS VALUES (100, 200)");
+
 	return conn;
+}
+
+// Resolve the actual reported name of a result column, matching `target`
+// case-insensitively (backends report result-column names in their own case).
+std::string resolveColName(const std::vector<std::string> &names, const std::string &target) {
+	for (const auto &n : names) {
+		if (n.size() == target.size()) {
+			bool eq = true;
+			for (std::size_t i = 0; i < n.size(); ++i) {
+				if (std::tolower(static_cast<unsigned char>(n[i])) !=
+				    std::tolower(static_cast<unsigned char>(target[i]))) {
+					eq = false;
+					break;
+				}
+			}
+			if (eq) {
+				return n;
+			}
+		}
+	}
+	return std::string();
+}
+
+sparql2sql::TypeCatalog catalogOf(DuckDBConnection &conn) {
+	sparql2sql::TypeCatalog cat;
+	std::unique_ptr<r2rml::SQLResultSet> rs =
+	    conn.execute("SELECT table_name, column_name, data_type FROM information_schema.columns");
+	bool resolved = false;
+	std::string tName, cName, dName;
+	while (rs->next()) {
+		const r2rml::SQLRow &row = rs->getCurrentRow();
+		if (!resolved) {
+			std::vector<std::string> names = row.columnNames();
+			tName = resolveColName(names, "table_name");
+			cName = resolveColName(names, "column_name");
+			dName = resolveColName(names, "data_type");
+			resolved = true;
+		}
+		if (tName.empty() || cName.empty() || dName.empty()) {
+			continue;
+		}
+		std::unique_ptr<r2rml::SQLValue> t = row.getValue(tName);
+		std::unique_ptr<r2rml::SQLValue> c = row.getValue(cName);
+		std::unique_ptr<r2rml::SQLValue> d = row.getValue(dName);
+		if (t->isNull() || c->isNull() || d->isNull()) {
+			continue;
+		}
+		cat.columnTypes[t->asString()][c->asString()] = d->asString();
+	}
+	return cat;
 }
 
 std::vector<Row> collectRows(r2rml::SQLResultSet &rs) {
@@ -228,4 +287,60 @@ TEST_CASE("sparql2sql_multi_placeholder.rq: multi-placeholder template inversion
 	auto rows = translateAndRun(*conn, "sparql2sql_multi_placeholder.rq", "sparql2sql_multi_placeholder.ttl");
 	REQUIRE(rows.size() == 1);
 	CHECK(containsRow(rows, {{"V_O", "http://ex.org/order/42/99"}}));
+}
+
+TEST_CASE("sparql2sql_native_join.rq: a type catalog enables a native integer join, same rows") {
+	auto conn = makeSeededDatabase();
+	Parser parser;
+	auto query = parser.parseFile(SOURCE_SPARQL2SQL_DIR "sparql2sql_native_join.rq");
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_native_join.ttl");
+	REQUIRE(mapping.isValid());
+	DuckDbDialect dialect;
+
+	const Row expected = {{"V_CO", "http://ex.org/co/1"}, {"V_REL", "http://ex.org/rel/100-200"}, {"V_CHILD", "200"}};
+
+	// Without a catalog: the ?p join is a VARCHAR-cast comparison.
+	std::string plainSql = translateQuery(*query, mapping, dialect);
+	INFO("plain SQL: " << plainSql);
+	CHECK(plainSql.find("AS VARCHAR) = CAST(") != std::string::npos);
+	{
+		std::unique_ptr<r2rml::SQLResultSet> rs = conn->execute(plainSql);
+		auto rows = collectRows(*rs);
+		REQUIRE(rows.size() == 1);
+		CHECK(containsRow(rows, expected));
+	}
+
+	// The catalog read from the live database must know the BIGINT join
+	// columns, case-insensitively (the mapping declares COMPANY/CAPIQ, DuckDB
+	// reports them lower-cased). This REQUIRE localizes any failure: if it
+	// trips, the information_schema read/lookup is at fault, not translation.
+	sparql2sql::TypeCatalog cat = catalogOf(*conn);
+	INFO("catalog table count: " << cat.columnTypes.size());
+	{
+		std::string dump;
+		for (const auto &t : cat.columnTypes) {
+			dump += "[" + t.first + ": ";
+			for (const auto &c : t.second) {
+				dump += c.first + "=" + c.second + " ";
+			}
+			dump += "] ";
+		}
+		INFO("catalog dump: " << dump);
+	}
+	INFO("typeOf(COMPANY,CAPIQ)='" << cat.typeOf("COMPANY", "CAPIQ") << "' typeOf(RELATIONS,PARENT)='"
+	                               << cat.typeOf("RELATIONS", "PARENT") << "'");
+	REQUIRE(cat.comparable("COMPANY", "CAPIQ", "RELATIONS", "PARENT"));
+
+	// With a catalog: the join is emitted on the native BIGINT columns.
+	std::string nativeSql = translateQuery(*query, mapping, dialect, &cat);
+	INFO("native SQL: " << nativeSql);
+	CHECK(nativeSql.find("\"CAPIQ\" = ") != std::string::npos);
+	CHECK(nativeSql.find("\"PARENT\"") != std::string::npos);
+	{
+		std::unique_ptr<r2rml::SQLResultSet> rs = conn->execute(nativeSql);
+		auto rows = collectRows(*rs);
+		REQUIRE(rows.size() == 1);
+		CHECK(containsRow(rows, expected));
+	}
 }

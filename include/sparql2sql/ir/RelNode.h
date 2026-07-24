@@ -126,8 +126,8 @@ public:
 	SpjRelation() : RelNode(RelKind::Spj) {
 	}
 
-	std::vector<SpjSource> sources;         ///< >=1; joined as an inner-join spine.
-	std::vector<std::string> whereConds;    ///< conjuncts: inversion eq, self-join eq, IS NOT NULL, join keys.
+	std::vector<SpjSource> sources;      ///< >=1; joined as an inner-join spine.
+	std::vector<std::string> whereConds; ///< conjuncts: inversion eq, self-join eq, IS NOT NULL, join keys.
 	bool distinct = false;
 	// schema_ holds the projected columns (each renderedExpr evaluated over `sources`).
 };

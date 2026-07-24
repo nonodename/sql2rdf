@@ -48,22 +48,40 @@ TypeCategory categoryOf(const std::string &normalized) {
 	return TypeCategory::Other;
 }
 
+bool iequals(const std::string &a, const std::string &b) {
+	if (a.size() != b.size()) {
+		return false;
+	}
+	for (std::size_t i = 0; i < a.size(); ++i) {
+		if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) {
+			return false;
+		}
+	}
+	return true;
+}
+
 } // namespace
 
 std::string TypeCatalog::typeOf(const std::string &table, const std::string &column) const {
-	auto t = columnTypes.find(table);
-	if (t == columnTypes.end()) {
-		return std::string();
+	// Case-insensitive lookup: SQL identifiers are case-insensitive, and the
+	// mapping's declared table/column names (e.g. "COMPANY") often differ in
+	// case from what a backend's information_schema reports (DuckDB folds
+	// unquoted identifiers to lowercase).
+	for (const auto &t : columnTypes) {
+		if (!iequals(t.first, table)) {
+			continue;
+		}
+		for (const auto &c : t.second) {
+			if (iequals(c.first, column)) {
+				return c.second;
+			}
+		}
 	}
-	auto c = t->second.find(column);
-	if (c == t->second.end()) {
-		return std::string();
-	}
-	return c->second;
+	return std::string();
 }
 
 bool TypeCatalog::comparable(const std::string &tableA, const std::string &columnA, const std::string &tableB,
-                            const std::string &columnB) const {
+                             const std::string &columnB) const {
 	std::string a = typeOf(tableA, columnA);
 	std::string b = typeOf(tableB, columnB);
 	if (a.empty() || b.empty()) {

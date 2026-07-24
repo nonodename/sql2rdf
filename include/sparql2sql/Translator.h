@@ -17,13 +17,19 @@ class R2RMLMapping;
 namespace sparql2sql {
 
 class SqlDialect;
+struct TypeCatalog;
 
 /// Translate a full, already-parsed SPARQL query against an already-parsed
 /// R2RML mapping, returning a single SQL statement for the given dialect.
 /// Only SELECT and ASK query forms are supported; CONSTRUCT/DESCRIBE throw
 /// TranslationError naming the unsupported form.
+///
+/// `catalog` is optional: when supplied, join keys over type-comparable base
+/// columns are emitted natively (uncast) rather than as VARCHAR comparisons -
+/// index-friendly and materially faster on large tables. When null, all joins
+/// fall back to the always-correct VARCHAR-cast form.
 std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMapping &mapping,
-                           const SqlDialect &dialect);
+                           const SqlDialect &dialect, const TypeCatalog *catalog = nullptr);
 
 /// Translate a Query (top-level or a `{ SELECT ... }` subquery) against an
 /// existing TranslationContext, applying its own SELECT projection/
