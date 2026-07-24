@@ -11,6 +11,7 @@ class R2RMLMapping;
 namespace sparql2sql {
 
 class SqlDialect;
+struct TypeCatalog;
 
 /// The intermediate representation threaded through translation: a SQL
 /// relation (as a full "SELECT ..." statement, valid to wrap as
@@ -39,8 +40,9 @@ struct TranslatedPattern {
 /// policy that every translation function follows.
 class TranslationContext {
 public:
-	TranslationContext(const r2rml::R2RMLMapping &mapping, const SqlDialect &dialect)
-	    : mapping_(mapping), dialect_(dialect), aliasCounter_(0) {
+	TranslationContext(const r2rml::R2RMLMapping &mapping, const SqlDialect &dialect,
+	                   const TypeCatalog *catalog = nullptr)
+	    : mapping_(mapping), dialect_(dialect), catalog_(catalog), aliasCounter_(0) {
 	}
 
 	const r2rml::R2RMLMapping &mapping() const {
@@ -51,6 +53,11 @@ public:
 		return dialect_;
 	}
 
+	/// Optional column-type catalog (nullptr if none supplied).
+	const TypeCatalog *catalog() const {
+		return catalog_;
+	}
+
 	/// Produce a fresh, unique table alias ("t1", "t2", ...).
 	std::string nextAlias() {
 		return "t" + std::to_string(++aliasCounter_);
@@ -59,6 +66,7 @@ public:
 private:
 	const r2rml::R2RMLMapping &mapping_;
 	const SqlDialect &dialect_;
+	const TypeCatalog *catalog_;
 	std::size_t aliasCounter_;
 };
 

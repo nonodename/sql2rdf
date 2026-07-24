@@ -232,6 +232,10 @@ set(SPARQL2SQL_SOURCES
   src/sparql2sql/ExpressionTranslator.cpp
   src/sparql2sql/PatternFolder.cpp
   src/sparql2sql/Translator.cpp
+  src/sparql2sql/TypeCatalog.cpp
+  src/sparql2sql/ir/RelNode.cpp
+  src/sparql2sql/ir/SqlRenderer.cpp
+  src/sparql2sql/ir/Optimizer.cpp
 )
 add_library(sql2rdf_sparql2sql STATIC ${SPARQL2SQL_SOURCES})
 add_library(sql2rdf::sparql2sql ALIAS sql2rdf_sparql2sql)

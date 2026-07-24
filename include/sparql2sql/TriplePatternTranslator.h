@@ -2,10 +2,11 @@
 
 #include "sparql-parser/ast/GraphPattern.h"
 #include "sparql2sql/TranslatedPattern.h"
+#include "sparql2sql/ir/RelNode.h"
 
 namespace sparql2sql {
 
-/// Translate a single SPARQL triple pattern into a TranslatedPattern by
+/// Translate a single SPARQL triple pattern into an IR relation by
 /// enumerating every R2RML TriplesMap/PredicateObjectMap/rr:class candidate
 /// that could produce a matching triple (the "alpha/beta inversion"; see
 /// Chebotko/Lu/Fotouhi's SPARQL-to-SQL translation, adapted since our
@@ -19,6 +20,6 @@ namespace sparql2sql {
 /// Only PredicatePath (constant IRI/`a`) and VariablePath (bare variable)
 /// are supported in predicate position; any other PathKind throws
 /// TranslationError.
-TranslatedPattern translateTriplePattern(const sparql::ast::TriplePattern &tp, TranslationContext &ctx);
+RelNodePtr translateTriplePattern(const sparql::ast::TriplePattern &tp, TranslationContext &ctx);
 
 } // namespace sparql2sql

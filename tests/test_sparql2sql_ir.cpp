@@ -1,0 +1,270 @@
+#include <catch2/catch_test_macros.hpp>
+
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "sparql2sql/TypeCatalog.h"
+#include "sparql2sql/ir/Optimizer.h"
+#include "sparql2sql/ir/RelNode.h"
+
+using sparql2sql::ColumnInfo;
+using sparql2sql::EquiKey;
+using sparql2sql::JoinKind;
+using sparql2sql::JoinNode;
+using sparql2sql::optimize;
+using sparql2sql::OptimizerOptions;
+using sparql2sql::Provenance;
+using sparql2sql::RelKind;
+using sparql2sql::RelNodePtr;
+using sparql2sql::SpjRelation;
+using sparql2sql::SpjSource;
+using sparql2sql::TypeCatalog;
+
+namespace {
+
+ColumnInfo pureCol(const std::string &var, const std::string &alias, const std::string &col, const std::string &table,
+                   bool nonNull) {
+	ColumnInfo c;
+	c.var = var;
+	c.renderedExpr = "CAST(" + alias + ".\"" + col + "\" AS VARCHAR)";
+	c.prov = Provenance::PureColumn;
+	c.sourceAlias = alias;
+	c.columnName = col;
+	c.nativeColumnRef = alias + ".\"" + col + "\"";
+	c.tableIdentity = table;
+	c.nonNull = nonNull;
+	return c;
+}
+
+// A single-source SpjRelation over `table AS alias` projecting `cols`.
+RelNodePtr makeSpj(const std::string &alias, const std::string &table, std::vector<ColumnInfo> cols, bool distinct) {
+	RelNodePtr node(new SpjRelation());
+	SpjRelation &spj = static_cast<SpjRelation &>(*node);
+	SpjSource src;
+	src.sql = "\"" + table + "\" AS " + alias;
+	src.alias = alias;
+	src.tableIdentity = table;
+	spj.sources.push_back(src);
+	spj.distinct = distinct;
+	spj.schema() = std::move(cols);
+	return node;
+}
+
+// An inner/outer JoinNode over two children, joined on the single shared var.
+RelNodePtr makeJoin(JoinKind kind, RelNodePtr left, RelNodePtr right, const std::string &sharedVar, bool nullSafe) {
+	RelNodePtr node(new JoinNode());
+	JoinNode &j = static_cast<JoinNode &>(*node);
+	j.joinKind = kind;
+	EquiKey k;
+	k.var = sharedVar;
+	if (const ColumnInfo *lc = left->column(sharedVar)) {
+		k.leftCol = *lc;
+	}
+	if (const ColumnInfo *rc = right->column(sharedVar)) {
+		k.rightCol = *rc;
+	}
+	k.nullSafe = nullSafe;
+	j.keys.push_back(k);
+	// Output schema: union of both sides' vars (nonNull carried from children;
+	// for LeftOuter the right-only vars would be optional, but these tests only
+	// inspect structure, so a simple union suffices).
+	for (const auto &c : left->schema()) {
+		j.schema().push_back(c);
+	}
+	for (const auto &c : right->schema()) {
+		if (c.var != sharedVar) {
+			j.schema().push_back(c);
+		}
+	}
+	j.left = std::move(left);
+	j.right = std::move(right);
+	return node;
+}
+
+} // namespace
+
+TEST_CASE("RelNode schema helpers partition bound and optional vars", "[sparql2sql][ir]") {
+	SpjRelation rel;
+	SpjSource src;
+	src.sql = "\"company\" AS t1";
+	src.alias = "t1";
+	src.tableIdentity = "company";
+	rel.sources.push_back(src);
+	rel.distinct = true;
+	rel.schema().push_back(pureCol("id", "t1", "ID", "company", /*nonNull=*/true));
+	rel.schema().push_back(pureCol("name", "t1", "legalName", "company", /*nonNull=*/false));
+
+	CHECK(rel.boundVars() == std::set<std::string> {"id"});
+	CHECK(rel.optionalVars() == std::set<std::string> {"name"});
+	CHECK(rel.allVars() == std::set<std::string> {"id", "name"});
+
+	const ColumnInfo *idCol = rel.column("id");
+	REQUIRE(idCol != nullptr);
+	CHECK(idCol->prov == Provenance::PureColumn);
+	CHECK(idCol->columnName == "ID");
+	CHECK(rel.column("missing") == nullptr);
+}
+
+TEST_CASE("RelNode kinds are preserved through the base pointer", "[sparql2sql][ir]") {
+	RelNodePtr node(new SpjRelation());
+	CHECK(node->kind() == RelKind::Spj);
+
+	RelNodePtr join(new JoinNode());
+	CHECK(join->kind() == RelKind::Join);
+	static_cast<JoinNode &>(*join).joinKind = JoinKind::LeftOuter;
+	CHECK(static_cast<const JoinNode &>(*join).joinKind == JoinKind::LeftOuter);
+}
+
+TEST_CASE("TypeCatalog::comparable gates native join keys by type category", "[sparql2sql][ir]") {
+	TypeCatalog cat;
+	cat.columnTypes["company"]["capIQCompanyID"] = "BIGINT";
+	cat.columnTypes["company"]["ID"] = "VARCHAR";
+	cat.columnTypes["relations"]["parent"] = "BIGINT";
+	cat.columnTypes["relations"]["pct"] = "DOUBLE";
+
+	// Same integer category on both sides: safe.
+	CHECK(cat.comparable("company", "capIQCompanyID", "relations", "parent"));
+	// Integer vs varchar: not safe.
+	CHECK_FALSE(cat.comparable("company", "capIQCompanyID", "company", "ID"));
+	// Integer vs float: conservatively not safe.
+	CHECK_FALSE(cat.comparable("relations", "parent", "relations", "pct"));
+	// Unknown column: not safe.
+	CHECK_FALSE(cat.comparable("company", "capIQCompanyID", "relations", "missing"));
+}
+
+TEST_CASE("optimize: an inner join of two SpjRelations flattens into one multi-source block", "[sparql2sql][ir]") {
+	std::vector<ColumnInfo> leftCols = {pureCol("a", "t1", "A", "company", true),
+	                                    pureCol("k", "t1", "K", "company", true)};
+	std::vector<ColumnInfo> rightCols = {pureCol("k", "t2", "K2", "relations", true),
+	                                     pureCol("b", "t2", "B", "relations", true)};
+	RelNodePtr join = makeJoin(JoinKind::Inner, makeSpj("t1", "company", leftCols, true),
+	                           makeSpj("t2", "relations", rightCols, true), "k", /*nullSafe=*/false);
+
+	OptimizerOptions opts; // no catalog, not top-level distinct
+	RelNodePtr result = optimize(std::move(join), opts);
+
+	REQUIRE(result->kind() == RelKind::Spj);
+	const SpjRelation &spj = static_cast<const SpjRelation &>(*result);
+	CHECK(spj.sources.size() == 2);
+	CHECK(spj.distinct); // lifted from the per-pattern DISTINCTs
+	// The join equality was folded into WHERE, VARCHAR-cast (no catalog).
+	bool foundJoinEq = false;
+	for (const auto &c : spj.whereConds) {
+		if (c == "CAST(t1.\"K\" AS VARCHAR) = CAST(t2.\"K2\" AS VARCHAR)") {
+			foundJoinEq = true;
+		}
+	}
+	CHECK(foundJoinEq);
+	CHECK(spj.allVars() == std::set<std::string> {"a", "k", "b"});
+}
+
+TEST_CASE("optimize: a left outer join is a flattening boundary (not merged)", "[sparql2sql][ir]") {
+	std::vector<ColumnInfo> leftCols = {pureCol("k", "t1", "K", "company", true)};
+	std::vector<ColumnInfo> rightCols = {pureCol("k", "t2", "K2", "relations", true),
+	                                     pureCol("b", "t2", "B", "relations", true)};
+	RelNodePtr join = makeJoin(JoinKind::LeftOuter, makeSpj("t1", "company", leftCols, true),
+	                           makeSpj("t2", "relations", rightCols, true), "k", /*nullSafe=*/false);
+
+	OptimizerOptions opts;
+	RelNodePtr result = optimize(std::move(join), opts);
+	CHECK(result->kind() == RelKind::Join); // preserved
+}
+
+TEST_CASE("optimize: top-level DISTINCT strips the per-pattern DISTINCT after flattening", "[sparql2sql][ir]") {
+	std::vector<ColumnInfo> leftCols = {pureCol("k", "t1", "K", "company", true)};
+	std::vector<ColumnInfo> rightCols = {pureCol("k", "t2", "K2", "relations", true)};
+	RelNodePtr join = makeJoin(JoinKind::Inner, makeSpj("t1", "company", leftCols, true),
+	                           makeSpj("t2", "relations", rightCols, true), "k", /*nullSafe=*/false);
+
+	OptimizerOptions opts;
+	opts.topLevelDistinct = true;
+	RelNodePtr result = optimize(std::move(join), opts);
+
+	REQUIRE(result->kind() == RelKind::Spj);
+	CHECK_FALSE(static_cast<const SpjRelation &>(*result).distinct);
+}
+
+TEST_CASE("optimize: a type catalog enables a native (uncast) join key", "[sparql2sql][ir]") {
+	std::vector<ColumnInfo> leftCols = {pureCol("k", "t1", "capIQCompanyID", "company", true)};
+	std::vector<ColumnInfo> rightCols = {pureCol("k", "t2", "parent", "relations", true)};
+	RelNodePtr join = makeJoin(JoinKind::Inner, makeSpj("t1", "company", leftCols, true),
+	                           makeSpj("t2", "relations", rightCols, true), "k", /*nullSafe=*/false);
+
+	TypeCatalog cat;
+	cat.columnTypes["company"]["capIQCompanyID"] = "BIGINT";
+	cat.columnTypes["relations"]["parent"] = "BIGINT";
+	OptimizerOptions opts;
+	opts.catalog = &cat;
+	RelNodePtr result = optimize(std::move(join), opts);
+
+	REQUIRE(result->kind() == RelKind::Spj);
+	const SpjRelation &spj = static_cast<const SpjRelation &>(*result);
+	bool nativeJoin = false;
+	for (const auto &c : spj.whereConds) {
+		if (c == "t1.\"capIQCompanyID\" = t2.\"parent\"") {
+			nativeJoin = true;
+		}
+	}
+	CHECK(nativeJoin);
+}
+
+namespace {
+
+// A single-source SpjRelation carrying self-join-elimination subject metadata.
+RelNodePtr makeSubjectSpj(const std::string &alias, const std::string &table, const std::string &subjectVar,
+                          const std::string &subjectKeySig, std::vector<ColumnInfo> cols, bool distinct) {
+	RelNodePtr node(new SpjRelation());
+	SpjRelation &spj = static_cast<SpjRelation &>(*node);
+	SpjSource src;
+	src.sql = "\"" + table + "\" AS " + alias;
+	src.alias = alias;
+	src.tableIdentity = table;
+	src.subjectVar = subjectVar;
+	src.subjectKeySig = subjectKeySig;
+	spj.sources.push_back(src);
+	spj.distinct = distinct;
+	spj.schema() = std::move(cols);
+	return node;
+}
+
+ColumnInfo templateSubjectCol(const std::string &var, const std::string &alias) {
+	ColumnInfo c;
+	c.var = var;
+	c.renderedExpr = "('person/' || CAST(" + alias + ".\"ID\" AS VARCHAR))";
+	c.prov = Provenance::TemplateExpr;
+	c.sourceAlias = alias;
+	c.templateString = "person/{ID}";
+	c.nonNull = true;
+	return c;
+}
+
+} // namespace
+
+TEST_CASE("optimize: self-join elimination collapses same-table same-subject scans", "[sparql2sql][ir]") {
+	// Two patterns over PEOPLE both with subject ?p (template person/{ID}),
+	// projecting different object columns - a self-join on the subject key.
+	std::vector<ColumnInfo> leftCols = {templateSubjectCol("p", "t1"), pureCol("a", "t1", "A", "people", true)};
+	std::vector<ColumnInfo> rightCols = {templateSubjectCol("p", "t2"), pureCol("b", "t2", "B", "people", true)};
+	RelNodePtr join =
+	    makeJoin(JoinKind::Inner, makeSubjectSpj("t1", "people", "p", "tmpl:person/{ID}", leftCols, true),
+	             makeSubjectSpj("t2", "people", "p", "tmpl:person/{ID}", rightCols, true), "p", /*nullSafe=*/false);
+
+	OptimizerOptions opts;
+	RelNodePtr result = optimize(std::move(join), opts);
+
+	REQUIRE(result->kind() == RelKind::Spj);
+	const SpjRelation &spj = static_cast<const SpjRelation &>(*result);
+	// Both PEOPLE scans merged into one source.
+	CHECK(spj.sources.size() == 1);
+	CHECK(spj.allVars() == std::set<std::string> {"p", "a", "b"});
+	// ?b's column reference was rewritten from the dropped t2 onto the kept t1.
+	const ColumnInfo *b = spj.column("b");
+	REQUIRE(b != nullptr);
+	CHECK(b->sourceAlias == "t1");
+	CHECK(b->renderedExpr == "CAST(t1.\"B\" AS VARCHAR)");
+	// The subject-key equality collapsed to trivially-true and was dropped.
+	for (const auto &c : spj.whereConds) {
+		CHECK(c.find(" = ") == std::string::npos);
+	}
+}

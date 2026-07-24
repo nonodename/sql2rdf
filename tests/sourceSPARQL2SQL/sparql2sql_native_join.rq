@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?co ?rel ?child
+WHERE {
+  ?co ex:capiq ?p .
+  ?rel ex:parent ?p .
+  ?rel ex:child ?child .
+}

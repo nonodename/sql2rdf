@@ -23,12 +23,15 @@
 #include "sparql2sql/TranslatedPattern.h"
 #include "sparql2sql/TranslationError.h"
 #include "sparql2sql/TriplePatternTranslator.h"
+#include "sparql2sql/ir/RelNode.h"
+#include "sparql2sql/ir/SqlRenderer.h"
 
 using r2rml::R2RMLMapping;
 using r2rml::R2RMLParser;
 using sparql::Parser;
 using sparql::ast::BasicGraphPattern;
 using sparql2sql::DuckDbDialect;
+using sparql2sql::renderRelation;
 using sparql2sql::TranslatedPattern;
 using sparql2sql::translateTriplePattern;
 using sparql2sql::TranslationContext;
@@ -43,6 +46,12 @@ const sparql::ast::TriplePattern &nthTriple(const sparql::ast::Query &q, std::si
 	return bgp.triples.at(tripleIndex);
 }
 
+// Translate a triple pattern to IR and render it back to a TranslatedPattern
+// for structural (substring) inspection.
+TranslatedPattern translated(const sparql::ast::TriplePattern &tp, TranslationContext &ctx) {
+	return renderRelation(*translateTriplePattern(tp, ctx), ctx);
+}
+
 } // namespace
 
 TEST_CASE("translateTriplePattern: multiple candidates combine via UNION BY NAME") {
@@ -54,7 +63,7 @@ TEST_CASE("translateTriplePattern: multiple candidates combine via UNION BY NAME
 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
-	TranslatedPattern result = translateTriplePattern(nthTriple(*q, 0), ctx);
+	TranslatedPattern result = translated(nthTriple(*q, 0), ctx);
 
 	CHECK(result.boundVars.count("e") == 1);
 	CHECK(result.boundVars.count("n") == 1);
@@ -76,7 +85,7 @@ TEST_CASE("translateTriplePattern: a ReferencingObjectMap POM generates a real S
 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
-	TranslatedPattern result = translateTriplePattern(nthTriple(*q, 0), ctx);
+	TranslatedPattern result = translated(nthTriple(*q, 0), ctx);
 
 	CHECK(result.boundVars.count("e") == 1);
 	CHECK(result.boundVars.count("d") == 1);
@@ -98,7 +107,7 @@ TEST_CASE("translateTriplePattern: rr:class candidates for a constant rdf:type p
 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
-	TranslatedPattern result = translateTriplePattern(nthTriple(*q, 0), ctx);
+	TranslatedPattern result = translated(nthTriple(*q, 0), ctx);
 
 	CHECK(result.boundVars.count("o") == 1);
 	CHECK(result.sql.find("\"ORDERS\"") != std::string::npos);
@@ -115,7 +124,7 @@ TEST_CASE("translateTriplePattern: variable predicate matches both rr:class and 
 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
-	TranslatedPattern result = translateTriplePattern(nthTriple(*q, 0), ctx);
+	TranslatedPattern result = translated(nthTriple(*q, 0), ctx);
 
 	CHECK(result.boundVars.count("e") == 1);
 	CHECK(result.boundVars.count("c") == 1);
@@ -138,7 +147,7 @@ TEST_CASE("translateTriplePattern: self-join guard for a variable repeated acros
 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
-	TranslatedPattern result = translateTriplePattern(nthTriple(*q, 0), ctx);
+	TranslatedPattern result = translated(nthTriple(*q, 0), ctx);
 
 	// Only ONE output column for ?e, despite it appearing as both subject
 	// and object of the triple pattern.
@@ -157,7 +166,7 @@ TEST_CASE("translateTriplePattern: bound predicate and bound object (rr:predicat
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
 
-	TranslatedPattern result = translateTriplePattern(nthTriple(*q, 0, 0), ctx);
+	TranslatedPattern result = translated(nthTriple(*q, 0, 0), ctx);
 	REQUIRE(result.boundVars.size() == 1);
 	CHECK(result.boundVars.count("p") == 1);
 	CHECK(result.sql.find("\"PEOPLE\"") != std::string::npos);
@@ -175,7 +184,7 @@ TEST_CASE("translateTriplePattern: bound predicate via the general rr:predicateM
 
 	// Both triples sit in the same BasicGraphPattern (no combinator between
 	// them), so the second triple is triples[1] of element 0.
-	TranslatedPattern result = translateTriplePattern(nthTriple(*q, 0, 1), ctx);
+	TranslatedPattern result = translated(nthTriple(*q, 0, 1), ctx);
 	CHECK(result.boundVars.count("p") == 1);
 	CHECK(result.boundVars.count("n") == 1);
 	CHECK(result.sql.find("\"NAME\"") != std::string::npos);
@@ -191,7 +200,7 @@ TEST_CASE("translateTriplePattern: a pattern matching zero candidates is a valid
 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
-	TranslatedPattern result = translateTriplePattern(nthTriple(*q, 0), ctx);
+	TranslatedPattern result = translated(nthTriple(*q, 0), ctx);
 
 	CHECK(result.boundVars.count("x") == 1);
 	CHECK(result.boundVars.count("y") == 1);
