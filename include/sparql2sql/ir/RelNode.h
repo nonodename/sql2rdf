@@ -103,6 +103,18 @@ struct SpjSource {
 	std::string sql;           ///< e.g. `"company" AS t1` or `(<view sql>) AS t1`.
 	std::string alias;         ///< the primary alias introduced by this source.
 	std::string tableIdentity; ///< table name, or a stable key for a view/join source.
+
+	/// Self-join-elimination metadata. `subjectVar` is the SPARQL variable
+	/// bound to this source's subject position; `subjectKeySig` is an
+	/// alias-independent signature of its subject term map (e.g.
+	/// "tmpl:<template>" or "col:<column>"). Two sources with the same
+	/// tableIdentity, the same non-empty subjectVar, and the same non-empty
+	/// subjectKeySig denote the same table row and may be merged. Left empty
+	/// for sources whose subject isn't a simple single-table key (e.g. a
+	/// referencing-object-map's child-JOIN-parent source), which are never
+	/// merged.
+	std::string subjectVar;
+	std::string subjectKeySig;
 };
 
 /// The fused Select-Project-Join block. A single triple-pattern candidate is

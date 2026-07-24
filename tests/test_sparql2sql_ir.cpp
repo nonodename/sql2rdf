@@ -196,3 +196,63 @@ TEST_CASE("optimize: a type catalog enables a native (uncast) join key", "[sparq
 	}
 	CHECK(nativeJoin);
 }
+
+namespace {
+
+// A single-source SpjRelation carrying self-join-elimination subject metadata.
+RelNodePtr makeSubjectSpj(const std::string &alias, const std::string &table, const std::string &subjectVar,
+                          const std::string &subjectKeySig, std::vector<ColumnInfo> cols, bool distinct) {
+	RelNodePtr node(new SpjRelation());
+	SpjRelation &spj = static_cast<SpjRelation &>(*node);
+	SpjSource src;
+	src.sql = "\"" + table + "\" AS " + alias;
+	src.alias = alias;
+	src.tableIdentity = table;
+	src.subjectVar = subjectVar;
+	src.subjectKeySig = subjectKeySig;
+	spj.sources.push_back(src);
+	spj.distinct = distinct;
+	spj.schema() = std::move(cols);
+	return node;
+}
+
+ColumnInfo templateSubjectCol(const std::string &var, const std::string &alias) {
+	ColumnInfo c;
+	c.var = var;
+	c.renderedExpr = "('person/' || CAST(" + alias + ".\"ID\" AS VARCHAR))";
+	c.prov = Provenance::TemplateExpr;
+	c.sourceAlias = alias;
+	c.templateString = "person/{ID}";
+	c.nonNull = true;
+	return c;
+}
+
+} // namespace
+
+TEST_CASE("optimize: self-join elimination collapses same-table same-subject scans", "[sparql2sql][ir]") {
+	// Two patterns over PEOPLE both with subject ?p (template person/{ID}),
+	// projecting different object columns - a self-join on the subject key.
+	std::vector<ColumnInfo> leftCols = {templateSubjectCol("p", "t1"), pureCol("a", "t1", "A", "people", true)};
+	std::vector<ColumnInfo> rightCols = {templateSubjectCol("p", "t2"), pureCol("b", "t2", "B", "people", true)};
+	RelNodePtr join =
+	    makeJoin(JoinKind::Inner, makeSubjectSpj("t1", "people", "p", "tmpl:person/{ID}", leftCols, true),
+	             makeSubjectSpj("t2", "people", "p", "tmpl:person/{ID}", rightCols, true), "p", /*nullSafe=*/false);
+
+	OptimizerOptions opts;
+	RelNodePtr result = optimize(std::move(join), opts);
+
+	REQUIRE(result->kind() == RelKind::Spj);
+	const SpjRelation &spj = static_cast<const SpjRelation &>(*result);
+	// Both PEOPLE scans merged into one source.
+	CHECK(spj.sources.size() == 1);
+	CHECK(spj.allVars() == std::set<std::string>{"p", "a", "b"});
+	// ?b's column reference was rewritten from the dropped t2 onto the kept t1.
+	const ColumnInfo *b = spj.column("b");
+	REQUIRE(b != nullptr);
+	CHECK(b->sourceAlias == "t1");
+	CHECK(b->renderedExpr == "CAST(t1.\"B\" AS VARCHAR)");
+	// The subject-key equality collapsed to trivially-true and was dropped.
+	for (const auto &c : spj.whereConds) {
+		CHECK(c.find(" = ") == std::string::npos);
+	}
+}

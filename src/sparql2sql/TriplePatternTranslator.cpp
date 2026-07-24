@@ -199,7 +199,7 @@ void addUnique(std::vector<std::string> &out, const std::vector<std::string> &mo
 void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromSql, const std::string &fromAlias,
                      const std::string &fromIdentity, const TermSource &subjectSrc, const TermSource &predicateSrc,
                      const TermSource &objectSrc, const PositionSpec &subjectSpec, const PredicateSpec &predicateSpec,
-                     const PositionSpec &objectSpec, TranslationContext &ctx) {
+                     const PositionSpec &objectSpec, bool mergeableSubject, TranslationContext &ctx) {
 	const SqlDialect &dialect = ctx.dialect();
 
 	std::vector<std::string> whereConditions;
@@ -290,6 +290,18 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 	source.sql = fromSql;
 	source.alias = fromAlias;
 	source.tableIdentity = fromIdentity;
+	if (mergeableSubject && subjectSpec.isVar) {
+		std::string sig;
+		if (subjectR.prov == Provenance::TemplateExpr && !subjectR.templateString.empty()) {
+			sig = "tmpl:" + subjectR.templateString;
+		} else if (subjectR.prov == Provenance::PureColumn && !subjectR.columnName.empty()) {
+			sig = "col:" + subjectR.columnName;
+		}
+		if (!sig.empty()) {
+			source.subjectVar = subjectSpec.varName;
+			source.subjectKeySig = sig;
+		}
+	}
 	spj.sources.push_back(source);
 	spj.whereConds = whereConditions;
 	spj.distinct = true;
@@ -353,7 +365,7 @@ RelNodePtr translateTriplePattern(const sparql::ast::TriplePattern &tp, Translat
 				objectSrc.isConstant = true;
 				objectSrc.constantValue = classIri;
 				tryAddCandidate(branches, fromSql, alias, childIdentity, subjectSrc, predicateSrc, objectSrc,
-				                subjectSpec, predicateSpec, objectSpec, ctx);
+				                subjectSpec, predicateSpec, objectSpec, /*mergeableSubject=*/true, ctx);
 			}
 		}
 
@@ -411,7 +423,8 @@ RelNodePtr translateTriplePattern(const sparql::ast::TriplePattern &tp, Translat
 						objectSrc.tableIdentity = logicalTableIdentity(*parentTm.logicalTable);
 
 						tryAddCandidate(branches, fromSql, childAlias, childIdentity, subjectSrc, predicateSrc,
-						                objectSrc, subjectSpec, predicateSpec, objectSpec, ctx);
+						                objectSrc, subjectSpec, predicateSpec, objectSpec,
+						                /*mergeableSubject=*/false, ctx);
 						continue;
 					}
 
@@ -431,7 +444,7 @@ RelNodePtr translateTriplePattern(const sparql::ast::TriplePattern &tp, Translat
 					objectSrc.tableIdentity = childIdentity;
 
 					tryAddCandidate(branches, fromSql, alias, childIdentity, subjectSrc, predicateSrc, objectSrc,
-					                subjectSpec, predicateSpec, objectSpec, ctx);
+					                subjectSpec, predicateSpec, objectSpec, /*mergeableSubject=*/true, ctx);
 				}
 			}
 		}
