@@ -50,6 +50,8 @@ Test fixtures: R2RML Turtle mappings in `tests/sourceR2RML/`, YARRRML equivalent
 
 `test_runner` can only assert on the *structural* shape of translator-generated SQL (string content, e.g. "contains a LEFT OUTER JOIN"), since it deliberately never links DuckDB. Real execution-correctness validation for the SPARQL-to-SQL translator lives in a separate, gated CTest target, `sparql2sql_duckdb_tests` (`tests/duckdb/`), built only `if(SQL2RDF_BUILD_TESTS AND SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB))` — it translates each fixture query, executes the SQL against a real in-memory DuckDB database seeded with toy data, and asserts on actual result rows. This is the one other place besides the CLI that requires DuckDB; it's kept as its own target specifically so `test_runner`'s "no DuckDB needed" guarantee above stays true. Run it directly (`./build/sparql2sql_duckdb_tests`) once built; its cases are also registered with CTest alongside `test_runner`'s (`ctest --test-dir build` runs both).
 
+Test coverage (`test_runner` only): configure with `-DSQL2RDF_ENABLE_COVERAGE=ON` (GCC/Clang only, off by default since it disables optimization), then `cmake --build build --target coverage`. Requires `gcovr` on `PATH`; renders an HTML report to `build/coverage/index.html`.
+
 ## Lint / format
 
 Requires `clang-format` and `clang-tidy` on PATH:

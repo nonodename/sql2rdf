@@ -392,3 +392,53 @@ if(SQL2RDF_IS_TOP_LEVEL)
     message(STATUS "clang-tidy not found; 'tidy' target unavailable")
   endif()
 endif()
+
+# ----------------------------------------------------------------------------
+# coverage target - instruments the core libraries and test_runner with
+# GCC/Clang's --coverage flag and renders a report with gcovr. Opt-in via
+# SQL2RDF_ENABLE_COVERAGE since instrumentation disables optimization; not
+# meant for regular builds.
+# ----------------------------------------------------------------------------
+option(SQL2RDF_ENABLE_COVERAGE "Instrument libraries and test_runner with --coverage for the 'coverage' target" OFF)
+
+if(SQL2RDF_IS_TOP_LEVEL AND SQL2RDF_BUILD_TESTS)
+  if(SQL2RDF_ENABLE_COVERAGE)
+    if(NOT (CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU"))
+      message(WARNING "SQL2RDF_ENABLE_COVERAGE requires GCC or Clang; coverage instrumentation not applied for ${CMAKE_CXX_COMPILER_ID}")
+    else()
+      foreach(cov_target sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql sql2rdf_sparql2sql test_runner)
+        target_compile_options(${cov_target} PRIVATE --coverage -O0 -g)
+      endforeach()
+      # Only the final executable needs the libgcov runtime linked in.
+      target_link_libraries(test_runner PRIVATE --coverage)
+    endif()
+
+    find_program(GCOVR_EXE NAMES gcovr)
+    if(GCOVR_EXE)
+      add_custom_target(coverage
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/coverage
+        COMMAND $<TARGET_FILE:test_runner>
+        COMMAND ${GCOVR_EXE} --root ${CMAKE_CURRENT_SOURCE_DIR}
+          --filter "${CMAKE_CURRENT_SOURCE_DIR}/src/.*"
+          --filter "${CMAKE_CURRENT_SOURCE_DIR}/include/.*"
+          --object-directory ${CMAKE_CURRENT_BINARY_DIR}
+          --html --html-details -o ${CMAKE_CURRENT_BINARY_DIR}/coverage/index.html
+          --print-summary
+        DEPENDS test_runner
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        COMMENT "Running tests with coverage instrumentation and generating gcovr report..."
+        VERBATIM
+      )
+    else()
+      add_custom_target(coverage
+        COMMAND ${CMAKE_COMMAND} -E echo "gcovr not found. Install it with: pip install gcovr, or: brew install gcovr"
+        COMMENT "gcovr missing"
+      )
+    endif()
+  else()
+    add_custom_target(coverage
+      COMMAND ${CMAKE_COMMAND} -E echo "Re-configure with -DSQL2RDF_ENABLE_COVERAGE=ON to build with coverage instrumentation and use the coverage target."
+      COMMENT "Coverage instrumentation not enabled"
+    )
+  endif()
+endif()

@@ -22,6 +22,7 @@ The project is structured as a reusable library plus a thin CLI application:
 | `format` | utility | none | Apply `clang-format` to all project C++ sources in-place. Only defined when building standalone. |
 | `format-check` | utility | none | Check formatting with `clang-format --dry-run --Werror`; exits non-zero if any file would change. Used in CI. Only defined when building standalone. |
 | `tidy` | utility | none | Run `clang-tidy` static analysis using `.clang-tidy`. Builds `sql2rdf_r2rml` first to ensure a fresh compilation database. Only defined when building standalone. |
+| `coverage` | utility | none | Run `test_runner` and render a test coverage report with [gcovr](https://gcovr.com/). Requires configuring with `-DSQL2RDF_ENABLE_COVERAGE=ON` (adds `--coverage` instrumentation to the libraries and `test_runner`; GCC or Clang only) and `gcovr` on `PATH`. Report is written to `build/coverage/index.html`. Only defined when building standalone. |
 
 The [Serd](https://drobilla.net/software/serd/) RDF syntax library is included as a git submodule under `external/serd` and compiled from source into the `sql2rdf_r2rml` library.
 
@@ -125,6 +126,17 @@ cmake --build build --target format        # apply formatting in-place
 cmake --build build --target format-check  # check only (non-zero exit if any file would change)
 cmake --build build --target tidy          # run static analysis
 ```
+
+### Test coverage
+
+Requires `gcovr` on `PATH` (e.g. `pip install gcovr` or `brew install gcovr`) and GCC or Clang. Configure with coverage instrumentation enabled, then build the `coverage` target:
+
+```sh
+cmake -B build -DSQL2RDF_ENABLE_COVERAGE=ON
+cmake --build build --target coverage
+```
+
+This builds `test_runner` with `--coverage`, runs it, and writes an HTML report to `build/coverage/index.html` (plus a summary printed to the terminal). `SQL2RDF_ENABLE_COVERAGE` is off by default since instrumentation disables optimization.
 
 ### DuckDB dependency
 
