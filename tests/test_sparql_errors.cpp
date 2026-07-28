@@ -66,6 +66,47 @@ TEST_CASE("Parsing a nonexistent file throws plain std::runtime_error, not Parse
 	REQUIRE_THROWS_AS(parser.parseFile(SOURCE_SPARQL_DIR "does_not_exist.rq"), std::runtime_error);
 }
 
+TEST_CASE("An empty query raises a ParseError naming the expected query forms") {
+	Parser parser;
+	bool threw = false;
+	try {
+		parser.parseString("");
+	} catch (const ParseError &e) {
+		threw = true;
+		REQUIRE(std::string(e.what()).find("expected SELECT, CONSTRUCT, DESCRIBE or ASK") != std::string::npos);
+	}
+	REQUIRE(threw);
+}
+
+TEST_CASE("Trailing input after a complete query raises a ParseError") {
+	Parser parser;
+	bool threw = false;
+	try {
+		parser.parseString("SELECT * WHERE { ?s ?p ?o } EXTRA");
+	} catch (const ParseError &e) {
+		threw = true;
+		REQUIRE(std::string(e.what()).find("unexpected trailing input") != std::string::npos);
+	}
+	REQUIRE(threw);
+}
+
+TEST_CASE("BIND missing 'AS' raises a ParseError expecting the keyword") {
+	Parser parser;
+	REQUIRE_THROWS_AS(parser.parseString("SELECT * WHERE { BIND(?x + 1 ?y) }"), ParseError);
+}
+
+TEST_CASE("BIND with a non-variable after AS raises a ParseError expecting a variable") {
+	Parser parser;
+	bool threw = false;
+	try {
+		parser.parseString("SELECT * WHERE { BIND(?x AS 5) }");
+	} catch (const ParseError &e) {
+		threw = true;
+		REQUIRE(std::string(e.what()).find("expected a variable") != std::string::npos);
+	}
+	REQUIRE(threw);
+}
+
 TEST_CASE("ParseError derives from std::runtime_error so generic catch sites still work") {
 	Parser parser;
 	bool caught = false;

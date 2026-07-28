@@ -11,6 +11,7 @@
 
 #include <serd/serd.h>
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <sstream>
@@ -325,6 +326,14 @@ TEST_CASE("MapSQLRow::isNull returns false for a present, non-null column") {
 	auto row = makeRow({{"NAME", StringSQLValue(std::string("SMITH"))}});
 	REQUIRE_FALSE(row.isNull("NAME"));
 	REQUIRE(row.isNull("MISSING"));
+}
+
+TEST_CASE("MapSQLRow::columnNames lists every column, order-independent") {
+	auto row = makeRow({{"NAME", StringSQLValue(std::string("SMITH"))}, {"AGE", StringSQLValue(42)}});
+	auto names = row.columnNames();
+	REQUIRE(names.size() == 2);
+	REQUIRE(std::find(names.begin(), names.end(), "NAME") != names.end());
+	REQUIRE(std::find(names.begin(), names.end(), "AGE") != names.end());
 }
 
 // ---------------------------------------------------------------------------

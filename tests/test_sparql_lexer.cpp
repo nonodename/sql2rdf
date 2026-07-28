@@ -161,6 +161,105 @@ TEST_CASE("Lexer throws on an unterminated string literal") {
 	REQUIRE_THROWS_AS(tokenize("\"abc"), sparql::ParseError);
 }
 
+TEST_CASE("Lexer's codepoint-escape hex parsing handles lowercase and uppercase A-F digits") {
+	// é (lowercase hex digit 'e') and É (uppercase hex digit 'C')
+	// both need a 2-byte UTF-8 encoding; the existing codepoint test only
+	// used decimal digits, never reaching hexValue()'s letter branches.
+	auto tokens = tokenize("<urn:\\u00e9\\u00C9>");
+	REQUIRE(tokens[0].type == TokenType::Iriref);
+	REQUIRE(tokens[0].text == "urn:\xC3\xA9\xC3\x89");
+}
+
+TEST_CASE("An invalid \\u escape (non-hex digits) is left as literal text") {
+	auto tokens = tokenize("<urn:\\u00zz>");
+	REQUIRE(tokens[0].type == TokenType::Iriref);
+	REQUIRE(tokens[0].text == "urn:\\u00zz");
+}
+
+TEST_CASE("Lexer tokenizes <= and >= as single relational operators") {
+	auto tokens = tokenize("?a <= ?b >= ?c");
+	REQUIRE(tokens[1].type == TokenType::LessEquals);
+	REQUIRE(tokens[3].type == TokenType::GreaterEquals);
+}
+
+TEST_CASE("Lexer tokenizes ^^ as a single Caret-Caret datatype marker") {
+	auto tokens = tokenize("\"5\"^^<urn:int>");
+	REQUIRE(tokens[1].type == TokenType::Caret);
+	REQUIRE(tokens[1].text == "^^");
+}
+
+TEST_CASE("A lone underscore not followed by ':' falls through to a keyword-shaped token") {
+	auto tokens = tokenize("_foo");
+	REQUIRE(tokens[0].type == TokenType::Keyword);
+}
+
+TEST_CASE("A lone '&' not followed by another '&' is a lexer error") {
+	REQUIRE_THROWS_AS(tokenize("&"), sparql::ParseError);
+}
+
+TEST_CASE("A truly unrecognized character raises a lexer error") {
+	REQUIRE_THROWS_AS(tokenize("`"), sparql::ParseError);
+}
+
+TEST_CASE("An unclosed '<' with no '>' anywhere in the input is treated as an operator") {
+	auto tokens = tokenize("<abc");
+	REQUIRE(tokens[0].type == TokenType::Less);
+}
+
+TEST_CASE("PN_LOCAL supports %-escapes and backslash-escapes, and rejects malformed ones") {
+	auto ok = tokenize("ex:foo%20bar ex:foo\\-bar");
+	REQUIRE(ok[0].type == TokenType::PnameLn);
+	REQUIRE(ok[0].text == "ex:foo%20bar");
+	REQUIRE(ok[1].type == TokenType::PnameLn);
+	// The backslash-escape consumes the '\' and keeps only the escaped char.
+	REQUIRE(ok[1].text == "ex:foo-bar");
+
+	REQUIRE_THROWS_AS(tokenize("ex:foo%2"), sparql::ParseError);
+	// 'z' is not in the PN_LOCAL_ESC allowed-character set.
+	REQUIRE_THROWS_AS(tokenize("ex:foo\\zbar"), sparql::ParseError);
+}
+
+TEST_CASE("PN_LOCAL trims a trailing '.' back onto the stream") {
+	auto tokens = tokenize("ex:foo. ex:bar");
+	REQUIRE(tokens[0].type == TokenType::PnameLn);
+	REQUIRE(tokens[0].text == "ex:foo");
+	REQUIRE(tokens[1].type == TokenType::Dot);
+}
+
+TEST_CASE("A '$' or '_:' not followed by a valid name-start character is a lexer error") {
+	REQUIRE_THROWS_AS(tokenize("$"), sparql::ParseError);
+	REQUIRE_THROWS_AS(tokenize("_:"), sparql::ParseError);
+}
+
+TEST_CASE("A '+.'/'-.' sign-plus-dot with no following digit is an invalid numeric literal") {
+	REQUIRE_THROWS_AS(tokenize("+."), sparql::ParseError);
+}
+
+TEST_CASE("An exponent may carry an explicit sign, and requires at least one digit") {
+	auto tokens = tokenize("1e+5");
+	REQUIRE(tokens[0].type == TokenType::Double);
+	REQUIRE(tokens[0].text == "1e+5");
+
+	REQUIRE_THROWS_AS(tokenize("1e+"), sparql::ParseError);
+}
+
+TEST_CASE("A raw newline inside a short (non-triple-quoted) string literal is an error") {
+	REQUIRE_THROWS_AS(tokenize("'abc\ndef'"), sparql::ParseError);
+}
+
+TEST_CASE("Lexer supports the remaining single-char string escapes and rejects an unknown one") {
+	auto tokens = tokenize("'\\r\\b\\f\\\"\\'\\\\'");
+	REQUIRE(tokens[0].type == TokenType::StringLiteral);
+	REQUIRE(tokens[0].text == "\r\b\f\"'\\");
+
+	REQUIRE_THROWS_AS(tokenize("'\\q'"), sparql::ParseError);
+}
+
+TEST_CASE("'@' not followed by a letter, and a trailing '-' not followed by alnum, are errors") {
+	REQUIRE_THROWS_AS(tokenize("@"), sparql::ParseError);
+	REQUIRE_THROWS_AS(tokenize("@en-"), sparql::ParseError);
+}
+
 TEST_CASE("Lexer falls back to '<' as an operator when no valid IRIREF follows") {
 	// "<urn:has space>" can't be a valid IRIREF (it contains a space before
 	// any '>'), so '<' is tokenized as the relational operator instead of

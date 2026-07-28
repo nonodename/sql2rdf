@@ -133,3 +133,31 @@ TEST_CASE("Unknown prefix use raises a ParseError") {
 	Parser parser;
 	REQUIRE_THROWS_AS(parser.parseString("SELECT * WHERE { ?s undeclared:p ?o }"), ParseError);
 }
+
+TEST_CASE("Plain FROM (non-NAMED) populates a Default dataset clause") {
+	Parser parser;
+	auto q = parser.parseString("SELECT * FROM <urn:g1> WHERE { ?s ?p ?o }");
+	REQUIRE(q->datasetClauses.size() == 1);
+	REQUIRE(q->datasetClauses[0].kind == DatasetClauseKind::Default);
+}
+
+TEST_CASE("BASE resolves absolute, scheme-only, root-relative, and plain-relative IRIREFs") {
+	Parser parser;
+	auto q = parser.parseString("BASE <http://example.org/data/>\n"
+	                            "SELECT * WHERE {"
+	                            "  ?s <http://other.example/abs> ?o1 ."
+	                            "  ?s <urn:isbn:123> ?o2 ."
+	                            "  ?s </rooted> ?o3 ."
+	                            "  ?s <relative> ?o4 ."
+	                            "}");
+	REQUIRE(q->prologue.baseIri == "http://example.org/data/");
+	const auto &bgp = static_cast<const BasicGraphPattern &>(*q->where->elements[0]);
+	REQUIRE(bgp.triples.size() == 4);
+	auto predValue = [&](std::size_t i) {
+		return static_cast<const sparql::ast::PredicatePath &>(*bgp.triples[i].predicate).iri->value;
+	};
+	REQUIRE(predValue(0) == "http://other.example/abs");
+	REQUIRE(predValue(1) == "urn:isbn:123");
+	REQUIRE(predValue(2) == "http://example.org/rooted");
+	REQUIRE(predValue(3) == "http://example.org/data/relative");
+}

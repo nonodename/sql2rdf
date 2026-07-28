@@ -1,0 +1,13 @@
+prefixes:
+  ex: http://example.com/ns#
+
+mappings:
+  measurement:
+    sources:
+      - table: MEASUREMENTS
+    s: http://data.example.com/measurement/$(ID)
+    po:
+      - p: ex:count
+        o:
+          value: $(COUNT)
+          datatype: xsd:integer

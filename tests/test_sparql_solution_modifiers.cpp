@@ -69,6 +69,32 @@ TEST_CASE("LIMIT and OFFSET may appear in either order") {
 	REQUIRE(offsetFirst->solutionModifier.offset == 2);
 }
 
+TEST_CASE("GROUP BY accepts a bare IRI/function-call key and a builtin-call key") {
+	Parser parser;
+	auto iriKey = parser.parseString("SELECT * WHERE { ?s <urn:p> ?o } GROUP BY <urn:someFunc>(?o)");
+	REQUIRE(iriKey->solutionModifier.groupBy.size() == 1);
+	REQUIRE(iriKey->solutionModifier.groupBy[0].expr->kind() == ExprKind::FunctionCall);
+
+	auto builtinKey = parser.parseString("SELECT * WHERE { ?s <urn:p> ?o } GROUP BY STRLEN(?o)");
+	REQUIRE(builtinKey->solutionModifier.groupBy.size() == 1);
+	REQUIRE(builtinKey->solutionModifier.groupBy[0].expr->kind() == ExprKind::BuiltInCall);
+}
+
+TEST_CASE("HAVING accepts multiple space-separated conditions") {
+	Parser parser;
+	auto q = parser.parseString(
+	    "SELECT (SUM(?n) AS ?s) WHERE { ?x <urn:n> ?n } GROUP BY ?x HAVING (?s > 1) (?s < 100)");
+	REQUIRE(q->solutionModifier.having.size() == 2);
+}
+
+TEST_CASE("ORDER BY ASC(...) explicit form and ordering by an arbitrary expression") {
+	Parser parser;
+	auto q = parser.parseString("SELECT ?x WHERE { ?x <urn:p> ?y } ORDER BY ASC(?x) (?x + 1)");
+	REQUIRE(q->solutionModifier.orderBy.size() == 2);
+	REQUIRE(q->solutionModifier.orderBy[0].direction == OrderDirection::Asc);
+	REQUIRE(q->solutionModifier.orderBy[1].expr->kind() == ExprKind::Binary);
+}
+
 TEST_CASE("A trailing VALUES clause on the outer query is distinct from an inner VALUES element") {
 	Parser parser;
 	auto q = parser.parseString("SELECT ?book WHERE { ?book <urn:title> ?title } VALUES ?book { <urn:b1> <urn:b2> }");

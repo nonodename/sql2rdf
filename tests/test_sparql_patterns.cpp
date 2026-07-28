@@ -231,3 +231,29 @@ TEST_CASE("SERVICE SILENT sets the silent flag and keeps the endpoint term") {
 	REQUIRE(s.silent);
 	REQUIRE(s.endpoint->kind() == TermKind::Iri);
 }
+
+TEST_CASE("SERVICE with a variable endpoint sets endpoint to a Var term") {
+	Parser parser;
+	auto q = parser.parseString("SELECT * WHERE { SERVICE ?ep { ?s ?p ?o } }");
+	const auto &s = static_cast<const ServiceGraphPattern &>(*q->where->elements[0]);
+	REQUIRE_FALSE(s.silent);
+	REQUIRE(s.endpoint->kind() == TermKind::Var);
+}
+
+TEST_CASE("VALUES accepts a boolean literal as a data-block value") {
+	Parser parser;
+	auto q = parser.parseString("SELECT * WHERE { VALUES ?z { true false } }");
+	const auto &values = static_cast<const InlineData &>(*q->where->elements[0]);
+	REQUIRE(values.rows.size() == 2);
+	REQUIRE(values.rows[0][0]->kind() == TermKind::Literal);
+	REQUIRE(static_cast<const RdfLiteral &>(*values.rows[0][0]).lexicalForm == "true");
+}
+
+TEST_CASE("A CONSTRUCT template may use 'a' and a variable in predicate position") {
+	Parser parser;
+	auto q = parser.parseString("CONSTRUCT { ?s a ?type . ?s ?p ?o } WHERE { ?s ?p ?o }");
+	REQUIRE(q->constructTemplate.size() == 2);
+	REQUIRE(q->constructTemplate[0].predicate->kind() == PathKind::Predicate);
+	REQUIRE(static_cast<const PredicatePath &>(*q->constructTemplate[0].predicate).iri->lexicalForm == "a");
+	REQUIRE(q->constructTemplate[1].predicate->kind() == PathKind::Variable);
+}

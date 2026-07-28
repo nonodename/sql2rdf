@@ -169,6 +169,30 @@ TEST_CASE("unionAll: a variable bound in every branch stays bound; others become
 	CHECK(result.sql.find("UNION ALL BY NAME") != std::string::npos);
 }
 
+TEST_CASE("unionAll: a single branch is returned unchanged, with no UNION emitted") {
+	R2RMLMapping mapping;
+	DuckDbDialect dialect;
+	TranslationContext ctx(mapping, dialect);
+
+	std::vector<RelNodePtr> branches;
+	branches.push_back(makeRel("SELECT ONLY_BRANCH", {"e"}));
+	std::string sql = renderedSql(unionAll(std::move(branches), ctx), ctx);
+	CHECK(sql == "SELECT ONLY_BRANCH");
+}
+
+TEST_CASE("leftOuterJoin: OPTIONAL with nothing preceding still joins against the one-row identity") {
+	R2RMLMapping mapping;
+	DuckDbDialect dialect;
+	TranslationContext ctx(mapping, dialect);
+
+	std::string identitySql = renderedSql(identityRelation(ctx), ctx);
+	RelNodePtr node = leftOuterJoin(identityRelation(ctx), makeRel("SELECT ...", {"x"}), ctx);
+	TranslatedPattern result = renderRelation(*node, ctx);
+	CHECK(result.sql.find("LEFT OUTER JOIN") != std::string::npos);
+	CHECK(result.sql != identitySql);
+	CHECK(result.optionalVars.count("x") == 1);
+}
+
 // --- Integration-level tests through the fold, using real fixtures ---
 
 TEST_CASE("fold: AND joins consecutive triples on shared variables") {
@@ -289,6 +313,45 @@ TEST_CASE("fold: GRAPH throws a clear TranslationError (no named-graph support)"
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
 	CHECK_THROWS_AS(fold(*q->where, ctx), TranslationError);
+}
+
+TEST_CASE("fold: SERVICE throws a clear TranslationError (no federated query support)") {
+	Parser parser;
+	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "unsupported_service.rq");
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	REQUIRE(mapping.isValid());
+
+	DuckDbDialect dialect;
+	TranslationContext ctx(mapping, dialect);
+	CHECK_THROWS_AS(fold(*q->where, ctx), TranslationError);
+}
+
+TEST_CASE("fold: VALUES with zero rows produces a WHERE FALSE table") {
+	Parser parser;
+	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "emp_dept_values_empty.rq");
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	REQUIRE(mapping.isValid());
+
+	DuckDbDialect dialect;
+	TranslationContext ctx(mapping, dialect);
+	TranslatedPattern result = renderRelation(*fold(*q->where, ctx), ctx);
+	CHECK(result.sql.find("WHERE FALSE") != std::string::npos);
+}
+
+TEST_CASE("fold: BIND over a variable made optional by a preceding OPTIONAL is itself optional") {
+	Parser parser;
+	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "emp_dept_optional_bind.rq");
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	REQUIRE(mapping.isValid());
+
+	DuckDbDialect dialect;
+	TranslationContext ctx(mapping, dialect);
+	TranslatedPattern result = renderRelation(*fold(*q->where, ctx), ctx);
+	CHECK(result.optionalVars.count("d") == 1);
+	CHECK(result.optionalVars.count("dd") == 1);
 }
 
 TEST_CASE("translateQuery: CONSTRUCT is rejected with a clear TranslationError") {

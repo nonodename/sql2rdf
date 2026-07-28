@@ -18,6 +18,7 @@
 #include "r2rml/R2RMLParser.h"
 #include "sparql-parser/Parser.h"
 #include "sparql2sql/DuckDbDialect.h"
+#include "sparql2sql/TranslationError.h"
 #include "sparql2sql/Translator.h"
 
 using r2rml::R2RMLMapping;
@@ -132,4 +133,107 @@ TEST_CASE("ASK ignores ORDER BY/LIMIT/OFFSET but respects GROUP BY/HAVING") {
 	CHECK(sql.find("HAVING") != std::string::npos);
 	CHECK(sql.find("ORDER BY") == std::string::npos);
 	CHECK(sql.find("LIMIT") == std::string::npos);
+}
+
+TEST_CASE("HAVING: containsAggregate recurses through Unary/In/BuiltInCall/IriRef/Exists wrappers") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?g (SUM(?e) AS ?s) WHERE { ?e ex:name ?n . ?e ex:department ?g . } "
+	                            "GROUP BY ?g "
+	                            "HAVING (!(?g = \"X\") && (?g IN (\"A\", \"B\")) && BOUND(?g) && "
+	                            "(?g != <urn:const>) && EXISTS { ?e ex:name ?z } && (SUM(?e) > 0))",
+	                            mapping);
+	CHECK(sql.find("HAVING") != std::string::npos);
+}
+
+TEST_CASE("HAVING: containsAggregate's FunctionCall arm runs even though translation later throws") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	CHECK_THROWS_AS(translate("SELECT ?g WHERE { ?e ex:name ?n . ?e ex:department ?g . } GROUP BY ?g "
+	                          "HAVING (<urn:f>(?g) && (SUM(?n) > 0))",
+	                          mapping),
+	                sparql2sql::TranslationError);
+}
+
+TEST_CASE("An aggregate only inside HAVING (not in the SELECT list) still triggers grouping") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate(
+	    "SELECT ?g WHERE { ?e ex:name ?n . ?e ex:department ?g . } GROUP BY ?g HAVING (COUNT(?n) > 1)", mapping);
+	CHECK(sql.find("HAVING") != std::string::npos);
+}
+
+TEST_CASE("Multiple HAVING conditions are joined with AND") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?g (COUNT(?n) AS ?c) WHERE { ?e ex:name ?n . ?e ex:department ?g . } "
+	                            "GROUP BY ?g HAVING (COUNT(?n) > 1) (?g != \"\")",
+	                            mapping);
+	CHECK(sql.find("HAVING") != std::string::npos);
+	CHECK(sql.find(" AND ") != std::string::npos);
+}
+
+TEST_CASE("Multiple ORDER BY conditions are comma-joined") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?e ?n WHERE { ?e ex:name ?n . } ORDER BY ?e ?n", mapping);
+	CHECK(sql.find("ORDER BY") != std::string::npos);
+	std::size_t orderByPos = sql.find("ORDER BY");
+	CHECK(sql.find(", ", orderByPos) != std::string::npos);
+}
+
+TEST_CASE("A trailing VALUES clause merges with the WHERE pattern via an inner join") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?e ?n WHERE { ?e ex:name ?n . } VALUES ?n { \"SMITH\" }", mapping);
+	CHECK(sql.find("SMITH") != std::string::npos);
+}
+
+TEST_CASE("SELECT * projects every in-scope variable") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT * WHERE { ?e ex:name ?n . }", mapping);
+	CHECK(sql.find("\"v_e\"") != std::string::npos);
+	CHECK(sql.find("\"v_n\"") != std::string::npos);
+}
+
+TEST_CASE("Bare-projecting a GROUP BY (expr AS ?var) alias that isn't an original source var") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql =
+	    translate("SELECT ?y WHERE { ?e ex:name ?n . } GROUP BY (STRLEN(?n) + 1 AS ?y)", mapping);
+	CHECK(sql.find("\"v_y\"") != std::string::npos);
+}
+
+TEST_CASE("Multiple GROUP BY keys are comma-joined") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql =
+	    translate("SELECT ?g ?n WHERE { ?e ex:name ?n . ?e ex:department ?g . } GROUP BY ?g ?n", mapping);
+	std::size_t groupByPos = sql.find("GROUP BY");
+	REQUIRE(groupByPos != std::string::npos);
+	CHECK(sql.find(", ", groupByPos) != std::string::npos);
+}
+
+TEST_CASE("A non-star SubSelect populates its own boundVars distinct from the outer SELECT *") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT * WHERE { { SELECT ?e WHERE { ?e ex:name ?n . } } }", mapping);
+	CHECK(sql.find("\"v_e\"") != std::string::npos);
+}
+
+TEST_CASE("ASK with a trailing VALUES clause merges via an inner join") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("ASK { ?e ex:name ?n . } VALUES ?n { \"SMITH\" }", mapping);
+	CHECK(sql.find("SMITH") != std::string::npos);
+}
+
+TEST_CASE("ASK with GROUP BY (expr AS ?var) and HAVING emits a select-list prefix column") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql =
+	    translate("ASK { ?e ex:name ?n . } GROUP BY (UCASE(?n) AS ?nn) HAVING (?n != \"\")", mapping);
+	CHECK(sql.find("UPPER(") != std::string::npos);
+	CHECK(sql.find("HAVING") != std::string::npos);
 }

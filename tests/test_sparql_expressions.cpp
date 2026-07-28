@@ -187,3 +187,21 @@ TEST_CASE("A malformed expression (mismatched parens) raises a ParseError") {
 	Parser parser;
 	REQUIRE_THROWS_AS(parser.parseString("SELECT * WHERE { ?x ?p ?o FILTER(?o = 1 }"), ParseError);
 }
+
+TEST_CASE("A bare boolean literal is a valid standalone filter expression") {
+	Parser parser;
+	auto q = parser.parseString("SELECT * WHERE { ?a ?p ?x FILTER(true) }");
+	REQUIRE(filterExprOf(*q).kind() == ExprKind::Literal);
+}
+
+TEST_CASE("A custom function call with explicit empty NIL parens has no arguments") {
+	Parser parser;
+	auto q = parser.parseString("SELECT * WHERE { ?a ?p ?x FILTER(<urn:f>()) }");
+	const auto &fc = static_cast<const FunctionCallExpr &>(filterExprOf(*q));
+	REQUIRE(fc.args.empty());
+}
+
+TEST_CASE("A builtin call with fewer than its minimum required arguments raises a ParseError") {
+	Parser parser;
+	REQUIRE_THROWS_AS(parser.parseString("SELECT * WHERE { ?a ?p ?x FILTER(SUBSTR(?x)) }"), ParseError);
+}

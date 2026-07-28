@@ -142,3 +142,139 @@ TEST_CASE("FILTER: a non-builtin function call throws a named TranslationError")
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(ex:customFunc(?n)) }", mapping),
 	                TranslationError);
 }
+
+TEST_CASE("FILTER: remaining comparison operators (!=, <=, >=) and Or/And") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql =
+	    translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(?n != \"X\" || (?n <= \"Y\" && ?n >= \"Z\")) }", mapping);
+	CHECK(sql.find("<>") != std::string::npos);
+	CHECK(sql.find("<=") != std::string::npos);
+	CHECK(sql.find(">=") != std::string::npos);
+	CHECK(sql.find(" OR ") != std::string::npos);
+	CHECK(sql.find(" AND ") != std::string::npos);
+}
+
+TEST_CASE("FILTER: arithmetic operators (+, -, *, /) translate via CAST/tryCastToDouble") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?e ?n WHERE { ?e ex:name ?n . "
+	                             "FILTER((?n + \"1\") != \"2\" || (?n - \"1\") != \"2\" || "
+	                             "(?n * \"2\") != \"2\" || (?n / \"2\") != \"2\") }",
+	                             mapping);
+	CHECK(sql.find(" + ") != std::string::npos);
+	CHECK(sql.find(" - ") != std::string::npos);
+	CHECK(sql.find(" * ") != std::string::npos);
+	CHECK(sql.find(" / ") != std::string::npos);
+}
+
+TEST_CASE("FILTER: unary NOT, +, and - translate to their SQL forms") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate(
+	    "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(!(?n = \"X\") || (+?n) != \"1\" || (-?n) != \"1\") }", mapping);
+	CHECK(sql.find("NOT (") != std::string::npos);
+	CHECK(sql.find("CAST((+") != std::string::npos);
+	CHECK(sql.find("CAST((-") != std::string::npos);
+}
+
+TEST_CASE("FILTER: IN and NOT IN translate to SQL IN/NOT IN lists") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql =
+	    translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(?n IN (\"A\", \"B\") || ?n NOT IN (\"C\")) }", mapping);
+	CHECK(sql.find(" IN (") != std::string::npos);
+	CHECK(sql.find(" NOT IN (") != std::string::npos);
+}
+
+TEST_CASE("FILTER: a bare IriRef operand translates to its lexical IRI value") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(?n != ex:foo) }", mapping);
+	CHECK(sql.find("example.com/ns#foo") != std::string::npos);
+}
+
+TEST_CASE("FILTER EXISTS: correlates on multiple shared variables joined with AND") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?e WHERE { ?e ex:name ?n . ?e ex:department ?d . "
+	                             "FILTER EXISTS { ?e ex:department ?d } }",
+	                             mapping);
+	CHECK(sql.find("IS NULL) AND (") != std::string::npos);
+}
+
+TEST_CASE("FILTER: REGEX with a literal flags argument, and a non-literal flags argument throws") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	CHECK_NOTHROW(translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(REGEX(?n, \"^S\", \"i\")) }", mapping));
+	CHECK_THROWS_AS(translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(REGEX(?n, \"^S\", ?n)) }", mapping),
+	                TranslationError);
+}
+
+TEST_CASE("FILTER: SUBSTR with 2 and 3 arguments") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	CHECK(translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(SUBSTR(?n, 1) != \"\") }", mapping).find("SUBSTR(") !=
+	      std::string::npos);
+	CHECK(translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(SUBSTR(?n, 1, 3) != \"\") }", mapping).find("SUBSTR(") !=
+	      std::string::npos);
+}
+
+TEST_CASE("FILTER: STRBEFORE and STRAFTER translate via strpos/SUBSTR") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	CHECK(translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(STRBEFORE(?n, \"S\") != \"\") }", mapping)
+	          .find("strpos(") != std::string::npos);
+	CHECK(translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(STRAFTER(?n, \"S\") != \"\") }", mapping)
+	          .find("strpos(") != std::string::npos);
+}
+
+TEST_CASE("FILTER: REPLACE with and without a flags argument") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	CHECK(translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(REPLACE(?n, \"S\", \"X\") != \"\") }", mapping)
+	          .find("regexp_replace(") != std::string::npos);
+	CHECK(translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(REPLACE(?n, \"S\", \"X\", \"i\") != \"\") }", mapping)
+	          .find("regexp_replace(") != std::string::npos);
+}
+
+TEST_CASE("FILTER: numeric builtins ABS/CEIL/FLOOR/ROUND") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?e ?n WHERE { ?e ex:name ?n . "
+	                             "FILTER(ABS(?n) != \"0\" || CEIL(?n) != \"0\" || FLOOR(?n) != \"0\" || "
+	                             "ROUND(?n) != \"0\") }",
+	                             mapping);
+	CHECK(sql.find("ABS(") != std::string::npos);
+	CHECK(sql.find("CEIL(") != std::string::npos);
+	CHECK(sql.find("FLOOR(") != std::string::npos);
+	CHECK(sql.find("ROUND(") != std::string::npos);
+}
+
+TEST_CASE("BIND: COALESCE, IF, SAMETERM, and ISNUMERIC") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?e ?c ?i ?st ?isnum WHERE { ?e ex:name ?n . "
+	                             "BIND(COALESCE(?n, \"x\") AS ?c) "
+	                             "BIND(IF(?n = \"A\", \"y\", \"n\") AS ?i) "
+	                             "BIND(SAMETERM(?n, ?n) AS ?st) "
+	                             "BIND(ISNUMERIC(?n) AS ?isnum) }",
+	                             mapping);
+	CHECK(sql.find("COALESCE(") != std::string::npos);
+	CHECK(sql.find("CASE WHEN") != std::string::npos);
+}
+
+TEST_CASE("Aggregates: SUM/AVG/MIN/MAX/SAMPLE/GROUP_CONCAT with DISTINCT") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT (SUM(?n) AS ?s) (AVG(?n) AS ?a) (MIN(?n) AS ?mn) (MAX(?n) AS ?mx) "
+	                             "(SAMPLE(?n) AS ?sm) (GROUP_CONCAT(DISTINCT ?n; SEPARATOR=\",\") AS ?gc) "
+	                             "WHERE { ?e ex:name ?n }",
+	                             mapping);
+	CHECK(sql.find("SUM(") != std::string::npos);
+	CHECK(sql.find("AVG(") != std::string::npos);
+	CHECK(sql.find("MIN(") != std::string::npos);
+	CHECK(sql.find("MAX(") != std::string::npos);
+	CHECK(sql.find("any_value(") != std::string::npos);
+	CHECK(sql.find("string_agg(DISTINCT") != std::string::npos);
+}

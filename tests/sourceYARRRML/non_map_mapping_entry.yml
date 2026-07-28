@@ -1,0 +1,8 @@
+mappings:
+  employee:
+    sources:
+      - table: EMP
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - [http://example.com/ns#name, $(ENAME)]
+  broken: "notamap"

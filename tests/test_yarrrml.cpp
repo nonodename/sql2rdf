@@ -107,6 +107,15 @@ std::string runProcessDatabase(R2RMLMapping &mapping, MockSQLConnection &conn) {
 	return result;
 }
 
+bool hasError(const R2RMLMapping &mapping, const std::string &substring) {
+	for (const auto &e : mapping.parseErrors) {
+		if (e.find(substring) != std::string::npos) {
+			return true;
+		}
+	}
+	return false;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -689,6 +698,11 @@ TEST_CASE("YARRRML parse - invalid YAML syntax throws std::runtime_error") {
 	REQUIRE_THROWS_AS(parser.parse(SOURCE_YARRRML_DIR "invalid_yaml.yml"), std::runtime_error);
 }
 
+TEST_CASE("YARRRML parse - nonexistent file throws std::runtime_error") {
+	YARRRMLParser parser;
+	REQUIRE_THROWS_AS(parser.parse("nonexistent.yml"), std::runtime_error);
+}
+
 TEST_CASE("YARRRML parse - missing 'mappings' key throws std::runtime_error") {
 	YARRRMLParser parser;
 	REQUIRE_THROWS_AS(parser.parse(SOURCE_YARRRML_DIR "missing_mappings.yml"), std::runtime_error);
@@ -754,6 +768,111 @@ TEST_CASE("YARRRML parse - unknown join condition function is skipped with a war
 TEST_CASE("YARRRML parse - unknown join condition function throws in strict mode") {
 	YARRRMLParser parser;
 	REQUIRE_THROWS_AS(parser.parse(SOURCE_YARRRML_DIR "unknown_condition_function.yml", false), std::runtime_error);
+}
+
+TEST_CASE("YARRRML parse - join condition with too few parameters is skipped with a warning") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "join_condition_missing_parameters.yml", true);
+	REQUIRE(hasError(mapping, "join condition missing parameters"));
+}
+
+TEST_CASE("YARRRML parse - join condition with unrecognised parameters is skipped with a warning") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "join_condition_bad_parameters.yml", true);
+	REQUIRE(hasError(mapping, "join condition parameters not recognised"));
+}
+
+TEST_CASE("YARRRML parse - multiple subjects produces a non-fatal warning") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "multiple_subjects_warning.yml", true);
+	REQUIRE(hasError(mapping, "multiple subjects"));
+}
+
+TEST_CASE("YARRRML parse - a non-scalar subject value is skipped with a warning") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "subject_not_scalar.yml", true);
+	REQUIRE(hasError(mapping, "subject value must be a string"));
+}
+
+TEST_CASE("YARRRML parse - po/predicateobjects that isn't a list is skipped with a warning") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "po_not_a_list.yml", true);
+	REQUIRE(hasError(mapping, "po/predicateobjects must be a list"));
+}
+
+TEST_CASE("YARRRML parse - a po array entry with fewer than 2 elements is skipped") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "po_entry_too_short.yml", true);
+	REQUIRE(hasError(mapping, "po entry array must have at least 2 elements"));
+}
+
+TEST_CASE("YARRRML parse - a po map entry missing predicates/objects is skipped") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "po_entry_missing_keys.yml", true);
+	REQUIRE(hasError(mapping, "po entry missing predicates/objects key"));
+}
+
+TEST_CASE("YARRRML parse - a po entry that is neither a list nor a map is skipped") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "po_entry_unrecognised.yml", true);
+	REQUIRE(hasError(mapping, "unrecognised po entry"));
+}
+
+TEST_CASE("YARRRML parse - a map-form object value ({value:,datatype:}) is translated") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "object_map_form.yml", true);
+	REQUIRE(mapping.parseErrors.empty());
+	TriplesMap *measurement = findById(mapping, "measurement");
+	REQUIRE(measurement != nullptr);
+	REQUIRE(measurement->predicateObjectMaps.size() == 1);
+}
+
+TEST_CASE("YARRRML parse - a malformed object value array is skipped with a warning") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "object_malformed_array.yml", true);
+	REQUIRE(hasError(mapping, "malformed object value array"));
+}
+
+TEST_CASE("YARRRML parse - an unrecognised object entry is skipped with a warning") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "object_unrecognised.yml", true);
+	REQUIRE(hasError(mapping, "unrecognised object entry"));
+}
+
+TEST_CASE("YARRRML parse - an inline source that isn't a mapping is skipped with a warning") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "source_not_a_map.yml", true);
+	REQUIRE(hasError(mapping, "source is not a mapping"));
+}
+
+TEST_CASE("YARRRML parse - a source with neither 'table' nor 'query' is skipped with a warning") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "source_without_table_or_query.yml", true);
+	REQUIRE(hasError(mapping, "source has neither 'table' nor 'query'"));
+}
+
+TEST_CASE("YARRRML parse - referencing an unknown named source is skipped with a warning") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "unknown_source_reference.yml", true);
+	REQUIRE(hasError(mapping, "references unknown source"));
+}
+
+TEST_CASE("YARRRML parse - an unsupported top-level key is skipped with a warning") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "unsupported_top_level_key.yml", true);
+	REQUIRE(hasError(mapping, "unsupported top-level key 'weird'"));
+}
+
+TEST_CASE("YARRRML parse - a non-map mapping entry is skipped with a warning") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "non_map_mapping_entry.yml", true);
+	REQUIRE(hasError(mapping, "mapping 'broken' is not a mapping node"));
+}
+
+TEST_CASE("YARRRML parse - an unsupported per-mapping key is skipped with a warning") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "unsupported_mapping_key.yml", true);
+	REQUIRE(hasError(mapping, "unsupported key 'weirdKey'"));
 }
 
 TEST_CASE("YARRRML parse - no errors on a fully valid mapping") {
