@@ -218,8 +218,49 @@ jobs:
       # Execute tests defined by the CMake configuration. Note that --build-config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
       # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
       run: ctest --build-config ${{ matrix.build_type }}
-    - name: Checkout code
-      uses: actions/checkout@v4
+
+  coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+        submodules: 'true'
+
+    - name: Verify submodule checksums
+      shell: bash
+      run: |
+        cd external/serd
+        ACTUAL_COMMIT=$(git rev-parse HEAD)
+        EXPECTED_COMMIT="24474530f8acef5c6cdcefa00b0049367e5d3079"
+        if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
+          echo "Submodule commit hash mismatch!"
+          echo "Expected: $EXPECTED_COMMIT"
+          echo "Actual:   $ACTUAL_COMMIT"
+          exit 1
+        fi
+        echo "Serd submodule verified (commit: $ACTUAL_COMMIT)"
+
+    - name: Install tools
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y ninja-build
+
+    - name: Configure CMake
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DSQL2RDF_ENABLE_COVERAGE=ON \
+          -G Ninja \
+          -S ${{ github.workspace }}
+
+    - name: Build tests (test_runner)
+      run: cmake --build build --target test_runner
+
+    - name: Run tests
+      working-directory: build
+      run: ctest -R test_runner --output-on-failure
 
     - name: Run gcovr
       uses: threeal/gcovr-action@v1
