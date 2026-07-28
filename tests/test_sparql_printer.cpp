@@ -144,10 +144,10 @@ TEST_CASE("print() renders EXISTS/NOT EXISTS filters with their nested pattern")
 TEST_CASE("print() renders every remaining BinaryOp symbol and unary +/- signs") {
 	Parser parser;
 	auto q = parser.parseString("SELECT * WHERE { ?a ?p ?n FILTER("
-	                             "(?n = 1) && (?n != 2) && (?n < 3) && (?n <= 4) && (?n > 5) && (?n >= 6) || "
-	                             "(?n + 1 = 7) || (?n - 1 = 8) || (?n * 2 = 9) || (?n / 2 = 10) || "
-	                             "(+?n = 100) || (-?n = 101)"
-	                             ") }");
+	                            "(?n = 1) && (?n != 2) && (?n < 3) && (?n <= 4) && (?n > 5) && (?n >= 6) || "
+	                            "(?n + 1 = 7) || (?n - 1 = 8) || (?n * 2 = 9) || (?n / 2 = 10) || "
+	                            "(+?n = 100) || (-?n = 101)"
+	                            ") }");
 	std::string out = printToString(*q);
 	// Numeric literals carry an xsd:integer datatype (see "Numeric literal
 	// sugar" in test_sparql_expressions.cpp), so termStr appends a "^^<...>"
@@ -180,8 +180,8 @@ TEST_CASE("print() renders IN and NOT IN expressions") {
 TEST_CASE("print() renders a non-builtin FunctionCall and a bare IriRef expression") {
 	Parser parser;
 	auto q = parser.parseString("SELECT * WHERE { ?x ?p ?o . "
-	                             "FILTER(<http://example.org/fn#even>(?o)) "
-	                             "FILTER(?o = <urn:x>) }");
+	                            "FILTER(<http://example.org/fn#even>(?o)) "
+	                            "FILTER(?o = <urn:x>) }");
 	std::string out = printToString(*q);
 	REQUIRE(out.find("<http://example.org/fn#even>(?o)") != std::string::npos);
 	REQUIRE(out.find("(?o = <urn:x>)") != std::string::npos);
@@ -190,8 +190,8 @@ TEST_CASE("print() renders a non-builtin FunctionCall and a bare IriRef expressi
 TEST_CASE("print() renders every AggregateKind, DISTINCT, and a GROUP_CONCAT separator") {
 	Parser parser;
 	auto q = parser.parseString("SELECT (AVG(?n) AS ?vAvg) (MAX(?n) AS ?vMax) (SAMPLE(?n) AS ?vSample) "
-	                             "(GROUP_CONCAT(DISTINCT ?n; SEPARATOR=\",\") AS ?vGroupConcat) "
-	                             "WHERE { ?x ?p ?n }");
+	                            "(GROUP_CONCAT(DISTINCT ?n; SEPARATOR=\",\") AS ?vGroupConcat) "
+	                            "WHERE { ?x ?p ?n }");
 	std::string out = printToString(*q);
 	REQUIRE(out.find("AVG(?n)") != std::string::npos);
 	REQUIRE(out.find("MAX(?n)") != std::string::npos);
@@ -201,8 +201,7 @@ TEST_CASE("print() renders every AggregateKind, DISTINCT, and a GROUP_CONCAT sep
 
 TEST_CASE("print() renders a GROUP BY (expr AS var) alias condition") {
 	Parser parser;
-	auto q = parser.parseString(
-	    "SELECT ?sum WHERE { ?s <urn:a> ?oa . ?s <urn:b> ?ob } GROUP BY (?oa + ?ob AS ?sum)");
+	auto q = parser.parseString("SELECT ?sum WHERE { ?s <urn:a> ?oa . ?s <urn:b> ?ob } GROUP BY (?oa + ?ob AS ?sum)");
 	std::string out = printToString(*q);
 	REQUIRE(out.find("(?oa + ?ob) AS ?sum") != std::string::npos);
 }
@@ -210,7 +209,7 @@ TEST_CASE("print() renders a GROUP BY (expr AS var) alias condition") {
 TEST_CASE("print() renders a language-tagged literal and a datatype-tagged literal") {
 	Parser parser;
 	auto q = parser.parseString("SELECT * WHERE { ?x <urn:p> \"hello\"@en . "
-	                             "?x <urn:q> \"5\"^^<http://www.w3.org/2001/XMLSchema#integer> }");
+	                            "?x <urn:q> \"5\"^^<http://www.w3.org/2001/XMLSchema#integer> }");
 	std::string out = printToString(*q);
 	REQUIRE(out.find("\"hello\"@en") != std::string::npos);
 	REQUIRE(out.find("\"5\"^^<http://www.w3.org/2001/XMLSchema#integer>") != std::string::npos);

@@ -82,8 +82,8 @@ TEST_CASE("GROUP BY accepts a bare IRI/function-call key and a builtin-call key"
 
 TEST_CASE("HAVING accepts multiple space-separated conditions") {
 	Parser parser;
-	auto q = parser.parseString(
-	    "SELECT (SUM(?n) AS ?s) WHERE { ?x <urn:n> ?n } GROUP BY ?x HAVING (?s > 1) (?s < 100)");
+	auto q =
+	    parser.parseString("SELECT (SUM(?n) AS ?s) WHERE { ?x <urn:n> ?n } GROUP BY ?x HAVING (?s > 1) (?s < 100)");
 	REQUIRE(q->solutionModifier.having.size() == 2);
 }
 

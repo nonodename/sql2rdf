@@ -200,16 +200,14 @@ TEST_CASE("SELECT * projects every in-scope variable") {
 TEST_CASE("Bare-projecting a GROUP BY (expr AS ?var) alias that isn't an original source var") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
-	std::string sql =
-	    translate("SELECT ?y WHERE { ?e ex:name ?n . } GROUP BY (STRLEN(?n) + 1 AS ?y)", mapping);
+	std::string sql = translate("SELECT ?y WHERE { ?e ex:name ?n . } GROUP BY (STRLEN(?n) + 1 AS ?y)", mapping);
 	CHECK(sql.find("\"v_y\"") != std::string::npos);
 }
 
 TEST_CASE("Multiple GROUP BY keys are comma-joined") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
-	std::string sql =
-	    translate("SELECT ?g ?n WHERE { ?e ex:name ?n . ?e ex:department ?g . } GROUP BY ?g ?n", mapping);
+	std::string sql = translate("SELECT ?g ?n WHERE { ?e ex:name ?n . ?e ex:department ?g . } GROUP BY ?g ?n", mapping);
 	std::size_t groupByPos = sql.find("GROUP BY");
 	REQUIRE(groupByPos != std::string::npos);
 	CHECK(sql.find(", ", groupByPos) != std::string::npos);
@@ -232,8 +230,7 @@ TEST_CASE("ASK with a trailing VALUES clause merges via an inner join") {
 TEST_CASE("ASK with GROUP BY (expr AS ?var) and HAVING emits a select-list prefix column") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
-	std::string sql =
-	    translate("ASK { ?e ex:name ?n . } GROUP BY (UCASE(?n) AS ?nn) HAVING (?n != \"\")", mapping);
+	std::string sql = translate("ASK { ?e ex:name ?n . } GROUP BY (UCASE(?n) AS ?nn) HAVING (?n != \"\")", mapping);
 	CHECK(sql.find("UPPER(") != std::string::npos);
 	CHECK(sql.find("HAVING") != std::string::npos);
 }
