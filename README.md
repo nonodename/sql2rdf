@@ -1,3 +1,7 @@
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![GitHub Release](https://img.shields.io/github/v/release/nonodename/sql2rdf)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/nonodename/sql2rdf/.github%2Fworkflows%2Fcmake-multi-platform.yml)
+
 # SQL2RDF++
 
 A command line utility to convert relational database tables to RDF using R2RML syntax, with support for [YARRRML](https://rml.io/yarrrml/spec/) as a friendlier YAML front-end to R2RML.

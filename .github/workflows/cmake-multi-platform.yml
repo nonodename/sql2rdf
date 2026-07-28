@@ -218,3 +218,12 @@ jobs:
       # Execute tests defined by the CMake configuration. Note that --build-config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
       # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
       run: ctest --build-config ${{ matrix.build_type }}
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run gcovr
+      uses: threeal/gcovr-action@v1
+      with:
+        cobertura-out: coverage.xml
+        html-out: coverage.html
+        print-summary: true
