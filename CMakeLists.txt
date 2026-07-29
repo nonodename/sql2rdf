@@ -419,8 +419,7 @@ if(SQL2RDF_IS_TOP_LEVEL AND SQL2RDF_BUILD_TESTS)
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/coverage
         COMMAND $<TARGET_FILE:test_runner>
         COMMAND ${GCOVR_EXE} --root ${CMAKE_CURRENT_SOURCE_DIR}
-          --filter "${CMAKE_CURRENT_SOURCE_DIR}/src/.*"
-          --filter "${CMAKE_CURRENT_SOURCE_DIR}/include/.*"
+          --filter "${CMAKE_CURRENT_SOURCE_DIR}/(?:src|include)/.*"
           --object-directory ${CMAKE_CURRENT_BINARY_DIR}
           --html --html-details -o ${CMAKE_CURRENT_BINARY_DIR}/coverage/index.html
           --print-summary
