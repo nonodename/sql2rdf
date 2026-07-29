@@ -260,7 +260,7 @@ jobs:
 
     - name: Run tests
       working-directory: build
-      run: ctest -R test_runner --output-on-failure
+      run: ./test_runner
 
     - name: Run gcovr
       uses: threeal/gcovr-action@v1
