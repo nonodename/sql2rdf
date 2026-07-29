@@ -265,6 +265,7 @@ jobs:
     - name: Run gcovr
       uses: threeal/gcovr-action@v1
       with:
+        filter: '^(?:src/|include/)'
         cobertura-out: coverage.xml
         html-out: coverage.html
         print-summary: true
