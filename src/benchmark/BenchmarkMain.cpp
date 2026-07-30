@@ -297,7 +297,7 @@ int main(int argc, char *argv[]) {
 		const std::string &queryText = queries[q].second;
 		QueryResult result;
 		result.name = name;
-
+		std::cerr << "[" << name << "] running:";
 		// One translation up front both validates the query and produces the SQL
 		// we execute; failures here are reported and the query is skipped.
 		try {
@@ -333,6 +333,7 @@ int main(int argc, char *argv[]) {
 		// Time translation: re-parse and re-translate each iteration so the
 		// measured cost is the full SPARQL-text -> SQL-text path.
 		for (int it = 0; it < warmup + repeat; ++it) {
+			std::cerr << "." << std::flush;
 			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 			sparql::Parser parser;
 			std::unique_ptr<sparql::ast::Query> query = parser.parseString(queryText);
@@ -346,6 +347,7 @@ int main(int argc, char *argv[]) {
 
 		// Time execution: run the already-translated SQL and drain all rows.
 		for (int it = 0; it < warmup + repeat; ++it) {
+			std::cerr << "." << std::flush;
 			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 			std::unique_ptr<r2rml::SQLResultSet> rs = dbConn->execute(result.sql);
 			while (rs->next()) {
@@ -358,7 +360,7 @@ int main(int argc, char *argv[]) {
 				result.executeMs.push_back(elapsedMs(start, end));
 			}
 		}
-
+		std::cerr << "\n"; 
 		result.ok = true;
 		results.push_back(result);
 	}
