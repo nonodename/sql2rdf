@@ -271,15 +271,18 @@ endif()
 
 # ----------------------------------------------------------------------------
 # sql2rdf_benchmark - a dev-only performance harness for the SPARQL-to-SQL
-# pipeline. Times translation and execution of a JSON-supplied set of SPARQL
+# pipeline. Times translation and execution of a YAML-supplied set of SPARQL
 # queries against a real DuckDB database and mapping, for establishing a
 # baseline before optimizing. Gated exactly like the CLI (needs DuckDB) so it
 # never leaks into downstream FetchContent builds or the DuckDB-free
 # test_runner. It takes all inputs at runtime, so no customer data is checked in.
+# Links yaml-cpp directly (like sql2rdf_yarrrml) to parse the queries file;
+# this is fine since, like the CLI, this target sits outside the
+# DuckDB/yaml-cpp-free core library layering.
 # ----------------------------------------------------------------------------
 if(SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB))
   add_executable(sql2rdf_benchmark src/benchmark/BenchmarkMain.cpp)
-  target_link_libraries(sql2rdf_benchmark PRIVATE sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql sql2rdf_sparql2sql sql2rdf_duckdb duckdb)
+  target_link_libraries(sql2rdf_benchmark PRIVATE sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql sql2rdf_sparql2sql sql2rdf_duckdb duckdb yaml-cpp::yaml-cpp)
   target_include_directories(sql2rdf_benchmark PRIVATE include src)
   add_dependencies(sql2rdf_benchmark serd)
   if(UNIX)

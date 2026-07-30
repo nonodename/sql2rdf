@@ -2,7 +2,7 @@
 // sql2rdf_benchmark - a dev-only performance harness for the SPARQL-to-SQL
 // pipeline.
 //
-// It takes an R2RML/YARRRML mapping, a DuckDB database, and a JSON file mapping
+// It takes an R2RML/YARRRML mapping, a DuckDB database, and a YAML file mapping
 // query names to SPARQL query text; for each named query it times the two
 // phases end-to-end - translation (SPARQL parse + translateQuery) and execution
 // (DuckDB execute + full row drain) - over a configurable number of warmup and
@@ -19,7 +19,6 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -28,6 +27,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <yaml-cpp/yaml.h>
 
 #include "DuckDBConnection.h"
 #include "r2rml/MappingParser.h"
@@ -44,199 +45,33 @@
 namespace {
 
 // -----------------------------------------------------------------------------
-// Minimal JSON reader for a *flat* object of string -> string (the query file
-// format: { "name": "SPARQL text", ... }). Deliberately tiny - we don't pull in
-// a JSON dependency for a dev harness. Preserves insertion order (SPARQL query
-// order is meaningful to the user) by returning a vector of pairs rather than a
-// map. Rejects anything that isn't a flat object of string values with a clear
-// error, so a malformed queries file fails loudly rather than silently.
+// Loads the query file: a flat YAML mapping of name -> SPARQL text (e.g.
+// `queryName: "SELECT ..."`, or a block scalar for multi-line queries).
+// Preserves document order (SPARQL query order is meaningful to the user) by
+// returning a vector of pairs rather than a map - yaml-cpp iterates map nodes
+// in parse order. Rejects anything that isn't a flat mapping of scalar values
+// with a clear error, so a malformed queries file fails loudly rather than
+// silently.
 // -----------------------------------------------------------------------------
-class JsonQueryReader {
-public:
-	static std::vector<std::pair<std::string, std::string>> parse(const std::string &text) {
-		JsonQueryReader reader(text);
-		std::vector<std::pair<std::string, std::string>> out;
-		reader.skipWs();
-		reader.expect('{');
-		reader.skipWs();
-		if (reader.peek() == '}') {
-			reader.get();
-			reader.skipWs();
-			reader.expectEnd();
-			return out;
+std::vector<std::pair<std::string, std::string>> loadQueries(const std::string &path) {
+	YAML::Node root;
+	try {
+		root = YAML::LoadFile(path);
+	} catch (const YAML::Exception &e) {
+		throw std::runtime_error(std::string("invalid queries YAML: ") + e.what());
+	}
+	if (!root.IsMap()) {
+		throw std::runtime_error("queries YAML must be a flat mapping of name -> SPARQL text");
+	}
+	std::vector<std::pair<std::string, std::string>> out;
+	for (YAML::const_iterator it = root.begin(); it != root.end(); ++it) {
+		if (!it->second.IsScalar()) {
+			throw std::runtime_error("query '" + it->first.as<std::string>() + "' value must be a YAML string");
 		}
-		while (true) {
-			reader.skipWs();
-			std::string key = reader.parseString();
-			reader.skipWs();
-			reader.expect(':');
-			reader.skipWs();
-			if (reader.peek() != '"') {
-				reader.fail("query value must be a JSON string");
-			}
-			std::string value = reader.parseString();
-			out.push_back(std::make_pair(key, value));
-			reader.skipWs();
-			char c = reader.get();
-			if (c == ',') {
-				continue;
-			}
-			if (c == '}') {
-				break;
-			}
-			reader.fail("expected ',' or '}' after a query entry");
-		}
-		reader.skipWs();
-		reader.expectEnd();
-		return out;
+		out.push_back(std::make_pair(it->first.as<std::string>(), it->second.as<std::string>()));
 	}
-
-private:
-	explicit JsonQueryReader(const std::string &text) : text_(text) {
-	}
-
-	[[noreturn]] void fail(const std::string &message) const {
-		throw std::runtime_error("invalid queries JSON at byte " + std::to_string(pos_) + ": " + message);
-	}
-
-	bool atEnd() const {
-		return pos_ >= text_.size();
-	}
-
-	char peek() const {
-		return atEnd() ? '\0' : text_[pos_];
-	}
-
-	char get() {
-		if (atEnd()) {
-			fail("unexpected end of input");
-		}
-		return text_[pos_++];
-	}
-
-	void expect(char c) {
-		if (get() != c) {
-			fail(std::string("expected '") + c + "'");
-		}
-	}
-
-	void expectEnd() {
-		if (!atEnd()) {
-			fail("trailing content after the top-level object");
-		}
-	}
-
-	void skipWs() {
-		while (!atEnd()) {
-			char c = text_[pos_];
-			if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-				++pos_;
-			} else {
-				break;
-			}
-		}
-	}
-
-	static void appendUtf8(std::string &out, unsigned long cp) {
-		if (cp <= 0x7F) {
-			out.push_back(static_cast<char>(cp));
-		} else if (cp <= 0x7FF) {
-			out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-			out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-		} else if (cp <= 0xFFFF) {
-			out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-			out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-			out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-		} else {
-			out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
-			out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-			out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-			out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-		}
-	}
-
-	unsigned parseHex4() {
-		unsigned value = 0;
-		for (int i = 0; i < 4; ++i) {
-			char c = get();
-			value <<= 4;
-			if (c >= '0' && c <= '9') {
-				value |= static_cast<unsigned>(c - '0');
-			} else if (c >= 'a' && c <= 'f') {
-				value |= static_cast<unsigned>(c - 'a' + 10);
-			} else if (c >= 'A' && c <= 'F') {
-				value |= static_cast<unsigned>(c - 'A' + 10);
-			} else {
-				fail("invalid \\u hex escape");
-			}
-		}
-		return value;
-	}
-
-	std::string parseString() {
-		expect('"');
-		std::string out;
-		while (true) {
-			char c = get();
-			if (c == '"') {
-				break;
-			}
-			if (c == '\\') {
-				char esc = get();
-				switch (esc) {
-				case '"':
-					out.push_back('"');
-					break;
-				case '\\':
-					out.push_back('\\');
-					break;
-				case '/':
-					out.push_back('/');
-					break;
-				case 'b':
-					out.push_back('\b');
-					break;
-				case 'f':
-					out.push_back('\f');
-					break;
-				case 'n':
-					out.push_back('\n');
-					break;
-				case 'r':
-					out.push_back('\r');
-					break;
-				case 't':
-					out.push_back('\t');
-					break;
-				case 'u': {
-					unsigned long cp = parseHex4();
-					// Combine a UTF-16 surrogate pair into a single code point.
-					if (cp >= 0xD800 && cp <= 0xDBFF) {
-						if (get() != '\\' || get() != 'u') {
-							fail("expected a low surrogate after a high surrogate");
-						}
-						unsigned long low = parseHex4();
-						if (low < 0xDC00 || low > 0xDFFF) {
-							fail("invalid low surrogate");
-						}
-						cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
-					}
-					appendUtf8(out, cp);
-					break;
-				}
-				default:
-					fail("invalid escape sequence");
-				}
-			} else {
-				out.push_back(c);
-			}
-		}
-		return out;
-	}
-
-	const std::string &text_;
-	std::size_t pos_ = 0;
-};
+	return out;
+}
 
 // Read every column's SQL type from the connection's information_schema into a
 // TypeCatalog so the translator can emit native (uncast) join keys - identical
@@ -259,16 +94,6 @@ void populateTypeCatalog(r2rml::SQLConnection &conn, sparql2sql::TypeCatalog &ca
 		}
 		catalog.columnTypes[table->asString()][column->asString()] = dataType->asString();
 	}
-}
-
-std::string readFile(const std::string &path) {
-	std::ifstream in(path.c_str(), std::ios::binary);
-	if (!in) {
-		throw std::runtime_error("cannot open '" + path + "'");
-	}
-	std::ostringstream ss;
-	ss << in.rdbuf();
-	return ss.str();
 }
 
 // Per-query timing accumulator; both phases are recorded as milliseconds.
@@ -306,7 +131,7 @@ double elapsedMs(std::chrono::steady_clock::time_point start, std::chrono::stead
 }
 
 void printHelp(const char *programName) {
-	std::cerr << "Usage: " << programName << " [options] <mapping.ttl|mapping.yml> <database.duckdb> <queries.json>\n"
+	std::cerr << "Usage: " << programName << " [options] <mapping.ttl|mapping.yml> <database.duckdb> <queries.yml>\n"
 	          << "\n"
 	          << "Benchmarks the SPARQL-to-SQL pipeline against a real database. For each\n"
 	          << "named SPARQL query it times translation (parse + translateQuery) and\n"
@@ -317,7 +142,7 @@ void printHelp(const char *programName) {
 	          << "  mapping.ttl|mapping.yml   R2RML (Turtle) or YARRRML (YAML) mapping; format\n"
 	          << "                            chosen by extension unless -y is given.\n"
 	          << "  database.duckdb           DuckDB database file.\n"
-	          << "  queries.json              Flat JSON object of { \"name\": \"SPARQL text\", ... }.\n"
+	          << "  queries.yml               Flat YAML mapping of `name: \"SPARQL text\"`.\n"
 	          << "\n"
 	          << "Options:\n"
 	          << "  --repeat N       Measured iterations per query (default 5).\n"
@@ -395,7 +220,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	if (!mappingFile || !databaseFile || !queriesFile) {
-		std::cerr << "Error: mapping file, database file and queries JSON are all required.\n";
+		std::cerr << "Error: mapping file, database file and queries YAML are all required.\n";
 		printHelp(argv[0]);
 		return 1;
 	}
@@ -423,7 +248,7 @@ int main(int argc, char *argv[]) {
 	// ---- Load the queries -----------------------------------------------------
 	std::vector<std::pair<std::string, std::string>> queries;
 	try {
-		queries = JsonQueryReader::parse(readFile(queriesFile));
+		queries = loadQueries(queriesFile);
 	} catch (const std::exception &e) {
 		std::cerr << "Error: failed to read queries '" << queriesFile << "': " << e.what() << "\n";
 		return 1;
