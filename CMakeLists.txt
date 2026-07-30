@@ -270,6 +270,26 @@ if(SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB))
 endif()
 
 # ----------------------------------------------------------------------------
+# sql2rdf_benchmark - a dev-only performance harness for the SPARQL-to-SQL
+# pipeline. Times translation and execution of a JSON-supplied set of SPARQL
+# queries against a real DuckDB database and mapping, for establishing a
+# baseline before optimizing. Gated exactly like the CLI (needs DuckDB) so it
+# never leaks into downstream FetchContent builds or the DuckDB-free
+# test_runner. It takes all inputs at runtime, so no customer data is checked in.
+# ----------------------------------------------------------------------------
+if(SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB))
+  add_executable(sql2rdf_benchmark src/benchmark/BenchmarkMain.cpp)
+  target_link_libraries(sql2rdf_benchmark PRIVATE sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql sql2rdf_sparql2sql sql2rdf_duckdb duckdb)
+  target_include_directories(sql2rdf_benchmark PRIVATE include src)
+  add_dependencies(sql2rdf_benchmark serd)
+  if(UNIX)
+    target_link_libraries(sql2rdf_benchmark PRIVATE serd m)
+  else()
+    target_link_libraries(sql2rdf_benchmark PRIVATE serd)
+  endif()
+endif()
+
+# ----------------------------------------------------------------------------
 # serd dependency - build as a static library from source tree, unless a
 # consumer has already defined a `serd` target (e.g. via their own
 # find_package/FetchContent of serd) before pulling this project in, in
@@ -371,6 +391,7 @@ if(SQL2RDF_IS_TOP_LEVEL)
       "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
       "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
       "${CMAKE_CURRENT_SOURCE_DIR}/src/yarrrml/*.cpp"
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/benchmark/*.cpp"
       "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp"
     )
@@ -409,8 +430,15 @@ if(SQL2RDF_IS_TOP_LEVEL AND SQL2RDF_BUILD_TESTS)
       foreach(cov_target sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql sql2rdf_sparql2sql test_runner)
         target_compile_options(${cov_target} PRIVATE --coverage -O0 -g)
       endforeach()
-      # Only the final executable needs the libgcov runtime linked in.
-      target_link_libraries(test_runner PRIVATE --coverage)
+      # Every executable that links the now-instrumented static libs above
+      # needs the libgcov runtime linked in too, not just test_runner - their
+      # .o files already carry unresolved gcov symbols regardless of whether
+      # that particular executable is the one gcovr actually runs.
+      foreach(cov_consumer test_runner sparql2sql_duckdb_tests sql2rdf_benchmark ${PROJECT_NAME})
+        if(TARGET ${cov_consumer})
+          target_link_libraries(${cov_consumer} PRIVATE --coverage)
+        endif()
+      endforeach()
     endif()
 
     find_program(GCOVR_EXE NAMES gcovr)
