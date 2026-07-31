@@ -148,6 +148,7 @@ void printHelp(const char *programName) {
 	          << "  --repeat N       Measured iterations per query (default 5).\n"
 	          << "  --warmup N       Unrecorded warmup iterations per query (default 1).\n"
 	          << "  --dialect NAME   SQL dialect to translate for (default: duckdb).\n"
+	          << "  --query NAME     Only benchmark the named query (default: all).\n"
 	          << "  -y               Force the mapping to be parsed as YARRRML.\n"
 	          << "  --print-sql      Echo each query's translated SQL to stderr.\n"
 	          << "  -h, --help       Show this help message.\n";
@@ -170,6 +171,7 @@ int main(int argc, char *argv[]) {
 	int repeat = 5;
 	int warmup = 1;
 	const char *dialectName = "duckdb";
+	const char *queryName = nullptr;
 	const char *mappingFile = nullptr;
 	const char *databaseFile = nullptr;
 	const char *queriesFile = nullptr;
@@ -200,6 +202,12 @@ int main(int argc, char *argv[]) {
 				return 1;
 			}
 			dialectName = argv[i];
+		} else if (std::strcmp(argv[i], "--query") == 0) {
+			if (++i >= argc) {
+				std::cerr << "Error: --query requires a query name argument\n";
+				return 1;
+			}
+			queryName = argv[i];
 		} else if (argv[i][0] != '-') {
 			if (!mappingFile) {
 				mappingFile = argv[i];
@@ -256,6 +264,20 @@ int main(int argc, char *argv[]) {
 	if (queries.empty()) {
 		std::cerr << "Error: no queries found in '" << queriesFile << "'\n";
 		return 1;
+	}
+	if (queryName) {
+		std::vector<std::pair<std::string, std::string>> filtered;
+		for (std::size_t i = 0; i < queries.size(); ++i) {
+			if (queries[i].first == queryName) {
+				filtered.push_back(queries[i]);
+				break;
+			}
+		}
+		if (filtered.empty()) {
+			std::cerr << "Error: query '" << queryName << "' not found in '" << queriesFile << "'\n";
+			return 1;
+		}
+		queries = filtered;
 	}
 
 	// ---- Dialect + database ---------------------------------------------------
