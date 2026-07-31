@@ -68,7 +68,7 @@ std::vector<std::pair<std::string, std::string>> loadQueries(const std::string &
 		if (!it->second.IsScalar()) {
 			throw std::runtime_error("query '" + it->first.as<std::string>() + "' value must be a YAML string");
 		}
-		out.push_back(std::make_pair(it->first.as<std::string>(), it->second.as<std::string>()));
+		out.emplace_back(it->first.as<std::string>(), it->second.as<std::string>());
 	}
 	return out;
 }
@@ -103,7 +103,7 @@ struct QueryResult {
 	std::string error;
 	std::vector<double> translateMs;
 	std::vector<double> executeMs;
-	long long rows = 0;
+	int64_t rows = 0;
 	std::string sql;
 };
 
@@ -155,12 +155,17 @@ void printHelp(const char *programName) {
 }
 
 int parseCount(const char *arg, const char *flag) {
-	int value = std::atoi(arg);
+	char *end;
+	int64_t value = std::strtol(arg, &end, 10);
+	if (*end != '\0') {
+		std::cerr << "Error: " << flag << " must be an integer\n";
+		std::exit(1);
+	}
 	if (value < 0) {
 		std::cerr << "Error: " << flag << " must be >= 0\n";
 		std::exit(1);
 	}
-	return value;
+	return static_cast<int>(value);
 }
 
 } // namespace
@@ -340,7 +345,7 @@ int main(int argc, char *argv[]) {
 		// Sanity-check execution once (and drain the rows) before timing.
 		try {
 			std::unique_ptr<r2rml::SQLResultSet> rs = dbConn->execute(result.sql);
-			long long rows = 0;
+			int64_t rows = 0;
 			while (rs->next()) {
 				++rows;
 			}
@@ -382,7 +387,7 @@ int main(int argc, char *argv[]) {
 				result.executeMs.push_back(elapsedMs(start, end));
 			}
 		}
-		std::cerr << "\n"; 
+		std::cerr << "\n";
 		result.ok = true;
 		results.push_back(result);
 	}
