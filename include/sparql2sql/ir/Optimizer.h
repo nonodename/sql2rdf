@@ -20,8 +20,9 @@ struct OptimizerOptions {
 };
 
 /// Apply the fixed pass pipeline to a pattern IR tree and return the rewritten
-/// root. Pure IR->IR; semantics-preserving. In Phase 1 this is the identity
-/// (no passes wired yet).
+/// root. Pure IR->IR; semantics-preserving. Passes, in order: SPJ flattening,
+/// filter pushdown, self-join elimination, and (when the enclosing query
+/// dedups) DISTINCT stripping.
 RelNodePtr optimize(RelNodePtr root, const OptimizerOptions &opts);
 
 } // namespace sparql2sql

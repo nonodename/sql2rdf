@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "sparql2sql/ExprAnalysis.h"
 #include "sparql2sql/TypeCatalog.h"
 #include "sparql2sql/ir/RelNode.h"
 
@@ -337,10 +338,188 @@ void stripDistinct(RelNode &node) {
 	}
 }
 
+// --- Filter pushdown -----------------------------------------------------
+//
+// Re-parent FILTERs downward so each wraps the smallest relation supplying its
+// variables. A FilterNode's predicate is a borrowed AST pointer rendered late
+// against its child's schema, so pushdown is pure re-parenting: no re-render,
+// no AST synthesis. A conjunction is decomposed into single-conjunct
+// FilterNodes (each borrowing a sub-expression pointer), and each conjunct is
+// routed independently.
+//
+// Safe targets: inner-join sides (predicate over one side only), every arm of
+// a UNION (WHERE distributes over UNION when every arm supplies the vars), and
+// an anti-join's left side (its output schema is exactly the left's, so a
+// left-only predicate commutes). LeftOuter joins, BINDs, and anything else are
+// boundaries - a conjunct that reaches one stops there. Conjuncts containing
+// EXISTS/NOT EXISTS are never pushed (their correlation variables are
+// deliberately invisible to collectVarRefs), so they too stop at the boundary.
+
+std::set<std::string> varRefSet(const sparql::ast::Expression &expr) {
+	std::vector<std::string> refs;
+	collectVarRefs(expr, refs);
+	return std::set<std::string>(refs.begin(), refs.end());
+}
+
+bool isSubset(const std::set<std::string> &small, const std::set<std::string> &big) {
+	for (const auto &v : small) {
+		if (big.count(v) == 0) {
+			return false;
+		}
+	}
+	return true;
+}
+
+// Wrap `child` in a chain of single-conjunct FilterNodes (no further pushdown -
+// used at boundaries and for conjuncts that stay above a node). Each new
+// FilterNode copies the child's schema, exactly as PatternFolder builds them.
+RelNodePtr wrapFilters(RelNodePtr child, const std::vector<const sparql::ast::Expression *> &preds) {
+	for (const auto *p : preds) {
+		RelNodePtr node(new FilterNode());
+		FilterNode &f = static_cast<FilterNode &>(*node);
+		f.schema() = child->schema();
+		f.predicate = p;
+		f.child = std::move(child);
+		child = std::move(node);
+	}
+	return child;
+}
+
+// Apply `conjuncts` as filters on top of `child`, pushing each as deep as it
+// can safely go. Recurses on strictly smaller subtrees, so it terminates.
+RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::Expression *> &conjuncts) {
+	if (conjuncts.empty()) {
+		return child;
+	}
+
+	switch (child->kind()) {
+	case RelKind::Join: {
+		JoinNode &j = static_cast<JoinNode &>(*child);
+		if (j.joinKind != JoinKind::Inner) {
+			return wrapFilters(std::move(child), conjuncts); // LeftOuter: boundary.
+		}
+		std::set<std::string> leftVars = j.left->allVars();
+		std::set<std::string> rightVars = j.right->allVars();
+		std::vector<const sparql::ast::Expression *> leftConj;
+		std::vector<const sparql::ast::Expression *> rightConj;
+		std::vector<const sparql::ast::Expression *> keep;
+		for (const auto *c : conjuncts) {
+			if (containsExists(*c)) {
+				keep.push_back(c);
+				continue;
+			}
+			std::set<std::string> refs = varRefSet(*c);
+			if (isSubset(refs, leftVars)) {
+				leftConj.push_back(c);
+			} else if (isSubset(refs, rightVars)) {
+				rightConj.push_back(c);
+			} else {
+				keep.push_back(c);
+			}
+		}
+		j.left = pushConjuncts(std::move(j.left), leftConj);
+		j.right = pushConjuncts(std::move(j.right), rightConj);
+		return wrapFilters(std::move(child), keep);
+	}
+	case RelKind::AntiJoin: {
+		AntiJoinNode &a = static_cast<AntiJoinNode &>(*child);
+		std::set<std::string> leftVars = a.left->allVars();
+		std::vector<const sparql::ast::Expression *> leftConj;
+		std::vector<const sparql::ast::Expression *> keep;
+		for (const auto *c : conjuncts) {
+			if (!containsExists(*c) && isSubset(varRefSet(*c), leftVars)) {
+				leftConj.push_back(c);
+			} else {
+				keep.push_back(c);
+			}
+		}
+		a.left = pushConjuncts(std::move(a.left), leftConj);
+		return wrapFilters(std::move(child), keep);
+	}
+	case RelKind::UnionByName: {
+		UnionByNameNode &u = static_cast<UnionByNameNode &>(*child);
+		std::vector<const sparql::ast::Expression *> distribute;
+		std::vector<const sparql::ast::Expression *> keep;
+		for (const auto *c : conjuncts) {
+			if (containsExists(*c)) {
+				keep.push_back(c);
+				continue;
+			}
+			std::set<std::string> refs = varRefSet(*c);
+			bool everyArmHasVars = true;
+			for (const auto &arm : u.arms) {
+				if (!isSubset(refs, arm->allVars())) {
+					everyArmHasVars = false;
+					break;
+				}
+			}
+			if (everyArmHasVars) {
+				distribute.push_back(c);
+			} else {
+				keep.push_back(c);
+			}
+		}
+		if (!distribute.empty()) {
+			for (auto &arm : u.arms) {
+				arm = pushConjuncts(std::move(arm), distribute);
+			}
+		}
+		return wrapFilters(std::move(child), keep);
+	}
+	default:
+		// Spj, Bind, Raw, SingleRow, Empty: boundary.
+		return wrapFilters(std::move(child), conjuncts);
+	}
+}
+
+// Structural walk: recurse everywhere, and at each FilterNode split its
+// predicate into conjuncts and push them into the (already-optimized) child.
+RelNodePtr pushFilters(RelNodePtr node) {
+	switch (node->kind()) {
+	case RelKind::Filter: {
+		FilterNode &f = static_cast<FilterNode &>(*node);
+		f.child = pushFilters(std::move(f.child));
+		std::vector<const sparql::ast::Expression *> conjuncts = splitConjuncts(*f.predicate);
+		return pushConjuncts(std::move(f.child), conjuncts);
+	}
+	case RelKind::Join: {
+		JoinNode &j = static_cast<JoinNode &>(*node);
+		j.left = pushFilters(std::move(j.left));
+		j.right = pushFilters(std::move(j.right));
+		return node;
+	}
+	case RelKind::AntiJoin: {
+		AntiJoinNode &a = static_cast<AntiJoinNode &>(*node);
+		a.left = pushFilters(std::move(a.left));
+		a.right = pushFilters(std::move(a.right));
+		return node;
+	}
+	case RelKind::UnionByName: {
+		UnionByNameNode &u = static_cast<UnionByNameNode &>(*node);
+		for (auto &arm : u.arms) {
+			arm = pushFilters(std::move(arm));
+		}
+		return node;
+	}
+	case RelKind::Bind: {
+		BindNode &b = static_cast<BindNode &>(*node);
+		b.child = pushFilters(std::move(b.child));
+		return node;
+	}
+	case RelKind::Spj:
+	case RelKind::Raw:
+	case RelKind::SingleRow:
+	case RelKind::Empty:
+		return node;
+	}
+	return node;
+}
+
 } // namespace
 
 RelNodePtr optimize(RelNodePtr root, const OptimizerOptions &opts) {
 	root = flatten(std::move(root), opts.catalog);
+	root = pushFilters(std::move(root));
 	selfJoinWalk(*root);
 	if (opts.topLevelDistinct) {
 		stripDistinct(*root);

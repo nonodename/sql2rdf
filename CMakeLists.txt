@@ -222,6 +222,7 @@ target_include_directories(sql2rdf_sparql PUBLIC
 # ----------------------------------------------------------------------------
 set(SPARQL2SQL_SOURCES
   src/sparql2sql/TranslationError.cpp
+  src/sparql2sql/ExprAnalysis.cpp
   src/sparql2sql/SqlDialect.cpp
   src/sparql2sql/DuckDbDialect.cpp
   src/sparql2sql/DialectFactory.cpp

@@ -8,6 +8,7 @@
 #include "sparql2sql/PatternFolder.h"
 #include "sparql2sql/SqlDialect.h"
 #include "sparql2sql/TranslationError.h"
+#include "sparql2sql/ir/Optimizer.h"
 #include "sparql2sql/ir/RelNode.h"
 #include "sparql2sql/ir/SqlRenderer.h"
 
@@ -127,6 +128,14 @@ std::set<std::string> setIntersect(const std::set<std::string> &a, const std::se
 std::string translateExists(const ExistsExpr &ex, const TranslatedPattern &scope, const std::string &alias,
                             TranslationContext &ctx) {
 	RelNodePtr nestedNode = fold(*ex.pattern, ctx);
+	// Optimize the correlated subquery body like a top-level pattern: an
+	// existence check never cares about duplicate rows, so topLevelDistinct is
+	// safe here (as for ASK). Without this, EXISTS bodies would miss flatten,
+	// self-join elimination, and filter pushdown.
+	OptimizerOptions opts;
+	opts.topLevelDistinct = true;
+	opts.catalog = ctx.catalog();
+	nestedNode = optimize(std::move(nestedNode), opts);
 	TranslatedPattern nested = renderRelation(*nestedNode, ctx);
 	std::set<std::string> shared = setIntersect(scope.allVars(), nested.allVars());
 	std::string innerAlias = ctx.nextAlias();
