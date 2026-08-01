@@ -344,3 +344,110 @@ TEST_CASE("sparql2sql_native_join.rq: a type catalog enables a native integer jo
 		CHECK(containsRow(rows, expected));
 	}
 }
+
+TEST_CASE("sparql2sql_template_join.rq: two same-template subjects join on the native key, same rows") {
+	auto conn = makeSeededDatabase();
+	Parser parser;
+	auto query = parser.parseFile(SOURCE_SPARQL2SQL_DIR "sparql2sql_template_join.rq");
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_template_join.ttl");
+	REQUIRE(mapping.isValid());
+	DuckDbDialect dialect;
+
+	// Only PEOPLE.ID 1 has a matching WIDGETS row.
+	const Row expected = {{"V_T", "http://ex.org/thing/1"}, {"V_PN", "ALICE"}, {"V_WN", "GADGET"}};
+
+	// Without a catalog: the subjects are compared as constructed IRI strings.
+	std::string plainSql = translateQuery(*query, mapping, dialect);
+	INFO("plain SQL: " << plainSql);
+	CHECK(plainSql.find("'http://ex.org/thing/' || ") != std::string::npos);
+	{
+		std::unique_ptr<r2rml::SQLResultSet> rs = conn->execute(plainSql);
+		auto rows = collectRows(*rs);
+		REQUIRE(rows.size() == 1);
+		CHECK(containsRow(rows, expected));
+	}
+
+	sparql2sql::TypeCatalog cat = catalogOf(*conn);
+	REQUIRE(cat.comparable("PEOPLE", "ID", "WIDGETS", "ID"));
+
+	// With a catalog: the join is emitted on the placeholder columns, and the
+	// result set is unchanged.
+	std::string nativeSql = translateQuery(*query, mapping, dialect, &cat);
+	INFO("native SQL: " << nativeSql);
+	CHECK(nativeSql.find("\"ID\" = ") != std::string::npos);
+	{
+		std::unique_ptr<r2rml::SQLResultSet> rs = conn->execute(nativeSql);
+		auto rows = collectRows(*rs);
+		REQUIRE(rows.size() == 1);
+		CHECK(containsRow(rows, expected));
+	}
+}
+
+// --- FILTER pushdown: these queries must return identical results whether or
+// not the optimizer re-parents the filter. They are the correctness oracle for
+// the pushFilters pass (semantics preservation across every push target and
+// boundary). ---
+
+TEST_CASE("emp_dept_filter_folded.rq: a FILTER folded into the SPJ block selects the same row") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_filter_folded.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_LOC", "NEW YORK"}, {"V_S", "1"}}));
+}
+
+TEST_CASE("emp_dept_filter_keeps_mergeable.rq: folding across a merged block preserves the join result") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_filter_keeps_mergeable.rq", "example_emp_dept.ttl");
+	// Only SMITH has a department, and only department 10 is in NEW YORK.
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_LOC", "NEW YORK"}}));
+}
+
+TEST_CASE("emp_dept_filter_union.rq: FILTER distributed into union arms keeps only the matching row") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_filter_union.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_LOC", "NEW YORK"}}));
+}
+
+TEST_CASE("emp_dept_filter_join.rq: FILTER pushed onto the join side, union side still joins") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_filter_join.rq", "example_emp_dept.ttl");
+	// ?loc filtered to NEW YORK selects department 10, which inner-joins the
+	// UNION arms: its name (APPSERVER) and its staff count (1).
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows,
+	                  {{"V_D", "http://data.example.com/department/10"}, {"V_LOC", "NEW YORK"}, {"V_X", "APPSERVER"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_LOC", "NEW YORK"}, {"V_X", "1"}}));
+}
+
+TEST_CASE("emp_dept_filter_optional.rq: FILTER on the optional var applies after the outer join") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_filter_optional.rq", "example_emp_dept.ttl");
+	// Only department 10 has LOC = NEW YORK; employees (loc unbound) and the
+	// other department are dropped by the filter above the left outer join.
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows,
+	                  {{"V_E", "http://data.example.com/department/10"}, {"V_N", "APPSERVER"}, {"V_LOC", "NEW YORK"}}));
+}
+
+TEST_CASE("emp_dept_filter_exists.rq: EXISTS filter (kept above the union) keeps only rows with a staff triple") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_filter_exists.rq", "example_emp_dept.ttl");
+	// Both departments have a staff count (EXISTS true); employees have none.
+	REQUIRE(rows.size() == 4);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_LOC", "NEW YORK"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/20"}, {"V_LOC", "BOSTON"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_LOC", "APPSERVER"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/20"}, {"V_LOC", "SALES"}}));
+}
+
+TEST_CASE("emp_dept_filter_minus.rq: FILTER pushed onto the MINUS left side preserves anti-join semantics") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_filter_minus.rq", "example_emp_dept.ttl");
+	// Left side filtered to SMITH (employee 7369); SMITH has no ex:location
+	// triple so MINUS keeps it.
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_N", "SMITH"}}));
+}

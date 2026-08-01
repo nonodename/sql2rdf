@@ -46,6 +46,19 @@ struct ColumnInfo {
 	std::string tableIdentity;   ///< logical-table identity of the source (PureColumn/TemplateExpr).
 	std::string templateString;  ///< original rr:template (TemplateExpr) - for same-template join detection.
 
+	/// TemplateExpr only: the template's placeholder columns, in
+	/// referencedColumns() order - raw names (for TypeCatalog lookup) and
+	/// alias-qualified uncast refs (for the rewritten comparison).
+	std::vector<std::string> templateColumnNames;
+	std::vector<std::string> templateColumnRefs;
+
+	/// TemplateExpr only: true when no two placeholders are textually adjacent,
+	/// so the constructed term text determines the placeholder values uniquely
+	/// (invertTemplate's PerColumnMatch condition). Required before equality of
+	/// two same-template terms may be rewritten to equality of their
+	/// placeholder columns.
+	bool templateInvertible = false;
+
 	bool nonNull = true; ///< guaranteed non-NULL in every row (bound) vs may be NULL (optional).
 };
 
@@ -160,7 +173,15 @@ public:
 	}
 	RelNodePtr left;
 	RelNodePtr right;
-	std::vector<EquiKey> keys; ///< always null-tolerant, per SPARQL MINUS semantics.
+
+	/// MINUS compatibility is null-tolerant in principle (an unbound variable
+	/// is not in the solution's domain, so it doesn't constrain compatibility),
+	/// but the tolerance is *vacuous* for a key whose columns are both
+	/// guaranteed non-NULL. So `nullSafe` is set from the operands' actual
+	/// optionality (as for a join), not blanket-true: an OR'd null-tolerant
+	/// comparison is a non-equi predicate that stops the engine from
+	/// decorrelating the anti-join into a hash semi-join.
+	std::vector<EquiKey> keys;
 };
 
 class UnionByNameNode : public RelNode {

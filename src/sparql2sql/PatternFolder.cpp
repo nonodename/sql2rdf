@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "sparql-parser/ast/Expression.h"
+#include "sparql2sql/ExprAnalysis.h"
 #include "sparql2sql/ExpressionTranslator.h"
 #include "sparql2sql/SqlDialect.h"
 #include "sparql2sql/TermMapSql.h"
@@ -22,68 +23,6 @@ std::set<std::string> setIntersect(const std::set<std::string> &a, const std::se
 	std::set<std::string> out;
 	std::set_intersection(a.begin(), a.end(), b.begin(), b.end(), std::inserter(out, out.begin()));
 	return out;
-}
-
-// Recursively collect every VarRef appearing anywhere inside an expression
-// tree (used only to decide BIND's conservative optional-var
-// over-approximation - EXISTS's own internal pattern variables are locally
-// scoped and intentionally not collected here).
-void collectVarRefs(const sparql::ast::Expression &expr, std::vector<std::string> &out) {
-	using sparql::ast::AggregateExpr;
-	using sparql::ast::BinaryExpr;
-	using sparql::ast::BuiltInCallExpr;
-	using sparql::ast::ExprKind;
-	using sparql::ast::FunctionCallExpr;
-	using sparql::ast::InExpr;
-	using sparql::ast::UnaryExpr;
-	using sparql::ast::VarExpr;
-	switch (expr.kind()) {
-	case ExprKind::VarRef:
-		out.push_back(static_cast<const VarExpr &>(expr).var->name);
-		return;
-	case ExprKind::Literal:
-	case ExprKind::IriRef:
-	case ExprKind::Exists:
-		return;
-	case ExprKind::Unary:
-		collectVarRefs(*static_cast<const UnaryExpr &>(expr).operand, out);
-		return;
-	case ExprKind::Binary: {
-		const auto &b = static_cast<const BinaryExpr &>(expr);
-		collectVarRefs(*b.left, out);
-		collectVarRefs(*b.right, out);
-		return;
-	}
-	case ExprKind::In: {
-		const auto &in = static_cast<const InExpr &>(expr);
-		collectVarRefs(*in.lhs, out);
-		for (const auto &e : in.list) {
-			collectVarRefs(*e, out);
-		}
-		return;
-	}
-	case ExprKind::FunctionCall: {
-		const auto &fc = static_cast<const FunctionCallExpr &>(expr);
-		for (const auto &a : fc.args) {
-			collectVarRefs(*a, out);
-		}
-		return;
-	}
-	case ExprKind::BuiltInCall: {
-		const auto &bc = static_cast<const BuiltInCallExpr &>(expr);
-		for (const auto &a : bc.args) {
-			collectVarRefs(*a, out);
-		}
-		return;
-	}
-	case ExprKind::Aggregate: {
-		const auto &agg = static_cast<const AggregateExpr &>(expr);
-		if (agg.arg) {
-			collectVarRefs(*agg.arg, out);
-		}
-		return;
-	}
-	}
 }
 
 bool referencesOptionalVar(const sparql::ast::Expression &expr, const std::set<std::string> &optionalVars) {
@@ -252,10 +191,10 @@ RelNodePtr antiJoin(RelNodePtr left, RelNodePtr right, TranslationContext &ctx) 
 
 	RelNodePtr node(new AntiJoinNode());
 	AntiJoinNode &anti = static_cast<AntiJoinNode &>(*node);
+	// buildKeys already derives null-safety from each operand's optionality,
+	// which is exactly what MINUS needs: null tolerance only ever matters for a
+	// key that can actually be NULL (see AntiJoinNode::keys).
 	anti.keys = buildKeys(*left, *right);
-	for (auto &k : anti.keys) {
-		k.nullSafe = true; // MINUS compatibility is always null-tolerant.
-	}
 	anti.schema() = left->schema(); // MINUS preserves left's schema exactly.
 	anti.left = std::move(left);
 	anti.right = std::move(right);

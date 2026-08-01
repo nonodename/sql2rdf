@@ -30,8 +30,11 @@ cmake --build build --target sql2rdf_sparql    # standalone SPARQL query parser 
 cmake --build build --target sql2rdf_sparql2sql # SPARQL-to-SQL translator (no DuckDB, no yaml-cpp)
 cmake --build build --target test_runner       # tests (no DuckDB needed)
 cmake --build build --target SQL2RDF++         # CLI (requires DuckDB installed, e.g. `brew install duckdb`)
+cmake --build build --target sql2rdf_benchmark # SPARQL-to-SQL performance harness (requires DuckDB)
 cmake --build build                            # everything
 ```
+
+`sql2rdf_benchmark` (`src/benchmark/BenchmarkMain.cpp`) is a dev-only timing harness for the SPARQL-to-SQL pipeline, gated behind the same conditions as the CLI (`SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB)`) so it never leaks into downstream FetchContent builds or the DuckDB-free `test_runner`. It takes a mapping, a DuckDB database, and a flat JSON object of `{ "name": "SPARQL text", ... }`, then for each named query times translation (SPARQL parse + `translateQuery`) and execution (DuckDB execute + row drain) separately over configurable `--warmup`/`--repeat` iterations, printing per-query min/median/max timings and row counts (`-h` for options). It exists to baseline real-world customer workloads before optimizing the translator; **all inputs are supplied at runtime and must never be checked in** (`.gitignore` blocks `*.duckdb` and `benchmark-local/`).
 
 If DuckDB is not installed, CMake prints a warning and skips the CLI; the libraries and tests still build. `-DUSE_EMBEDDED_DUCKDB=ON` builds DuckDB from source instead (slow — avoid unless needed).
 

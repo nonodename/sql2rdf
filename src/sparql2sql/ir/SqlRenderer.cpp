@@ -2,9 +2,12 @@
 
 #include <set>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "sparql2sql/ExpressionTranslator.h"
 #include "sparql2sql/SqlDialect.h"
+#include "sparql2sql/ir/NativeKey.h"
 #include "sparql2sql/ir/RelNode.h"
 
 namespace sparql2sql {
@@ -28,21 +31,59 @@ TranslatedPattern scopeOf(const RelNode &node) {
 	return tp;
 }
 
-std::string renderSpj(const SpjRelation &rel, TranslationContext &ctx) {
+// Render one equi-key comparison across a derived-table boundary (where only
+// the mangled `v_<name>` columns are in scope, so no native-column rewrite is
+// possible here - see nativeKeyProjections).
+//
+// A null-tolerant key only needs the IS NULL disjunct for the side that can
+// actually be NULL, and needs neither when both sides are guaranteed non-NULL.
+// This matters far more than the redundant text suggests: an OR'd comparison is
+// a non-equi predicate, which stops the engine from decorrelating a
+// correlated/anti-join into a hash semi-join and leaves it a nested loop over
+// the inner relation.
+std::string keyComparison(const EquiKey &k, const std::string &lcol, const std::string &rcol) {
+	std::string cond = lcol + " = " + rcol;
+	if (!k.nullSafe) {
+		return cond;
+	}
+	if (!k.leftCol.nonNull) {
+		cond += " OR " + lcol + " IS NULL";
+	}
+	if (!k.rightCol.nonNull) {
+		cond += " OR " + rcol + " IS NULL";
+	}
+	if (cond.find(" OR ") == std::string::npos) {
+		return cond; // Flagged null-safe, but provably neither side is nullable.
+	}
+	return "(" + cond + ")";
+}
+
+// Extra projected columns to append to an SpjRelation's SELECT list: the
+// (mangled name, SQL expression) pairs a join renderer needs exposed through
+// the derived-table boundary so it can compare native key columns.
+using ExtraProjections = std::vector<std::pair<std::string, std::string>>;
+
+std::string renderSpj(const SpjRelation &rel, TranslationContext &ctx, const ExtraProjections *extra) {
 	const SqlDialect &dialect = ctx.dialect();
 	std::string sql = "SELECT ";
 	if (rel.distinct) {
 		sql += "DISTINCT ";
 	}
-	if (rel.schema().empty()) {
+	if (rel.schema().empty() && (extra == nullptr || extra->empty())) {
 		sql += "1 AS " + dialect.quoteIdentifier("_dummy");
 	} else {
-		for (std::size_t i = 0; i < rel.schema().size(); ++i) {
-			if (i > 0) {
-				sql += ", ";
-			}
-			const ColumnInfo &c = rel.schema()[i];
+		bool first = true;
+		for (const auto &c : rel.schema()) {
+			sql += first ? "" : ", ";
+			first = false;
 			sql += c.renderedExpr + " AS " + mangleVar(c.var, dialect);
+		}
+		if (extra != nullptr) {
+			for (const auto &e : *extra) {
+				sql += first ? "" : ", ";
+				first = false;
+				sql += e.second + " AS " + e.first;
+			}
 		}
 	}
 	sql += " FROM ";
@@ -66,12 +107,66 @@ std::string renderSpj(const SpjRelation &rel, TranslationContext &ctx) {
 	return sql;
 }
 
+// Plan native-column comparisons for a join across the derived-table boundary.
+// Only the projected term text is in scope out there, so a native comparison
+// needs each side's base columns exposed as extra hidden projections, which is
+// only possible when the child renders its own SELECT list - i.e. when it is
+// directly an SpjRelation (the shape flattening produces). Anything else, and
+// any null-tolerant key, keeps the term-text comparison.
+//
+// This is the rewrite an engine cannot perform for itself: R2RML subjects are
+// nearly always rr:template IRIs, so without it every subject join hashes
+// constructed IRI strings instead of the underlying key columns.
+void planNativeKeys(const std::vector<EquiKey> &keys, const RelNode &left, const RelNode &right,
+                    TranslationContext &ctx, const std::string &leftAlias, const std::string &rightAlias,
+                    ExtraProjections &leftExtra, ExtraProjections &rightExtra, std::vector<std::string> &conds,
+                    std::vector<bool> &rewritten) {
+	rewritten.assign(keys.size(), false);
+	if (left.kind() != RelKind::Spj || right.kind() != RelKind::Spj) {
+		return;
+	}
+	const SqlDialect &dialect = ctx.dialect();
+	for (std::size_t i = 0; i < keys.size(); ++i) {
+		if (keys[i].nullSafe) {
+			continue;
+		}
+		std::vector<NativeKeyPair> pairs = nativeKeyPairs(keys[i].leftCol, keys[i].rightCol, ctx.catalog());
+		if (pairs.empty()) {
+			continue;
+		}
+		for (const auto &p : pairs) {
+			std::string hidden = dialect.quoteIdentifier("k_" + std::to_string(leftExtra.size()));
+			leftExtra.emplace_back(hidden, p.leftRef);
+			rightExtra.emplace_back(hidden, p.rightRef);
+			conds.push_back(leftAlias + "." + hidden + " = " + rightAlias + "." + hidden);
+		}
+		rewritten[i] = true;
+	}
+}
+
+// Render a join/anti-join child, appending `extra` hidden projections when the
+// native-key plan asked for them (only ever non-empty for a direct Spj child).
+std::string renderChild(const RelNode &node, TranslationContext &ctx, const ExtraProjections &extra) {
+	if (!extra.empty() && node.kind() == RelKind::Spj) {
+		return renderSpj(static_cast<const SpjRelation &>(node), ctx, &extra);
+	}
+	return renderNode(node, ctx);
+}
+
 std::string renderJoin(const JoinNode &join, TranslationContext &ctx) {
 	const SqlDialect &dialect = ctx.dialect();
 	std::string leftAlias = ctx.nextAlias();
 	std::string rightAlias = ctx.nextAlias();
-	std::string leftSql = renderNode(*join.left, ctx);
-	std::string rightSql = renderNode(*join.right, ctx);
+
+	ExtraProjections leftExtra;
+	ExtraProjections rightExtra;
+	std::vector<std::string> nativeConds;
+	std::vector<bool> rewritten;
+	planNativeKeys(join.keys, *join.left, *join.right, ctx, leftAlias, rightAlias, leftExtra, rightExtra, nativeConds,
+	               rewritten);
+
+	std::string leftSql = renderChild(*join.left, ctx, leftExtra);
+	std::string rightSql = renderChild(*join.right, ctx, rightExtra);
 
 	std::set<std::string> shared;
 	for (const auto &k : join.keys) {
@@ -80,17 +175,20 @@ std::string renderJoin(const JoinNode &join, TranslationContext &ctx) {
 
 	std::vector<std::string> onConditions;
 	std::vector<std::string> projectExprs;
-	for (const auto &k : join.keys) {
+	for (std::size_t i = 0; i < join.keys.size(); ++i) {
+		const EquiKey &k = join.keys[i];
 		std::string lcol = leftAlias + "." + mangleVar(k.var, dialect);
 		std::string rcol = rightAlias + "." + mangleVar(k.var, dialect);
+		if (!rewritten[i]) {
+			onConditions.push_back(keyComparison(k, lcol, rcol));
+		}
 		if (k.nullSafe) {
-			onConditions.push_back("(" + lcol + " = " + rcol + " OR " + lcol + " IS NULL OR " + rcol + " IS NULL)");
 			projectExprs.push_back("COALESCE(" + lcol + ", " + rcol + ") AS " + mangleVar(k.var, dialect));
 		} else {
-			onConditions.push_back(lcol + " = " + rcol);
 			projectExprs.push_back(lcol + " AS " + mangleVar(k.var, dialect));
 		}
 	}
+	onConditions.insert(onConditions.end(), nativeConds.begin(), nativeConds.end());
 	for (const auto &v : join.left->allVars()) {
 		if (shared.count(v)) {
 			continue;
@@ -134,22 +232,46 @@ std::string renderAntiJoin(const AntiJoinNode &anti, TranslationContext &ctx) {
 	const SqlDialect &dialect = ctx.dialect();
 	std::string leftAlias = ctx.nextAlias();
 	std::string rightAlias = ctx.nextAlias();
-	std::string leftSql = renderNode(*anti.left, ctx);
-	std::string rightSql = renderNode(*anti.right, ctx);
+	ExtraProjections leftExtra;
+	ExtraProjections rightExtra;
+	std::vector<std::string> nativeConds;
+	std::vector<bool> rewritten;
+	planNativeKeys(anti.keys, *anti.left, *anti.right, ctx, leftAlias, rightAlias, leftExtra, rightExtra, nativeConds,
+	               rewritten);
+
+	std::string leftSql = renderChild(*anti.left, ctx, leftExtra);
+	std::string rightSql = renderChild(*anti.right, ctx, rightExtra);
+
+	std::vector<std::string> conds;
+	for (std::size_t i = 0; i < anti.keys.size(); ++i) {
+		if (rewritten[i]) {
+			continue;
+		}
+		const EquiKey &k = anti.keys[i];
+		conds.push_back(keyComparison(k, leftAlias + "." + mangleVar(k.var, dialect),
+		                              rightAlias + "." + mangleVar(k.var, dialect)));
+	}
+	conds.insert(conds.end(), nativeConds.begin(), nativeConds.end());
 
 	std::string cond;
-	bool first = true;
-	for (const auto &k : anti.keys) {
-		std::string lcol = leftAlias + "." + mangleVar(k.var, dialect);
-		std::string rcol = rightAlias + "." + mangleVar(k.var, dialect);
-		if (!first) {
-			cond += " AND ";
-		}
-		first = false;
-		cond += "(" + lcol + " = " + rcol + " OR " + lcol + " IS NULL OR " + rcol + " IS NULL)";
+	for (std::size_t i = 0; i < conds.size(); ++i) {
+		cond += (i > 0 ? " AND " : "");
+		cond += conds[i];
 	}
-	return "SELECT * FROM (" + leftSql + ") AS " + leftAlias + " WHERE NOT EXISTS (SELECT 1 FROM (" + rightSql +
-	       ") AS " + rightAlias + " WHERE " + cond + ")";
+
+	// Project MINUS's schema (which is the left operand's) explicitly rather
+	// than SELECT *: the left side may carry hidden native-key columns that must
+	// not escape into an enclosing UNION BY NAME.
+	std::string projection;
+	for (const auto &c : anti.schema()) {
+		projection += (projection.empty() ? "" : ", ");
+		projection += leftAlias + "." + mangleVar(c.var, dialect) + " AS " + mangleVar(c.var, dialect);
+	}
+	if (projection.empty()) {
+		projection = "1 AS " + dialect.quoteIdentifier("_dummy");
+	}
+	return "SELECT " + projection + " FROM (" + leftSql + ") AS " + leftAlias + " WHERE NOT EXISTS (SELECT 1 FROM (" +
+	       rightSql + ") AS " + rightAlias + " WHERE " + cond + ")";
 }
 
 std::string renderUnion(const UnionByNameNode &un, TranslationContext &ctx) {
@@ -197,7 +319,7 @@ std::string renderEmpty(const EmptyNode &e, TranslationContext &ctx) {
 std::string renderNode(const RelNode &node, TranslationContext &ctx) {
 	switch (node.kind()) {
 	case RelKind::Spj:
-		return renderSpj(static_cast<const SpjRelation &>(node), ctx);
+		return renderSpj(static_cast<const SpjRelation &>(node), ctx, nullptr);
 	case RelKind::Join:
 		return renderJoin(static_cast<const JoinNode &>(node), ctx);
 	case RelKind::AntiJoin:

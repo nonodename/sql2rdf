@@ -191,6 +191,7 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 	opts.topLevelDistinct =
 	    (query.distinct || query.reduced) && query.solutionModifier.groupBy.empty() && !queryHasAggregate(query);
 	opts.catalog = ctx.catalog();
+	opts.ctx = &ctx;
 	rootNode = optimize(std::move(rootNode), opts);
 	TranslatedPattern source = renderRelation(*rootNode, ctx);
 
@@ -289,6 +290,7 @@ std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMa
 		OptimizerOptions askOpts;
 		askOpts.topLevelDistinct = true; // ASK is an existence check: per-pattern DISTINCT is redundant.
 		askOpts.catalog = ctx.catalog();
+		askOpts.ctx = &ctx;
 		rootNode = optimize(std::move(rootNode), askOpts);
 		TranslatedPattern source = renderRelation(*rootNode, ctx);
 

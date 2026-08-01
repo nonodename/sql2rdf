@@ -8,6 +8,7 @@
 #include "sparql2sql/PatternFolder.h"
 #include "sparql2sql/SqlDialect.h"
 #include "sparql2sql/TranslationError.h"
+#include "sparql2sql/ir/Optimizer.h"
 #include "sparql2sql/ir/RelNode.h"
 #include "sparql2sql/ir/SqlRenderer.h"
 
@@ -127,6 +128,22 @@ std::set<std::string> setIntersect(const std::set<std::string> &a, const std::se
 std::string translateExists(const ExistsExpr &ex, const TranslatedPattern &scope, const std::string &alias,
                             TranslationContext &ctx) {
 	RelNodePtr nestedNode = fold(*ex.pattern, ctx);
+	// Optimize the correlated subquery body like a top-level pattern: an
+	// existence check never cares about duplicate rows, so topLevelDistinct is
+	// safe here (as for ASK). Without this, EXISTS bodies would miss flatten,
+	// self-join elimination, and filter pushdown.
+	//
+	// NOTE: dropping the body's DISTINCT is only a *win* because the correlation
+	// below is a plain equality. Against the older null-tolerant OR form the
+	// engine could not decorrelate, so the inner relation was scanned per outer
+	// row and the DISTINCT was load-bearing - stripping it there cost ~2.2x on a
+	// 10M-row body. Do not reintroduce an OR'd correlation without revisiting
+	// this flag.
+	OptimizerOptions opts;
+	opts.topLevelDistinct = true;
+	opts.catalog = ctx.catalog();
+	opts.ctx = &ctx;
+	nestedNode = optimize(std::move(nestedNode), opts);
 	TranslatedPattern nested = renderRelation(*nestedNode, ctx);
 	std::set<std::string> shared = setIntersect(scope.allVars(), nested.allVars());
 	std::string innerAlias = ctx.nextAlias();
@@ -134,16 +151,33 @@ std::string translateExists(const ExistsExpr &ex, const TranslatedPattern &scope
 	if (shared.empty()) {
 		innerSql = "SELECT 1 FROM (" + nested.sql + ") AS " + innerAlias;
 	} else {
+		// Correlate on each shared variable, emitting an IS NULL disjunct only
+		// for a side that can actually be unbound. An outer NULL means the
+		// variable is not in the current solution's domain, so it constrains
+		// nothing and must match any inner row; an inner NULL likewise. But when
+		// both sides are guaranteed bound those disjuncts are dead, and dropping
+		// them is what lets the engine decorrelate this into a hash semi-join
+		// instead of a nested loop over the whole inner relation.
 		std::string cond;
 		bool first = true;
 		for (const auto &v : shared) {
 			std::string outerCol = alias + "." + mangleVar(v, ctx.dialect());
 			std::string innerCol = innerAlias + "." + mangleVar(v, ctx.dialect());
+			std::string one = outerCol + " = " + innerCol;
+			if (scope.optionalVars.count(v) != 0) {
+				one += " OR " + outerCol + " IS NULL";
+			}
+			if (nested.optionalVars.count(v) != 0) {
+				one += " OR " + innerCol + " IS NULL";
+			}
+			if (one.find(" OR ") != std::string::npos) {
+				one = "(" + one + ")";
+			}
 			if (!first) {
 				cond += " AND ";
 			}
 			first = false;
-			cond += "(" + outerCol + " = " + innerCol + " OR " + outerCol + " IS NULL OR " + innerCol + " IS NULL)";
+			cond += one;
 		}
 		innerSql = "SELECT 1 FROM (" + nested.sql + ") AS " + innerAlias + " WHERE " + cond;
 	}

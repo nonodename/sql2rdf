@@ -1,0 +1,28 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Toy fixture for the same-template native-join-key optimization: two
+# independent triples maps over different tables whose subject maps use the
+# IDENTICAL rr:template. A SPARQL query unifying their subjects joins on the
+# generated IRI text, which - given the template is invertible and a type
+# catalog proves the placeholder columns comparable - is equivalent to (and far
+# cheaper than) joining on the underlying PEOPLE.ID / WIDGETS.ID columns.
+#
+# Note the template string embeds the placeholder's column NAME, so two maps
+# can only share a template if they also share that column name.
+
+<#PeopleTriplesMap>
+    rr:logicalTable [ rr:tableName "PEOPLE" ];
+    rr:subjectMap [ rr:template "http://ex.org/thing/{ID}" ];
+    rr:predicateObjectMap [
+        rr:predicate ex:pname;
+        rr:objectMap [ rr:column "NAME" ];
+    ].
+
+<#WidgetsTriplesMap>
+    rr:logicalTable [ rr:tableName "WIDGETS" ];
+    rr:subjectMap [ rr:template "http://ex.org/thing/{ID}" ];
+    rr:predicateObjectMap [
+        rr:predicate ex:wname;
+        rr:objectMap [ rr:column "NAME" ];
+    ].

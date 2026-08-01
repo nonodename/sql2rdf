@@ -1,0 +1,8 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?d ?loc
+WHERE {
+  { ?d ex:location ?loc . }
+  UNION
+  { ?d ex:name ?loc . }
+  FILTER(EXISTS { ?d ex:staff ?s . })
+}
