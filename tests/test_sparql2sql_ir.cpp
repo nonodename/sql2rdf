@@ -211,6 +211,113 @@ TEST_CASE("optimize: a type catalog enables a native (uncast) join key", "[sparq
 
 namespace {
 
+// A projected column produced by an rr:template over a single placeholder
+// column - the shape almost every R2RML subject map has.
+ColumnInfo tmplCol(const std::string &var, const std::string &alias, const std::string &prefix,
+                   const std::string &placeholder, const std::string &table) {
+	ColumnInfo c;
+	c.var = var;
+	c.renderedExpr = "('" + prefix + "' || CAST(" + alias + ".\"" + placeholder + "\" AS VARCHAR))";
+	c.prov = Provenance::TemplateExpr;
+	c.sourceAlias = alias;
+	c.tableIdentity = table;
+	// Note the template string embeds the placeholder's column NAME, so two
+	// sides can only share a template if they also share that column name -
+	// they differ in table and alias, which is exactly the shape a SPARQL
+	// variable bound to one map's subject IRI and another's object IRI takes.
+	c.templateString = prefix + "{" + placeholder + "}";
+	c.templateColumnNames.push_back(placeholder);
+	c.templateColumnRefs.push_back(alias + ".\"" + placeholder + "\"");
+	c.templateInvertible = true;
+	c.nonNull = true;
+	return c;
+}
+
+bool hasCond(const sparql2sql::RelNode &node, const std::string &cond) {
+	const SpjRelation &spj = static_cast<const SpjRelation &>(node);
+	for (const auto &c : spj.whereConds) {
+		if (c == cond) {
+			return true;
+		}
+	}
+	return false;
+}
+
+} // namespace
+
+TEST_CASE("optimize: two same-template subject keys join on their placeholder columns", "[sparql2sql][ir]") {
+	// The dominant real-world join shape: a SPARQL variable bound to an IRI
+	// built by the same rr:template on both sides. Without this rewrite the join
+	// hashes constructed IRI strings instead of the underlying key columns.
+	std::vector<ColumnInfo> leftCols = {tmplCol("k", "t1", "http://x/d/", "DEPTNO", "company")};
+	std::vector<ColumnInfo> rightCols = {tmplCol("k", "t2", "http://x/d/", "DEPTNO", "relations")};
+	RelNodePtr join = makeJoin(JoinKind::Inner, makeSpj("t1", "company", leftCols, true),
+	                           makeSpj("t2", "relations", rightCols, true), "k", /*nullSafe=*/false);
+
+	TypeCatalog cat;
+	cat.columnTypes["company"]["DEPTNO"] = "BIGINT";
+	cat.columnTypes["relations"]["DEPTNO"] = "BIGINT";
+	OptimizerOptions opts;
+	opts.catalog = &cat;
+	RelNodePtr result = optimize(std::move(join), opts);
+
+	REQUIRE(result->kind() == RelKind::Spj);
+	CHECK(hasCond(*result, "t1.\"DEPTNO\" = t2.\"DEPTNO\""));
+}
+
+namespace {
+
+// The VARCHAR-cast fallback the rewrite must leave in place when it is unsound.
+const char *const kStringCompare = "('http://x/d/' || CAST(t1.\"DEPTNO\" AS VARCHAR)) = "
+                                   "('http://x/d/' || CAST(t2.\"DEPTNO\" AS VARCHAR))";
+
+TypeCatalog comparableCatalog() {
+	TypeCatalog cat;
+	cat.columnTypes["company"]["DEPTNO"] = "BIGINT";
+	cat.columnTypes["relations"]["DEPTNO"] = "BIGINT";
+	return cat;
+}
+
+RelNodePtr templateJoin(std::vector<ColumnInfo> leftCols, std::vector<ColumnInfo> rightCols) {
+	return makeJoin(JoinKind::Inner, makeSpj("t1", "company", std::move(leftCols), true),
+	                makeSpj("t2", "relations", std::move(rightCols), true), "k", /*nullSafe=*/false);
+}
+
+} // namespace
+
+TEST_CASE("optimize: different template strings keep the term-text join key", "[sparql2sql][ir]") {
+	// Two templates that only coincide by construction in this fixture: equal
+	// generated text does not imply equal placeholder columns.
+	std::vector<ColumnInfo> leftCols = {tmplCol("k", "t1", "http://x/d/", "DEPTNO", "company")};
+	std::vector<ColumnInfo> rightCols = {tmplCol("k", "t2", "http://y/d/", "DEPTNO", "relations")};
+	rightCols[0].renderedExpr = "('http://x/d/' || CAST(t2.\"DEPTNO\" AS VARCHAR))";
+	TypeCatalog cat = comparableCatalog();
+	OptimizerOptions opts;
+	opts.catalog = &cat;
+	CHECK(hasCond(*optimize(templateJoin(leftCols, rightCols), opts), kStringCompare));
+}
+
+TEST_CASE("optimize: a non-invertible template keeps the term-text join key", "[sparql2sql][ir]") {
+	// Adjacent placeholders make the generated text ambiguous to split, so it
+	// does not determine the placeholder values.
+	std::vector<ColumnInfo> leftCols = {tmplCol("k", "t1", "http://x/d/", "DEPTNO", "company")};
+	std::vector<ColumnInfo> rightCols = {tmplCol("k", "t2", "http://x/d/", "DEPTNO", "relations")};
+	leftCols[0].templateInvertible = false;
+	TypeCatalog cat = comparableCatalog();
+	OptimizerOptions opts;
+	opts.catalog = &cat;
+	CHECK(hasCond(*optimize(templateJoin(leftCols, rightCols), opts), kStringCompare));
+}
+
+TEST_CASE("optimize: without a catalog a same-template join key stays VARCHAR-cast", "[sparql2sql][ir]") {
+	std::vector<ColumnInfo> leftCols = {tmplCol("k", "t1", "http://x/d/", "DEPTNO", "company")};
+	std::vector<ColumnInfo> rightCols = {tmplCol("k", "t2", "http://x/d/", "DEPTNO", "relations")};
+	OptimizerOptions opts; // no catalog: placeholder types unknown
+	CHECK(hasCond(*optimize(templateJoin(leftCols, rightCols), opts), kStringCompare));
+}
+
+namespace {
+
 // A single-source SpjRelation carrying self-join-elimination subject metadata.
 RelNodePtr makeSubjectSpj(const std::string &alias, const std::string &table, const std::string &subjectVar,
                           const std::string &subjectKeySig, std::vector<ColumnInfo> cols, bool distinct) {

@@ -7,7 +7,11 @@
 #include <vector>
 
 #include "sparql2sql/ExprAnalysis.h"
+#include "sparql2sql/ExpressionTranslator.h"
+#include "sparql2sql/SqlDialect.h"
+#include "sparql2sql/TranslatedPattern.h"
 #include "sparql2sql/TypeCatalog.h"
+#include "sparql2sql/ir/NativeKey.h"
 #include "sparql2sql/ir/RelNode.h"
 
 namespace sparql2sql {
@@ -17,16 +21,23 @@ namespace {
 // The SQL for one shared-variable equi-join key, folded into a flattened
 // SpjRelation's WHERE clause.
 //
-// When both sides are a pure (uncast) base column, the types are known
-// comparable via the catalog, and the key isn't null-tolerant, join on the
-// NATIVE columns (`t1."x" = t2."y"`) - index-friendly and the actual perf win.
-// Otherwise fall back to the VARCHAR-cast comparison (always correct): a
-// null-tolerant disjunction for OPTIONAL-lineage keys, or plain equality.
+// When the key isn't null-tolerant and nativeKeyPairs can prove a native
+// rewrite (both sides a pure uncast base column, or both the same invertible
+// rr:template), join on the NATIVE columns (`t1."x" = t2."y"`) - index-friendly
+// and the actual perf win. Otherwise fall back to the VARCHAR-cast comparison
+// (always correct): a null-tolerant disjunction for OPTIONAL-lineage keys, or
+// plain equality.
 std::string joinEquality(const ColumnInfo &lc, const ColumnInfo &rc, bool nullSafe, const TypeCatalog *catalog) {
-	if (!nullSafe && lc.prov == Provenance::PureColumn && rc.prov == Provenance::PureColumn &&
-	    !lc.nativeColumnRef.empty() && !rc.nativeColumnRef.empty() && catalog != nullptr &&
-	    catalog->comparable(lc.tableIdentity, lc.columnName, rc.tableIdentity, rc.columnName)) {
-		return lc.nativeColumnRef + " = " + rc.nativeColumnRef;
+	if (!nullSafe) {
+		std::vector<NativeKeyPair> pairs = nativeKeyPairs(lc, rc, catalog);
+		if (!pairs.empty()) {
+			std::string cond;
+			for (std::size_t i = 0; i < pairs.size(); ++i) {
+				cond += (i > 0 ? " AND " : "");
+				cond += pairs[i].leftRef + " = " + pairs[i].rightRef;
+			}
+			return cond;
+		}
 	}
 	if (nullSafe) {
 		return "(" + lc.renderedExpr + " = " + rc.renderedExpr + " OR " + lc.renderedExpr + " IS NULL OR " +
@@ -242,6 +253,9 @@ void eliminateSelfJoinsInSpj(SpjRelation &spj) {
 		c.sourceAlias = renameAlias(c.sourceAlias, rename);
 		c.renderedExpr = applyRename(c.renderedExpr, rename);
 		c.nativeColumnRef = applyRename(c.nativeColumnRef, rename);
+		for (auto &ref : c.templateColumnRefs) {
+			ref = applyRename(ref, rename);
+		}
 	}
 
 	std::vector<std::string> newConds;
@@ -340,12 +354,11 @@ void stripDistinct(RelNode &node) {
 
 // --- Filter pushdown -----------------------------------------------------
 //
-// Re-parent FILTERs downward so each wraps the smallest relation supplying its
-// variables. A FilterNode's predicate is a borrowed AST pointer rendered late
-// against its child's schema, so pushdown is pure re-parenting: no re-render,
-// no AST synthesis. A conjunction is decomposed into single-conjunct
-// FilterNodes (each borrowing a sub-expression pointer), and each conjunct is
-// routed independently.
+// Re-parent FILTERs downward so each lands on the smallest relation supplying
+// its variables. A FilterNode's predicate is a borrowed AST pointer rendered
+// late against its child's schema, so moving one is pure re-parenting: no
+// re-render, no AST synthesis. A conjunction is decomposed into single
+// conjuncts, and each is routed independently.
 //
 // Safe targets: inner-join sides (predicate over one side only), every arm of
 // a UNION (WHERE distributes over UNION when every arm supplies the vars), and
@@ -354,6 +367,17 @@ void stripDistinct(RelNode &node) {
 // boundaries - a conjunct that reaches one stops there. Conjuncts containing
 // EXISTS/NOT EXISTS are never pushed (their correlation variables are
 // deliberately invisible to collectVarRefs), so they too stop at the boundary.
+//
+// A conjunct that reaches an SpjRelation is FOLDED INTO that block's WHERE list
+// rather than wrapping it in a FilterNode (when a TranslationContext is
+// available - see foldConjunctIntoSpj). That is what makes this pass worth
+// running at all: this pass runs BEFORE flattening, so a folded predicate
+// leaves the block an SpjRelation and mergeInner can still fuse it with its
+// inner-join partners. Left as a FilterNode it would instead be a flattening
+// boundary, splitting one merged block into two derived tables and losing the
+// native-typed-join-key rewrite across the split. (Simply re-parenting a
+// FilterNode lower buys nothing against an engine that does its own predicate
+// pushdown through derived tables; keeping blocks mergeable does.)
 
 std::set<std::string> varRefSet(const sparql::ast::Expression &expr) {
 	std::vector<std::string> refs;
@@ -367,6 +391,44 @@ bool isSubset(const std::set<std::string> &small, const std::set<std::string> &b
 			return false;
 		}
 	}
+	return true;
+}
+
+// Fold one FILTER conjunct into an SpjRelation's WHERE list.
+//
+// The predicate is rendered against a fresh sentinel alias, so every variable
+// reference comes out as `sentinel."v_x"`; each of those is then textually
+// replaced by that column's own SQL expression, evaluated over the block's own
+// FROM sources. This is the same alias-substitution technique the self-join pass
+// uses (applyRename), and relies on the same invariant: an alias only ever
+// appears as `alias."col"`, so matching on the trailing dot is exact.
+//
+// Returns false (leaving the caller to wrap a FilterNode instead) if any
+// reference to the sentinel survives substitution, which would mean a variable
+// the block's schema doesn't supply.
+//
+// Filtering before the block's DISTINCT is equivalent to filtering after it: the
+// predicate reads only projected columns, so it cannot distinguish two rows that
+// DISTINCT would collapse.
+bool foldConjunctIntoSpj(SpjRelation &spj, const sparql::ast::Expression &pred, TranslationContext &ctx) {
+	TranslatedPattern scope;
+	for (const auto &c : spj.schema()) {
+		if (c.nonNull) {
+			scope.boundVars.insert(c.var);
+		} else {
+			scope.optionalVars.insert(c.var);
+		}
+	}
+
+	std::string sentinel = ctx.nextAlias();
+	std::string sql = translateExpression(pred, scope, sentinel, ctx);
+	for (const auto &c : spj.schema()) {
+		sql = replaceAll(sql, sentinel + "." + mangleVar(c.var, ctx.dialect()), "(" + c.renderedExpr + ")");
+	}
+	if (sql.find(sentinel + ".") != std::string::npos) {
+		return false;
+	}
+	spj.whereConds.push_back(sql);
 	return true;
 }
 
@@ -387,7 +449,8 @@ RelNodePtr wrapFilters(RelNodePtr child, const std::vector<const sparql::ast::Ex
 
 // Apply `conjuncts` as filters on top of `child`, pushing each as deep as it
 // can safely go. Recurses on strictly smaller subtrees, so it terminates.
-RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::Expression *> &conjuncts) {
+RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::Expression *> &conjuncts,
+                         TranslationContext *ctx) {
 	if (conjuncts.empty()) {
 		return child;
 	}
@@ -417,8 +480,8 @@ RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::
 				keep.push_back(c);
 			}
 		}
-		j.left = pushConjuncts(std::move(j.left), leftConj);
-		j.right = pushConjuncts(std::move(j.right), rightConj);
+		j.left = pushConjuncts(std::move(j.left), leftConj, ctx);
+		j.right = pushConjuncts(std::move(j.right), rightConj, ctx);
 		return wrapFilters(std::move(child), keep);
 	}
 	case RelKind::AntiJoin: {
@@ -433,7 +496,7 @@ RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::
 				keep.push_back(c);
 			}
 		}
-		a.left = pushConjuncts(std::move(a.left), leftConj);
+		a.left = pushConjuncts(std::move(a.left), leftConj, ctx);
 		return wrapFilters(std::move(child), keep);
 	}
 	case RelKind::UnionByName: {
@@ -461,49 +524,62 @@ RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::
 		}
 		if (!distribute.empty()) {
 			for (auto &arm : u.arms) {
-				arm = pushConjuncts(std::move(arm), distribute);
+				arm = pushConjuncts(std::move(arm), distribute, ctx);
+			}
+		}
+		return wrapFilters(std::move(child), keep);
+	}
+	case RelKind::Spj: {
+		// Fold what we can straight into the block's WHERE; anything that can't
+		// be folded (no context, an EXISTS conjunct, or a reference the schema
+		// doesn't supply) stays a FilterNode above it.
+		SpjRelation &spj = static_cast<SpjRelation &>(*child);
+		std::vector<const sparql::ast::Expression *> keep;
+		for (const auto *c : conjuncts) {
+			if (ctx == nullptr || containsExists(*c) || !foldConjunctIntoSpj(spj, *c, *ctx)) {
+				keep.push_back(c);
 			}
 		}
 		return wrapFilters(std::move(child), keep);
 	}
 	default:
-		// Spj, Bind, Raw, SingleRow, Empty: boundary.
+		// Bind, Raw, SingleRow, Empty: boundary.
 		return wrapFilters(std::move(child), conjuncts);
 	}
 }
 
 // Structural walk: recurse everywhere, and at each FilterNode split its
 // predicate into conjuncts and push them into the (already-optimized) child.
-RelNodePtr pushFilters(RelNodePtr node) {
+RelNodePtr pushFilters(RelNodePtr node, TranslationContext *ctx) {
 	switch (node->kind()) {
 	case RelKind::Filter: {
 		FilterNode &f = static_cast<FilterNode &>(*node);
-		f.child = pushFilters(std::move(f.child));
+		f.child = pushFilters(std::move(f.child), ctx);
 		std::vector<const sparql::ast::Expression *> conjuncts = splitConjuncts(*f.predicate);
-		return pushConjuncts(std::move(f.child), conjuncts);
+		return pushConjuncts(std::move(f.child), conjuncts, ctx);
 	}
 	case RelKind::Join: {
 		JoinNode &j = static_cast<JoinNode &>(*node);
-		j.left = pushFilters(std::move(j.left));
-		j.right = pushFilters(std::move(j.right));
+		j.left = pushFilters(std::move(j.left), ctx);
+		j.right = pushFilters(std::move(j.right), ctx);
 		return node;
 	}
 	case RelKind::AntiJoin: {
 		AntiJoinNode &a = static_cast<AntiJoinNode &>(*node);
-		a.left = pushFilters(std::move(a.left));
-		a.right = pushFilters(std::move(a.right));
+		a.left = pushFilters(std::move(a.left), ctx);
+		a.right = pushFilters(std::move(a.right), ctx);
 		return node;
 	}
 	case RelKind::UnionByName: {
 		UnionByNameNode &u = static_cast<UnionByNameNode &>(*node);
 		for (auto &arm : u.arms) {
-			arm = pushFilters(std::move(arm));
+			arm = pushFilters(std::move(arm), ctx);
 		}
 		return node;
 	}
 	case RelKind::Bind: {
 		BindNode &b = static_cast<BindNode &>(*node);
-		b.child = pushFilters(std::move(b.child));
+		b.child = pushFilters(std::move(b.child), ctx);
 		return node;
 	}
 	case RelKind::Spj:
@@ -518,8 +594,10 @@ RelNodePtr pushFilters(RelNodePtr node) {
 } // namespace
 
 RelNodePtr optimize(RelNodePtr root, const OptimizerOptions &opts) {
+	// Pushdown first: a conjunct folded into an SpjRelation keeps that block
+	// mergeable, so flattening can still fuse it with its inner-join partners.
+	root = pushFilters(std::move(root), opts.ctx);
 	root = flatten(std::move(root), opts.catalog);
-	root = pushFilters(std::move(root));
 	selfJoinWalk(*root);
 	if (opts.topLevelDistinct) {
 		stripDistinct(*root);

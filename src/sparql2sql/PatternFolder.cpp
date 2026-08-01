@@ -191,10 +191,10 @@ RelNodePtr antiJoin(RelNodePtr left, RelNodePtr right, TranslationContext &ctx) 
 
 	RelNodePtr node(new AntiJoinNode());
 	AntiJoinNode &anti = static_cast<AntiJoinNode &>(*node);
+	// buildKeys already derives null-safety from each operand's optionality,
+	// which is exactly what MINUS needs: null tolerance only ever matters for a
+	// key that can actually be NULL (see AntiJoinNode::keys).
 	anti.keys = buildKeys(*left, *right);
-	for (auto &k : anti.keys) {
-		k.nullSafe = true; // MINUS compatibility is always null-tolerant.
-	}
 	anti.schema() = left->schema(); // MINUS preserves left's schema exactly.
 	anti.left = std::move(left);
 	anti.right = std::move(right);

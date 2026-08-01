@@ -20,6 +20,7 @@
 #include "r2rml/TriplesMap.h"
 #include "sparql-parser/ast/Term.h"
 #include "sparql2sql/SqlDialect.h"
+#include "sparql2sql/TemplateUtil.h"
 #include "sparql2sql/TermMapSql.h"
 #include "sparql2sql/TranslationError.h"
 #include "sparql2sql/ir/RelNode.h"
@@ -185,6 +186,35 @@ std::string logicalTableIdentity(const r2rml::LogicalTable &lt) {
 	return std::string();
 }
 
+// Fill in a TemplateExpr column's placeholder metadata: the raw placeholder
+// column names, their alias-qualified uncast refs, and whether the template is
+// invertible (no two placeholders textually adjacent, so equal generated text
+// implies equal placeholder values). Read by the native-typed-join-key rewrite,
+// which turns an equality between two same-template terms into an equality
+// between their placeholder columns.
+void fillTemplateKeyInfo(ColumnInfo &col, const SqlDialect &dialect) {
+	std::vector<TemplateSegment> segments = parseTemplate(col.templateString);
+	col.templateColumnNames = referencedColumns(segments);
+	if (col.templateColumnNames.empty()) {
+		return;
+	}
+	for (const auto &name : col.templateColumnNames) {
+		col.templateColumnRefs.push_back(col.sourceAlias + "." + dialect.quoteIdentifier(name));
+	}
+	bool adjacent = false;
+	for (std::size_t i = 1; i < segments.size(); ++i) {
+		if (segments[i].isPlaceholder && segments[i - 1].isPlaceholder) {
+			adjacent = true;
+			break;
+		}
+	}
+	// A repeated placeholder ({A}/{A}) still splits unambiguously, but the
+	// forward projection then constrains the column twice; pairwise equality of
+	// the deduplicated columns remains exactly equivalent, so it needs no
+	// special handling here.
+	col.templateInvertible = !adjacent;
+}
+
 void addUnique(std::vector<std::string> &out, const std::vector<std::string> &more) {
 	for (const auto &v : more) {
 		if (std::find(out.begin(), out.end(), v) == out.end()) {
@@ -274,6 +304,8 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 			col.templateString = r.templateString;
 			if (r.prov == Provenance::PureColumn && !r.columnName.empty()) {
 				col.nativeColumnRef = r.sourceAlias + "." + dialect.quoteIdentifier(r.columnName);
+			} else if (r.prov == Provenance::TemplateExpr && !r.templateString.empty() && !r.sourceAlias.empty()) {
+				fillTemplateKeyInfo(col, dialect);
 			}
 			col.nonNull = true;
 			projections.push_back(col);

@@ -429,14 +429,35 @@ std::string sparql2sql::translateQuery(const sparql::ast::Query& query,
 
 The translator builds a small relational-algebra IR (`sparql2sql/ir/RelNode.h`) rather than
 emitting SQL strings directly, then applies a fixed pipeline of semantics-preserving rewrites
-(`sparql2sql/ir/Optimizer.h`) before rendering once: inner-join **SPJ flattening** (an N-triple
-BGP becomes one flat `SELECT ... FROM a, b, c WHERE ...` instead of N−1 nested subqueries),
-**self-join elimination** (two patterns over the same table bound to the same subject variable
-collapse to a single scan — the subject map is assumed row-unique), and **DISTINCT elimination**
-(the per-pattern `SELECT DISTINCT` is dropped when the enclosing query is `SELECT DISTINCT`/`ASK`).
+(`sparql2sql/ir/Optimizer.h`) before rendering once, in this order:
+
+1. **FILTER pushdown.** Each FILTER is split into its top-level conjuncts and each is routed to the
+   smallest relation supplying its variables (inner-join sides, every arm of a UNION, an anti-join's
+   left side; LEFT OUTER JOIN, BIND and EXISTS-bearing conjuncts are boundaries). A conjunct that
+   reaches an SPJ block is **folded into that block's `WHERE` list** rather than wrapping it in
+   another subquery — which is the point of the pass: it keeps the block mergeable by the next
+   step. (Merely re-parenting a filter lower buys nothing against an engine that already pushes
+   predicates through derived tables; keeping blocks mergeable does.)
+2. **Inner-join SPJ flattening.** An N-triple BGP becomes one flat `SELECT ... FROM a, b, c WHERE
+   ...` instead of N−1 nested subqueries.
+3. **Self-join elimination.** Two patterns over the same table bound to the same subject variable
+   collapse to a single scan — the subject map is assumed row-unique.
+4. **DISTINCT elimination.** The per-pattern `SELECT DISTINCT` is dropped when the enclosing query
+   is `SELECT DISTINCT`/`ASK`, and likewise inside an EXISTS body (an existence check cannot see
+   duplicates).
+
 Everything below the level of these structural simplifications — join ordering, physical join
 choice, index selection — is deliberately left to the target engine's own optimizer, which does it
-better on the flat, native-typed plan it is handed.
+better on the flat, native-typed plan it is handed. The rewrites above are confined to what an
+engine provably *cannot* recover on its own: R2RML term construction is not invertible by the
+engine, and neither is the mapping's row-uniqueness assumption.
+
+Join and correlation conditions are emitted as **plain equalities wherever that is sound**. A
+null-tolerant comparison (`l = r OR l IS NULL OR r IS NULL`) is only required when a side can
+actually be unbound, so each `IS NULL` disjunct is emitted only for a side the IR marks nullable.
+This matters well beyond the redundant text: an OR'd comparison is a non-equi predicate, which stops
+the engine from decorrelating a `FILTER EXISTS` / `MINUS` into a hash semi-join and leaves it a
+nested loop over the inner relation.
 
 ```cpp
 #include "sparql2sql/TypeCatalog.h"
@@ -447,11 +468,27 @@ struct sparql2sql::TypeCatalog {
 };
 ```
 
-`catalog` is optional. When supplied, an equi-join on two **pure base columns** of **comparable
-declared type** (per the catalog) is emitted on the native, uncast columns
-(`t1."capIQCompanyID" = t2."parent"`) instead of the VARCHAR-cast form
-(`CAST(... AS VARCHAR) = CAST(... AS VARCHAR)`) — index-friendly and materially faster on large
-tables. When `catalog` is null, or a column's type is unknown, or the types aren't comparable, the
+`catalog` is optional. When supplied, an equi-join whose two sides are of **comparable declared
+type** (per the catalog) is emitted on the native, uncast columns instead of on generated term text
+— index-friendly and materially faster on large tables. Two shapes qualify:
+
+- both sides are a **pure base column** (`rr:column` term maps): `t1."capIQCompanyID" = t2."parent"`
+  instead of `CAST(... AS VARCHAR) = CAST(... AS VARCHAR)`;
+- both sides are the **same invertible `rr:template`**: `t1."DEPTNO" = t2."DEPTNO"` instead of
+  `('http://…/{DEPTNO}' || …) = ('http://…/{DEPTNO}' || …)`. Equal placeholder values always
+  produce equal template text, and invertibility (no two placeholders textually adjacent, so the
+  text splits unambiguously) gives the converse. This is the case that dominates real mappings,
+  since R2RML subjects are nearly always templates. Note a template string embeds its placeholders'
+  *column names*, so two maps share a template only if they also share those column names.
+
+Across a derived-table boundary (an OPTIONAL's join, a MINUS's anti-join) the base columns are not
+in scope, so the rewrite additionally projects them as hidden `k_N` columns on both sides; this is
+attempted only when both children render their own SELECT list (a direct SPJ block).
+
+The catalog is keyed by **logical-table identity**, which for an `rr:sqlQuery` view is the view's
+SQL text rather than a table name. Columns of an R2RML view therefore never resolve to a declared
+type, so joins involving one always keep the VARCHAR-cast/term-text form. Mapping a base table
+(`rr:tableName`) rather than a view is what makes a join key eligible. When `catalog` is null, or a column's type is unknown, or the types aren't comparable, the
 join falls back to the always-correct VARCHAR-cast comparison. The catalog is a plain,
 dependency-free data structure: the core library never opens a database; the CLI populates it from
 `information_schema.columns`. Because all downstream variables remain VARCHAR, only the join
@@ -510,9 +547,10 @@ and joins use the VARCHAR-cast fallback.
     VARCHAR comparison when either side isn't numeric-castable, so e.g. `FILTER(?name < "M")`
     (string ordering) still works correctly.
   - The one exception is an equi-**join** key: with a `TypeCatalog`, a join between two pure base
-    columns of comparable declared type is compared on the native (uncast) columns (see the
-    `translateQuery` `catalog` parameter above). This changes only the join condition, not the
-    VARCHAR representation of any projected variable.
+    columns — or between two same-invertible-template terms — of comparable declared type is
+    compared on the native (uncast) columns (see the `translateQuery` `catalog` parameter above).
+    This changes only the join condition, not the VARCHAR representation of any projected
+    variable.
 - **Template matching (`rr:template`) assumes RFC3986-unreserved-only column values**: forward
   R2RML generation percent-encodes substituted column values, but the translator's reverse
   direction (reconstructing/matching a template) does not apply percent-encoding — correct as

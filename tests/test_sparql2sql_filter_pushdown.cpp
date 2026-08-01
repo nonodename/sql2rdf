@@ -99,6 +99,31 @@ TEST_CASE("pushdown: an EXISTS-bearing FILTER is not distributed into union arms
 	CHECK(sql.find("UNION ALL BY NAME") < sql.find("EXISTS ("));
 }
 
+TEST_CASE("pushdown: a FILTER reaching an SPJ block is folded into its WHERE", "[sparql2sql]") {
+	std::string sql = translateFixture("emp_dept_filter_folded.rq");
+	REQUIRE(sql.find("'NEW YORK'") != std::string::npos);
+	// A FilterNode always renders as `SELECT * FROM (<child>) AS tN WHERE ...`,
+	// so its absence means the predicate went straight into the block's own
+	// WHERE list - one fewer derived table, and the predicate now sits next to
+	// the base scan rather than above a subquery.
+	CHECK(sql.find("SELECT * FROM (") == std::string::npos);
+	// Folded predicates reference the block's own column expressions, not a
+	// wrapper alias's projected v_ columns.
+	CHECK(sql.find("(CAST(t5.\"LOC\" AS VARCHAR)) = 'NEW YORK'") != std::string::npos);
+}
+
+TEST_CASE("pushdown: folding a FILTER keeps its block mergeable by flattening", "[sparql2sql]") {
+	std::string sql = translateFixture("emp_dept_filter_keeps_mergeable.rq");
+	REQUIRE(sql.find("'NEW YORK'") != std::string::npos);
+	// This is the point of folding rather than re-parenting a FilterNode: the
+	// filtered pattern still fuses with its inner-join partner into a single
+	// multi-source block. Left as a FilterNode it would be a flattening
+	// boundary, splitting this into two derived tables joined by a subquery.
+	CHECK(sql.find("SELECT * FROM (") == std::string::npos);
+	CHECK(sql.find("INNER JOIN") == std::string::npos);
+	CHECK(countOccurrences(sql, "SELECT DISTINCT") == 1);
+}
+
 TEST_CASE("pushdown: FILTER over MINUS is pushed onto the anti-join left side", "[sparql2sql]") {
 	std::string sql = translateFixture("emp_dept_filter_minus.rq");
 	REQUIRE(sql.find("NOT EXISTS") != std::string::npos);

@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cctype>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
@@ -77,18 +78,46 @@ std::vector<std::pair<std::string, std::string>> loadQueries(const std::string &
 // TypeCatalog so the translator can emit native (uncast) join keys - identical
 // in spirit to the CLI's helper of the same name, kept local to avoid coupling
 // the two entry points.
+// Resolve a result column by name, case-insensitively: backends report result
+// column names in their own case (DuckDB upper-cases them). Returns nullptr if
+// absent.
+const std::string *findResultColumn(const std::vector<std::string> &names, const char *wanted) {
+	for (const auto &n : names) {
+		if (n.size() != std::strlen(wanted)) {
+			continue;
+		}
+		bool same = true;
+		for (std::size_t i = 0; i < n.size(); ++i) {
+			if (std::tolower(static_cast<unsigned char>(n[i])) != std::tolower(static_cast<unsigned char>(wanted[i]))) {
+				same = false;
+				break;
+			}
+		}
+		if (same) {
+			return &n;
+		}
+	}
+	return nullptr;
+}
+
 void populateTypeCatalog(r2rml::SQLConnection &conn, sparql2sql::TypeCatalog &catalog) {
 	std::unique_ptr<r2rml::SQLResultSet> rs =
 	    conn.execute("SELECT table_name, column_name, data_type FROM information_schema.columns");
 	while (rs->next()) {
 		const r2rml::SQLRow &row = rs->getCurrentRow();
+		// Resolve by NAME, not by position: SQLRow holds its columns in a
+		// std::map, so columnNames() comes back sorted alphabetically rather
+		// than in SELECT order.
 		std::vector<std::string> names = row.columnNames();
-		if (names.size() < 3) {
+		const std::string *tableName = findResultColumn(names, "table_name");
+		const std::string *columnName = findResultColumn(names, "column_name");
+		const std::string *typeName = findResultColumn(names, "data_type");
+		if (tableName == nullptr || columnName == nullptr || typeName == nullptr) {
 			continue;
 		}
-		std::unique_ptr<r2rml::SQLValue> table = row.getValue(names[0]);
-		std::unique_ptr<r2rml::SQLValue> column = row.getValue(names[1]);
-		std::unique_ptr<r2rml::SQLValue> dataType = row.getValue(names[2]);
+		std::unique_ptr<r2rml::SQLValue> table = row.getValue(*tableName);
+		std::unique_ptr<r2rml::SQLValue> column = row.getValue(*columnName);
+		std::unique_ptr<r2rml::SQLValue> dataType = row.getValue(*typeName);
 		if (table->isNull() || column->isNull() || dataType->isNull()) {
 			continue;
 		}

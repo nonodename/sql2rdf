@@ -200,7 +200,36 @@ TEST_CASE("FILTER EXISTS: correlates on multiple shared variables joined with AN
 	std::string sql = translate("SELECT ?e WHERE { ?e ex:name ?n . ?e ex:department ?d . "
 	                            "FILTER EXISTS { ?e ex:department ?d } }",
 	                            mapping);
-	CHECK(sql.find("IS NULL) AND (") != std::string::npos);
+	// Both correlated variables are bound on both sides, so each is a plain
+	// equality (see below) and the two are ANDed together.
+	CHECK(sql.find("\" AND ") != std::string::npos);
+	CHECK(sql.find("\"v_d\" = ") != std::string::npos);
+	CHECK(sql.find("\"v_e\" = ") != std::string::npos);
+}
+
+TEST_CASE("FILTER EXISTS: a correlation on variables bound on both sides is a plain equi-join") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER EXISTS { ?e ex:department ?d } }", mapping);
+	// No null-tolerant disjunction: ?e cannot be unbound on either side, so the
+	// dead IS NULL disjuncts are omitted - which is what keeps the correlated
+	// subquery decorrelatable into a hash semi-join rather than a nested loop.
+	std::size_t exists = sql.find("EXISTS (SELECT 1 FROM");
+	REQUIRE(exists != std::string::npos);
+	CHECK(sql.find("IS NULL", exists) == std::string::npos);
+}
+
+TEST_CASE("FILTER EXISTS: an OPTIONAL-lineage correlation keeps its null-tolerant disjunct") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?e WHERE { ?e ex:name ?n . OPTIONAL { ?e ex:department ?d } "
+	                            "FILTER EXISTS { ?d ex:location ?l } }",
+	                            mapping);
+	// ?d may be unbound in the outer solution, so it is not in that solution's
+	// domain and must match any inner row.
+	std::size_t exists = sql.find("EXISTS (SELECT 1 FROM");
+	REQUIRE(exists != std::string::npos);
+	CHECK(sql.find("IS NULL", exists) != std::string::npos);
 }
 
 TEST_CASE("FILTER: REGEX with a literal flags argument, and a non-literal flags argument throws") {

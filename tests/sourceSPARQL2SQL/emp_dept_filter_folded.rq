@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?d ?loc ?s
+WHERE {
+  ?d ex:location ?loc .
+  ?d ex:staff ?s .
+  FILTER(?loc = "NEW YORK")
+}

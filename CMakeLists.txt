@@ -235,6 +235,7 @@ set(SPARQL2SQL_SOURCES
   src/sparql2sql/Translator.cpp
   src/sparql2sql/TypeCatalog.cpp
   src/sparql2sql/ir/RelNode.cpp
+  src/sparql2sql/ir/NativeKey.cpp
   src/sparql2sql/ir/SqlRenderer.cpp
   src/sparql2sql/ir/Optimizer.cpp
 )
