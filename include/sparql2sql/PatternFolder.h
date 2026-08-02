@@ -46,11 +46,16 @@ RelNodePtr leftOuterJoin(RelNodePtr left, RelNodePtr right, TranslationContext &
 /// is returned completely unchanged, with no anti-join emitted at all.
 RelNodePtr antiJoin(RelNodePtr left, RelNodePtr right, TranslationContext &ctx);
 
-/// UNION (Rule 10/16): schema-extending, bag-preserving union of >=1
-/// independently-folded branches. Rendered via the dialect's combineByName
-/// (DuckDB's UNION ALL BY NAME), which subsumes the paper's manual
-/// NULL-padding/simplification-5 logic.
-RelNodePtr unionAll(std::vector<RelNodePtr> branches, TranslationContext &ctx);
+/// UNION (Rule 10/16): schema-extending union of >=1 independently-folded
+/// branches. Rendered via the dialect's combineByName (DuckDB's UNION ALL BY
+/// NAME), which subsumes the paper's manual NULL-padding/simplification-5
+/// logic.
+///
+/// Bag-preserving by default, as SPARQL's own UNION operator is. `dedup=true`
+/// requests the set-valued form, needed by the property path operators that
+/// SPARQL 1.1 Section 9.3 defines as yielding distinct solutions regardless of
+/// how many ways the path can be traversed.
+RelNodePtr unionAll(std::vector<RelNodePtr> branches, TranslationContext &ctx, bool dedup = false);
 
 /// Translate a VALUES block (used both as a GroupGraphPatternSub element -
 /// InlineData - and as a Query's trailing ValuesClause; identical shape

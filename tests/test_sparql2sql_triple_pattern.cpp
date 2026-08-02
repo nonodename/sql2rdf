@@ -207,7 +207,10 @@ TEST_CASE("translateTriplePattern: a pattern matching zero candidates is a valid
 	CHECK(result.sql.find("WHERE FALSE") != std::string::npos);
 }
 
-TEST_CASE("translateTriplePattern: unsupported property paths throw TranslationError") {
+// The path operators that ARE supported desugar into ordinary triple patterns
+// before reaching here; see test_sparql2sql_paths.cpp. Only the two recursive
+// operators still reach a translation error.
+TEST_CASE("translateTriplePattern: the one-or-more property path operator throws TranslationError") {
 	Parser parser;
 	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "unsupported_property_path.rq");
 	R2RMLParser mappingParser;

@@ -212,8 +212,14 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 
 	std::vector<std::string> selectCols = groupBy.selectListPrefixCols;
 	if (query.selectStar) {
+		// Internal variables - property path intermediates and blank-node
+		// positions - are bound and joinable but are not query variables, so
+		// `SELECT *` must not project them.
 		std::set<std::string> vars = source.allVars();
 		for (const auto &v : vars) {
+			if (ctx.isInternal(v)) {
+				continue;
+			}
 			selectCols.push_back(alias + "." + mangleVar(v, dialect) + " AS " + mangleVar(v, dialect));
 		}
 	} else {
@@ -268,8 +274,16 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 	TranslatedPattern result;
 	result.sql = sql;
 	if (query.selectStar) {
-		result.boundVars = source.boundVars;
-		result.optionalVars = source.optionalVars;
+		for (const auto &v : source.boundVars) {
+			if (!ctx.isInternal(v)) {
+				result.boundVars.insert(v);
+			}
+		}
+		for (const auto &v : source.optionalVars) {
+			if (!ctx.isInternal(v)) {
+				result.optionalVars.insert(v);
+			}
+		}
 	} else {
 		for (const auto &item : query.selectItems) {
 			result.boundVars.insert(item.var->name);

@@ -1,0 +1,5 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?d ?v
+WHERE {
+  ?d !(ex:name|ex:staff) ?v .
+}

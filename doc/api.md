@@ -524,9 +524,26 @@ and joins use the VARCHAR-cast fallback.
 
 - **Query forms**: only `SELECT` and `ASK`. `CONSTRUCT`/`DESCRIBE` throw `TranslationError`
   (they produce an RDF graph, not a row set — a different translation shape, not yet implemented).
-- **Property paths**: only a constant IRI/`a` or a bare variable in predicate position. Any other
-  path operator (`/`, `|`, `*`, `+`, `?`, `^`, negated property sets) throws `TranslationError`
-  naming the unsupported kind.
+- **Property paths**: `^` (inverse), `/` (sequence), `|` (alternative), `?` (zero-or-one) and
+  negated property sets (`!(:a|^:b)`) are supported, alongside a constant IRI/`a` or a bare
+  variable. They are translated by desugaring into the relational algebra exactly as SPARQL 1.1
+  §18.1.7 defines them: `^E` swaps the pattern's endpoints, `E1/E2` joins over a fresh intermediate
+  variable, `E1|E2` unions, `E?` unions the one-step path with the zero-length path, and a negated
+  property set becomes a "predicate not in {…}" condition on each candidate (plus a reversed arm
+  for its `^`-marked members). Two consequences worth knowing:
+  - A sequence path's intermediate variable is **internal**: it takes part in joins but is never
+    projected, including by `SELECT *`. (Blank-node positions are internal in the same way, and are
+    likewise not projected by `SELECT *` — they are not query variables.)
+  - `E?` with **both endpoints unbound** (`?x :p? ?y`) has nothing to anchor its zero-length half
+    to, so that half enumerates every term the mapping can produce as a subject or object — a UNION
+    scan over every logical table in the mapping. This is spec-correct but not cheap; binding either
+    endpoint reduces it to a single constant row. The enumeration over-approximates only in that a
+    `TriplesMap` whose subject appears solely as the parent of a referencing object map contributes
+    its subjects via its own arm; it deliberately excludes predicate IRIs, per SPARQL's `nodes(G)`.
+- **`*` and `+` property paths are not supported** and throw `TranslationError` naming the operator.
+  Unlike the operators above they are not syntactic sugar over a fixed relational algebra
+  expression: an arbitrary-length path needs recursive SQL (`WITH RECURSIVE`), so supporting them
+  requires both a transitive-closure IR node and a matching `SqlDialect` seam.
 - **No `GRAPH`/named graphs**: this R2RML mapping model never populates `rr:graph`/`rr:graphMap`,
   so `GRAPH` patterns have nothing to translate against and always throw.
 - **No `SERVICE`** (federated query): always throws, matching `sql2rdf_sparql`'s own "no

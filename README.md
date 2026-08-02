@@ -235,7 +235,7 @@ std::string sql = sparql2sql::translateQuery(*query, mapping, dialect);
 // ready to hand to r2rml::DuckDBConnection::execute() or any other SQLConnection.
 ```
 
-Only `SELECT`/`ASK` query forms and a constant-IRI-or-variable predicate position (no property path operators) are supported; every SPARQL variable is represented as a plain SQL `VARCHAR` of the term's lexical form (no term-kind/datatype/language tracking). See `doc/api.md`'s "Supported SPARQL subset / Known limitations" for the full, current list of what is and isn't translated.
+Only `SELECT`/`ASK` query forms are supported. Property paths are translated by desugaring them into the same relational algebra: `^` (inverse), `/` (sequence), `|` (alternative), `?` (zero-or-one) and negated property sets all work, but the arbitrary-length operators `*` and `+` do not — they need recursive SQL rather than a fixed algebra expression, and throw `TranslationError`. Every SPARQL variable is represented as a plain SQL `VARCHAR` of the term's lexical form (no term-kind/datatype/language tracking). See `doc/api.md`'s "Supported SPARQL subset / Known limitations" for the full, current list of what is and isn't translated.
 
 The CLI exposes this via `-T <file.rq> [--dialect <name>]` (default and currently only dialect: `duckdb`), paired with the mapping-file positional argument; if the database-file positional is also given, the translated SQL is additionally executed and its result rows printed. See [Usage](#usage) below.
 

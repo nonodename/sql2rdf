@@ -1,0 +1,30 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Deliberately tiny mapping for the zero-length property path (`E?`) with two
+# unbound endpoints, whose translation ranges over every RDF term the mapping
+# can produce - subjects and objects, never predicates. One table, one
+# predicate-object map and no rr:class keeps the resulting term universe small
+# enough to assert row-exactly.
+#
+# NODES is self-referencing (NEXT -> ID), so ex:next is a chain rather than a
+# link between two different tables. The referencing object map also exercises
+# allTermsRelation's rule that a referencing object map contributes no term
+# arm of its own: its objects are exactly the parent's subjects, which the
+# parent's own subject arm already supplies.
+
+<#NodeMap>
+    rr:logicalTable [ rr:tableName "NODES" ];
+    rr:subjectMap [
+        rr:template "http://ex.org/node/{ID}";
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:next;
+        rr:objectMap [
+            rr:parentTriplesMap <#NodeMap>;
+            rr:joinCondition [
+                rr:child "NEXT";
+                rr:parent "ID";
+            ];
+        ];
+    ].
