@@ -103,6 +103,7 @@ cmake --build build --target sql2rdf_sparql     # SPARQL query parser library on
 cmake --build build --target sql2rdf_sparql2sql # SPARQL-to-SQL translator library only
 cmake --build build --target SQL2RDF++          # CLI app (requires DuckDB)
 cmake --build build --target test_runner        # tests (no DuckDB needed)
+cmake --build build --target sql2rdf_benchmark  # SPARQL-to-SQL performance harness (requires DuckDB)
 cmake --build build                             # all of the above
 ```
 

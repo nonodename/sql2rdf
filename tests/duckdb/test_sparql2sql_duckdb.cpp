@@ -432,6 +432,31 @@ TEST_CASE("emp_dept_filter_optional.rq: FILTER on the optional var applies after
 	                  {{"V_E", "http://data.example.com/department/10"}, {"V_N", "APPSERVER"}, {"V_LOC", "NEW YORK"}}));
 }
 
+TEST_CASE("emp_dept_filter_optional_join.rq: FILTER on a var that's nullable via OPTIONAL on one join side but "
+          "required on the other is not dropped early") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_filter_optional_join.rq", "example_emp_dept.ttl");
+	// ?loc is nullable coming out of the OPTIONAL (no Employee has ex:location),
+	// but the required `?d2 ex:location ?loc` pattern re-binds it non-null via a
+	// nullSafe join key. SMITH and JONES both have OPTIONAL-unbound ?loc, so
+	// they're compatible with (and must join against) every ?d2 solution,
+	// including department 10's NEW YORK; department 10 itself also directly
+	// binds ?loc = NEW YORK. All three must survive the filter.
+	REQUIRE(rows.size() == 3);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"},
+	                         {"V_N", "SMITH"},
+	                         {"V_D2", "http://data.example.com/department/10"},
+	                         {"V_LOC", "NEW YORK"}}));
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7400"},
+	                         {"V_N", "JONES"},
+	                         {"V_D2", "http://data.example.com/department/10"},
+	                         {"V_LOC", "NEW YORK"}}));
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/department/10"},
+	                         {"V_N", "APPSERVER"},
+	                         {"V_D2", "http://data.example.com/department/10"},
+	                         {"V_LOC", "NEW YORK"}}));
+}
+
 TEST_CASE("emp_dept_filter_exists.rq: EXISTS filter (kept above the union) keeps only rows with a staff triple") {
 	auto conn = makeSeededDatabase();
 	auto rows = translateAndRun(*conn, "emp_dept_filter_exists.rq", "example_emp_dept.ttl");

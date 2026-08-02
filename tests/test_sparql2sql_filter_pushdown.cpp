@@ -90,6 +90,24 @@ TEST_CASE("pushdown: FILTER on an OPTIONAL var is NOT pushed below the left oute
 	CHECK(countOccurrences(sql, "CASE WHEN") == 1);
 }
 
+TEST_CASE("pushdown: FILTER on a var nullable via OPTIONAL on one join side but required on the other is not "
+          "pushed onto the nullable side",
+          "[sparql2sql]") {
+	std::string sql = translateFixture("emp_dept_filter_optional_join.rq");
+	REQUIRE(sql.find("LEFT OUTER JOIN") != std::string::npos);
+	REQUIRE(sql.find("INNER JOIN") != std::string::npos);
+	REQUIRE(sql.find("'NEW YORK'") != std::string::npos);
+	// ?loc is a nullSafe key of the outer INNER join (nullable coming out of
+	// the OPTIONAL, required on the ?d2 side). The filter must not land on the
+	// OPTIONAL side - it is folded into the required (?d2) side instead, which
+	// renders after both join keywords.
+	CHECK(sql.find("LEFT OUTER JOIN") < sql.find("INNER JOIN"));
+	CHECK(sql.find("INNER JOIN") < sql.find("'NEW YORK'"));
+	// Folded once (into the ?d2 block's WHERE), not duplicated, not dropped.
+	CHECK(countOccurrences(sql, "CASE WHEN") == 1);
+	CHECK(sql.find("SELECT * FROM (") == std::string::npos);
+}
+
 TEST_CASE("pushdown: an EXISTS-bearing FILTER is not distributed into union arms", "[sparql2sql]") {
 	std::string sql = translateFixture("emp_dept_filter_exists.rq");
 	REQUIRE(sql.find("EXISTS (") != std::string::npos);
