@@ -339,6 +339,39 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 	throw std::logic_error("translateBuiltIn: unhandled BuiltinFunction");
 }
 
+const char *const kXsdInteger = "http://www.w3.org/2001/XMLSchema#integer";
+const char *const kXsdDecimal = "http://www.w3.org/2001/XMLSchema#decimal";
+const char *const kXsdDouble = "http://www.w3.org/2001/XMLSchema#double";
+const char *const kXsdFloat = "http://www.w3.org/2001/XMLSchema#float";
+const char *const kXsdString = "http://www.w3.org/2001/XMLSchema#string";
+
+bool isXsdCastFunction(const std::string &iri) {
+	return iri == kXsdInteger || iri == kXsdDecimal || iri == kXsdDouble || iri == kXsdFloat || iri == kXsdString;
+}
+
+// xsd:decimal/double/float all round-trip through DOUBLE: this translator has
+// no fixed-precision DECIMAL modeling anywhere else, so DOUBLE is the right
+// level of fidelity for all three, matching how the rest of this file treats
+// "numeric" uniformly as DOUBLE.
+std::string translateXsdCast(const std::string &iri, const FunctionCallExpr &fc, const TranslatedPattern &scope,
+                             const std::string &alias, TranslationContext &ctx) {
+	if (fc.args.size() != 1) {
+		throw TranslationError("<" + iri + ">: expected exactly 1 argument, got " + std::to_string(fc.args.size()));
+	}
+	const SqlDialect &dialect = ctx.dialect();
+	std::string arg = tr(*fc.args[0], scope, alias, ctx);
+	if (iri == kXsdString) {
+		return "(" + arg + ")";
+	}
+	if (iri == kXsdInteger) {
+		// Truncates toward zero via DuckDB's own DOUBLE->BIGINT CAST
+		// semantics, not a hand-rolled XPath-conformant conversion - same
+		// stance as ROUND()/CEIL()/FLOOR() above.
+		return "CAST(CAST(" + dialect.tryCastToDouble(arg) + " AS BIGINT) AS VARCHAR)";
+	}
+	return "CAST(" + dialect.tryCastToDouble(arg) + " AS VARCHAR)";
+}
+
 std::string translateAggregate(const AggregateExpr &agg, const TranslatedPattern &scope, const std::string &alias,
                                TranslationContext &ctx) {
 	const SqlDialect &dialect = ctx.dialect();
@@ -393,6 +426,9 @@ std::string translateExpression(const sparql::ast::Expression &expr, const Trans
 		return translateIn(static_cast<const InExpr &>(expr), scope, scopeAlias, ctx);
 	case ExprKind::FunctionCall: {
 		const auto &fc = static_cast<const FunctionCallExpr &>(expr);
+		if (isXsdCastFunction(fc.iri->value)) {
+			return translateXsdCast(fc.iri->value, fc, scope, scopeAlias, ctx);
+		}
 		throw TranslationError("unsupported: non-builtin function call <" + fc.iri->value + "> is not supported");
 	}
 	case ExprKind::BuiltInCall:

@@ -194,6 +194,13 @@ TEST_CASE("emp_dept_optional.rq: JONES (no department) still appears with ?d unb
 	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/department/20"}, {"V_N", "SALES"}, {"V_D", kNull}}));
 }
 
+TEST_CASE("emp_dept_xsd_cast.rq: xsd:integer() cast filters on the numeric STAFF column") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_xsd_cast.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_STAFF", "1"}}));
+}
+
 TEST_CASE("emp_dept_union.rq: bag union of ex:name and ex:location results") {
 	auto conn = makeSeededDatabase();
 	auto rows = translateAndRun(*conn, "emp_dept_union.rq", "example_emp_dept.ttl");

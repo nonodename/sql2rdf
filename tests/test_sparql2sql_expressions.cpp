@@ -143,6 +143,60 @@ TEST_CASE("FILTER: a non-builtin function call throws a named TranslationError")
 	                TranslationError);
 }
 
+TEST_CASE("FILTER: xsd:integer/decimal/double/float/string casts translate without throwing") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                            "SELECT ?e ?n WHERE { ?e ex:name ?n . "
+	                            "FILTER(xsd:integer(?n) > 5 || xsd:decimal(?n) > 5.0 || xsd:double(?n) > 5.0 || "
+	                            "xsd:float(?n) > 5.0 || xsd:string(?n) != \"\") }",
+	                            mapping);
+	CHECK(sql.find("TRY_CAST") != std::string::npos);
+	CHECK(sql.find("AS BIGINT)") != std::string::npos);
+}
+
+TEST_CASE("FILTER: xsd:integer() comparison produces a numeric-aware comparison") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                            "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(xsd:integer(?n) > 5) }",
+	                            mapping);
+	CHECK(sql.find("CASE WHEN") != std::string::npos);
+	CHECK(sql.find("IS NOT NULL AND") != std::string::npos);
+}
+
+TEST_CASE("BIND: xsd:integer introduces a computed column") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                            "SELECT ?e ?asint WHERE { ?e ex:name ?n . BIND(xsd:integer(?n) AS ?asint) }",
+	                            mapping);
+	CHECK(sql.find("\"v_asint\"") != std::string::npos);
+	CHECK(sql.find("AS BIGINT)") != std::string::npos);
+}
+
+TEST_CASE("FILTER: xsd cast with wrong arity throws a named TranslationError") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	CHECK_THROWS_AS(translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                          "SELECT ?e WHERE { ?e ex:name ?n . FILTER(xsd:integer() = \"\") }",
+	                          mapping),
+	                TranslationError);
+	CHECK_THROWS_AS(translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                          "SELECT ?e WHERE { ?e ex:name ?n . FILTER(xsd:integer(?n, ?n) > 0) }",
+	                          mapping),
+	                TranslationError);
+}
+
+TEST_CASE("FILTER: xsd:boolean is out of scope and still throws") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . "
+	                          "FILTER(<http://www.w3.org/2001/XMLSchema#boolean>(?n) = \"true\") }",
+	                          mapping),
+	                TranslationError);
+}
+
 TEST_CASE("FILTER: remaining comparison operators (!=, <=, >=) and Or/And") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");

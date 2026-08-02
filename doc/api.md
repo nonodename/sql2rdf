@@ -559,10 +559,23 @@ and joins use the VARCHAR-cast fallback.
 - **Deferred builtin functions** (throw `TranslationError`): `ENCODE_FOR_URI()`; date/time
   accessors (`YEAR()`/`MONTH()`/`DAY()`/`HOURS()`/`MINUTES()`/`SECONDS()`/`TIMEZONE()`/`TZ()`);
   non-deterministic/context functions (`NOW()`/`RAND()`/`UUID()`/`STRUUID()`); `SHA384()`/`SHA512()`
-  (DuckDB has no built-in scalar function for either); any non-builtin (IRI-named) function call.
-  `MD5()`/`SHA1()`/`SHA256()`/`ABS()`/`CEIL()`/`FLOOR()`/`ROUND()`/`CONCAT()`/`STRLEN()`/`SUBSTR()`/
-  `UCASE()`/`LCASE()`/`CONTAINS()`/`STRSTARTS()`/`STRENDS()`/`STRBEFORE()`/`STRAFTER()`/`REPLACE()`/
-  `REGEX()`/`COALESCE()`/`IF()`/`isNUMERIC()`/`bound()` are all implemented.
+  (DuckDB has no built-in scalar function for either); any non-builtin (IRI-named) function call
+  except the five XSD constructor casts described below. `MD5()`/`SHA1()`/`SHA256()`/`ABS()`/
+  `CEIL()`/`FLOOR()`/`ROUND()`/`CONCAT()`/`STRLEN()`/`SUBSTR()`/`UCASE()`/`LCASE()`/`CONTAINS()`/
+  `STRSTARTS()`/`STRENDS()`/`STRBEFORE()`/`STRAFTER()`/`REPLACE()`/`REGEX()`/`COALESCE()`/`IF()`/
+  `isNUMERIC()`/`bound()` are all implemented.
+- **XSD constructor-function casts** — `xsd:integer()`, `xsd:decimal()`, `xsd:double()`,
+  `xsd:float()`, `xsd:string()` are the sole supported non-builtin (IRI-named) function calls;
+  every other IRI-named call (including `xsd:boolean()` and the rest of the XSD constructor
+  family) still throws `TranslationError`. These are **value-level casts, not XSD datatype
+  tagging** — this translator has no term-kind/datatype dimension at all (see above), so
+  `xsd:integer(?x)` doesn't give `?x` a tracked datatype, it just reinterprets the underlying
+  VARCHAR's numeric value, null-tolerantly, via the same `TRY_CAST(... AS DOUBLE)` idiom used
+  elsewhere in this file (non-numeric input yields SQL `NULL`, never a translation-time or
+  runtime error). `xsd:decimal()`/`xsd:double()`/`xsd:float()` all map to the same DOUBLE
+  round-trip (no fixed-precision `DECIMAL` type is modeled anywhere in this translator);
+  `xsd:integer()` additionally truncates through `BIGINT`; `xsd:string()` is an identity
+  pass-through.
 - **Out-of-scope variable references** in FILTER/BIND/ORDER BY/HAVING throw `TranslationError` at
   translation time, rather than emulating SPARQL's precise per-row unbound-variable/type-error
   semantics.
