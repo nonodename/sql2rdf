@@ -209,20 +209,20 @@ TEST_CASE("SELECT * never projects a blank-node position") {
 	CHECK_FALSE(contains(projection, "_bnode_"));
 }
 
-TEST_CASE("translatePath: the unsupported recursive operators throw and name themselves") {
+TEST_CASE("translatePath: the unsupported one-or-more operator throws and names itself") {
 	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
 	DuckDbDialect dialect;
 	Parser parser;
+	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "unsupported_property_path.rq");
+	TranslationContext ctx(mapping, dialect);
+	CHECK_THROWS_AS(translateTriplePattern(firstTriple(*q), ctx), TranslationError);
+}
 
-	SECTION("one-or-more") {
-		auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "unsupported_property_path.rq");
-		TranslationContext ctx(mapping, dialect);
-		CHECK_THROWS_AS(translateTriplePattern(firstTriple(*q), ctx), TranslationError);
-	}
-
-	SECTION("zero-or-more") {
-		auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "unsupported_path_star.rq");
-		TranslationContext ctx(mapping, dialect);
-		CHECK_THROWS_AS(translateTriplePattern(firstTriple(*q), ctx), TranslationError);
-	}
+TEST_CASE("translatePath: the unsupported zero-or-more operator throws and names itself") {
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	Parser parser;
+	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "unsupported_path_star.rq");
+	TranslationContext ctx(mapping, dialect);
+	CHECK_THROWS_AS(translateTriplePattern(firstTriple(*q), ctx), TranslationError);
 }
