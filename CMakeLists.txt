@@ -230,6 +230,7 @@ set(SPARQL2SQL_SOURCES
   src/sparql2sql/TermMapSql.cpp
   src/sparql2sql/TranslatedPattern.cpp
   src/sparql2sql/TriplePatternTranslator.cpp
+  src/sparql2sql/PropertyPathTranslator.cpp
   src/sparql2sql/ExpressionTranslator.cpp
   src/sparql2sql/PatternFolder.cpp
   src/sparql2sql/Translator.cpp

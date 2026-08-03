@@ -1,0 +1,5 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT *
+WHERE {
+  ?e ex:department/ex:name ?dn .
+}

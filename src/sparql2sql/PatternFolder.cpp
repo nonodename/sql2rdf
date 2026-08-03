@@ -201,7 +201,7 @@ RelNodePtr antiJoin(RelNodePtr left, RelNodePtr right, TranslationContext &ctx) 
 	return node;
 }
 
-RelNodePtr unionAll(std::vector<RelNodePtr> branches, TranslationContext &ctx) {
+RelNodePtr unionAll(std::vector<RelNodePtr> branches, TranslationContext &ctx, bool dedup) {
 	if (branches.empty()) {
 		return identityRelation(ctx);
 	}
@@ -221,7 +221,7 @@ RelNodePtr unionAll(std::vector<RelNodePtr> branches, TranslationContext &ctx) {
 
 	RelNodePtr node(new UnionByNameNode());
 	UnionByNameNode &un = static_cast<UnionByNameNode &>(*node);
-	un.all = true; // UNION algebra is bag-preserving.
+	un.all = !dedup; // UNION algebra is bag-preserving unless a caller asks otherwise.
 	for (const auto &v : allV) {
 		ColumnInfo col;
 		col.var = v;

@@ -524,9 +524,26 @@ and joins use the VARCHAR-cast fallback.
 
 - **Query forms**: only `SELECT` and `ASK`. `CONSTRUCT`/`DESCRIBE` throw `TranslationError`
   (they produce an RDF graph, not a row set — a different translation shape, not yet implemented).
-- **Property paths**: only a constant IRI/`a` or a bare variable in predicate position. Any other
-  path operator (`/`, `|`, `*`, `+`, `?`, `^`, negated property sets) throws `TranslationError`
-  naming the unsupported kind.
+- **Property paths**: `^` (inverse), `/` (sequence), `|` (alternative), `?` (zero-or-one) and
+  negated property sets (`!(:a|^:b)`) are supported, alongside a constant IRI/`a` or a bare
+  variable. They are translated by desugaring into the relational algebra exactly as SPARQL 1.1
+  §18.1.7 defines them: `^E` swaps the pattern's endpoints, `E1/E2` joins over a fresh intermediate
+  variable, `E1|E2` unions, `E?` unions the one-step path with the zero-length path, and a negated
+  property set becomes a "predicate not in {…}" condition on each candidate (plus a reversed arm
+  for its `^`-marked members). Two consequences worth knowing:
+  - A sequence path's intermediate variable is **internal**: it takes part in joins but is never
+    projected, including by `SELECT *`. (Blank-node positions are internal in the same way, and are
+    likewise not projected by `SELECT *` — they are not query variables.)
+  - `E?` with **both endpoints unbound** (`?x :p? ?y`) has nothing to anchor its zero-length half
+    to, so that half enumerates every term the mapping can produce as a subject or object — a UNION
+    scan over every logical table in the mapping. This is spec-correct but not cheap; binding either
+    endpoint reduces it to a single constant row. The enumeration over-approximates only in that a
+    `TriplesMap` whose subject appears solely as the parent of a referencing object map contributes
+    its subjects via its own arm; it deliberately excludes predicate IRIs, per SPARQL's `nodes(G)`.
+- **`*` and `+` property paths are not supported** and throw `TranslationError` naming the operator.
+  Unlike the operators above they are not syntactic sugar over a fixed relational algebra
+  expression: an arbitrary-length path needs recursive SQL (`WITH RECURSIVE`), so supporting them
+  requires both a transitive-closure IR node and a matching `SqlDialect` seam.
 - **No `GRAPH`/named graphs**: this R2RML mapping model never populates `rr:graph`/`rr:graphMap`,
   so `GRAPH` patterns have nothing to translate against and always throw.
 - **No `SERVICE`** (federated query): always throws, matching `sql2rdf_sparql`'s own "no
@@ -559,10 +576,23 @@ and joins use the VARCHAR-cast fallback.
 - **Deferred builtin functions** (throw `TranslationError`): `ENCODE_FOR_URI()`; date/time
   accessors (`YEAR()`/`MONTH()`/`DAY()`/`HOURS()`/`MINUTES()`/`SECONDS()`/`TIMEZONE()`/`TZ()`);
   non-deterministic/context functions (`NOW()`/`RAND()`/`UUID()`/`STRUUID()`); `SHA384()`/`SHA512()`
-  (DuckDB has no built-in scalar function for either); any non-builtin (IRI-named) function call.
-  `MD5()`/`SHA1()`/`SHA256()`/`ABS()`/`CEIL()`/`FLOOR()`/`ROUND()`/`CONCAT()`/`STRLEN()`/`SUBSTR()`/
-  `UCASE()`/`LCASE()`/`CONTAINS()`/`STRSTARTS()`/`STRENDS()`/`STRBEFORE()`/`STRAFTER()`/`REPLACE()`/
-  `REGEX()`/`COALESCE()`/`IF()`/`isNUMERIC()`/`bound()` are all implemented.
+  (DuckDB has no built-in scalar function for either); any non-builtin (IRI-named) function call
+  except the five XSD constructor casts described below. `MD5()`/`SHA1()`/`SHA256()`/`ABS()`/
+  `CEIL()`/`FLOOR()`/`ROUND()`/`CONCAT()`/`STRLEN()`/`SUBSTR()`/`UCASE()`/`LCASE()`/`CONTAINS()`/
+  `STRSTARTS()`/`STRENDS()`/`STRBEFORE()`/`STRAFTER()`/`REPLACE()`/`REGEX()`/`COALESCE()`/`IF()`/
+  `isNUMERIC()`/`bound()` are all implemented.
+- **XSD constructor-function casts** — `xsd:integer()`, `xsd:decimal()`, `xsd:double()`,
+  `xsd:float()`, `xsd:string()` are the sole supported non-builtin (IRI-named) function calls;
+  every other IRI-named call (including `xsd:boolean()` and the rest of the XSD constructor
+  family) still throws `TranslationError`. These are **value-level casts, not XSD datatype
+  tagging** — this translator has no term-kind/datatype dimension at all (see above), so
+  `xsd:integer(?x)` doesn't give `?x` a tracked datatype, it just reinterprets the underlying
+  VARCHAR's numeric value, null-tolerantly, via the same `TRY_CAST(... AS DOUBLE)` idiom used
+  elsewhere in this file (non-numeric input yields SQL `NULL`, never a translation-time or
+  runtime error). `xsd:decimal()`/`xsd:double()`/`xsd:float()` all map to the same DOUBLE
+  round-trip (no fixed-precision `DECIMAL` type is modeled anywhere in this translator);
+  `xsd:integer()` additionally truncates through `BIGINT`; `xsd:string()` is an identity
+  pass-through.
 - **Out-of-scope variable references** in FILTER/BIND/ORDER BY/HAVING throw `TranslationError` at
   translation time, rather than emulating SPARQL's precise per-row unbound-variable/type-error
   semantics.

@@ -19,10 +19,10 @@
 #include "r2rml/TermMap.h"
 #include "r2rml/TriplesMap.h"
 #include "sparql-parser/ast/Term.h"
+#include "sparql2sql/PropertyPathTranslator.h"
 #include "sparql2sql/SqlDialect.h"
 #include "sparql2sql/TemplateUtil.h"
 #include "sparql2sql/TermMapSql.h"
-#include "sparql2sql/TranslationError.h"
 #include "sparql2sql/ir/RelNode.h"
 
 namespace sparql2sql {
@@ -30,63 +30,6 @@ namespace sparql2sql {
 namespace {
 
 const char *const kRdfTypeIri = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-
-// A triple-pattern position (subject/predicate/object): either a variable
-// (or blank node, treated as an internally-scoped variable) or a bound
-// constant term.
-struct PositionSpec {
-	bool isVar = false;
-	std::string varName;                          // valid iff isVar
-	const sparql::ast::Term *boundTerm = nullptr; // valid iff !isVar
-};
-
-PositionSpec specFor(const sparql::ast::Term &term) {
-	using sparql::ast::BlankNode;
-	using sparql::ast::TermKind;
-	using sparql::ast::Var;
-	PositionSpec spec;
-	if (term.kind() == TermKind::Var) {
-		spec.isVar = true;
-		spec.varName = static_cast<const Var &>(term).name;
-	} else if (term.kind() == TermKind::BlankNode) {
-		spec.isVar = true;
-		spec.varName = "_bnode_" + static_cast<const BlankNode &>(term).label;
-	} else {
-		spec.isVar = false;
-		spec.boundTerm = &term;
-	}
-	return spec;
-}
-
-struct PredicateSpec {
-	bool isVar = false;
-	std::string varName;     // valid iff isVar
-	std::string constantIri; // valid iff !isVar
-};
-
-PredicateSpec predicateSpecFor(const sparql::ast::PropertyPathExpr &path) {
-	using sparql::ast::PathKind;
-	using sparql::ast::PredicatePath;
-	using sparql::ast::VariablePath;
-	switch (path.kind()) {
-	case PathKind::Predicate: {
-		PredicateSpec spec;
-		spec.isVar = false;
-		spec.constantIri = static_cast<const PredicatePath &>(path).iri->value;
-		return spec;
-	}
-	case PathKind::Variable: {
-		PredicateSpec spec;
-		spec.isVar = true;
-		spec.varName = static_cast<const VariablePath &>(path).var->name;
-		return spec;
-	}
-	default:
-		throw TranslationError(
-		    "unsupported: property paths are not supported in this phase - only a single IRI/`a` or a bare "
-		    "variable may appear in predicate position");
-	}
-}
 
 // One of the three positions' SQL source: either a fixed constant string, or
 // a real R2RML TermMap evaluated against a given source-table alias (with the
@@ -223,13 +166,145 @@ void addUnique(std::vector<std::string> &out, const std::vector<std::string> &mo
 	}
 }
 
+// Whether a predicate constraint could be satisfied by one specific IRI. Used
+// to prune the synthetic rr:class (subject, rdf:type, classIRI) candidates,
+// whose predicate is always exactly rdf:type.
+bool predicateCouldMatchIri(const PredicateConstraint &predicateSpec, const std::string &iri) {
+	switch (predicateSpec.kind) {
+	case PredicateConstraint::ConstantIri:
+		return predicateSpec.iri == iri;
+	case PredicateConstraint::Variable:
+		return true;
+	case PredicateConstraint::NotIn:
+		return std::find(predicateSpec.excludedIris.begin(), predicateSpec.excludedIris.end(), iri) ==
+		       predicateSpec.excludedIris.end();
+	}
+	return true;
+}
+
+// Negate a conjunction of SQL conditions: NOT ((c1) AND (c2) ...). Used only
+// for a negated property set, whose per-IRI exclusion is the complement of the
+// inversion conditions that would have matched that IRI.
+std::string negateConjunction(const std::vector<std::string> &conditions) {
+	std::string joined;
+	for (std::size_t i = 0; i < conditions.size(); ++i) {
+		if (i > 0) {
+			joined += " AND ";
+		}
+		joined += "(" + conditions[i] + ")";
+	}
+	return "NOT (" + joined + ")";
+}
+
+// Apply a negated property set's exclusions to one candidate. Returns false if
+// the candidate is entirely excluded (its predicate always equals one of the
+// excluded IRIs); otherwise appends whatever conditions are needed to rule the
+// excluded IRIs out.
+//
+// Complements invertTermMapAgainstBoundTerm's three outcomes:
+//   possible == false                   -> this candidate can never carry that
+//                                          predicate, so the exclusion is
+//                                          vacuous and needs no condition;
+//   possible, no where conditions       -> it always carries it: excluded;
+//   possible, with where conditions     -> it carries it exactly when those
+//                                          hold, so negate them.
+bool applyPredicateExclusions(const TermSource &predicateSrc, const std::vector<std::string> &excludedIris,
+                              const SqlDialect &dialect, std::vector<std::string> &whereConditions) {
+	for (const auto &iri : excludedIris) {
+		sparql::ast::Iri excludedTerm(iri, iri);
+		InversionResult inv = resolveInversion(predicateSrc, excludedTerm, dialect);
+		if (!inv.possible) {
+			continue;
+		}
+		if (inv.whereConditions.empty()) {
+			return false;
+		}
+		addUnique(whereConditions, {negateConjunction(inv.whereConditions)});
+	}
+	return true;
+}
+
+// Copy a resolved position's structured provenance onto a projected column.
+void fillColumnFromResolved(ColumnInfo &col, const Resolved &r, const SqlDialect &dialect) {
+	col.renderedExpr = r.expr;
+	col.prov = r.prov;
+	col.sourceAlias = r.sourceAlias;
+	col.columnName = r.columnName;
+	col.tableIdentity = r.tableIdentity;
+	col.templateString = r.templateString;
+	if (r.prov == Provenance::PureColumn && !r.columnName.empty()) {
+		col.nativeColumnRef = r.sourceAlias + "." + dialect.quoteIdentifier(r.columnName);
+	} else if (r.prov == Provenance::TemplateExpr && !r.templateString.empty() && !r.sourceAlias.empty()) {
+		fillTemplateKeyInfo(col, dialect);
+	}
+	col.nonNull = true;
+}
+
+// One arm of the term universe: a single-source SpjRelation projecting one
+// term map's generated term under every requested variable name.
+void addTermArm(std::vector<RelNodePtr> &arms, const std::string &fromSql, const std::string &alias,
+                const std::string &tableIdentity, const r2rml::TermMap &termMap,
+                const std::vector<std::string> &varNames, TranslationContext &ctx) {
+	const SqlDialect &dialect = ctx.dialect();
+	TermSource src;
+	src.termMap = &termMap;
+	src.alias = alias;
+	src.tableIdentity = tableIdentity;
+	Resolved r = resolveSource(src, dialect);
+
+	RelNodePtr node(new SpjRelation());
+	SpjRelation &spj = static_cast<SpjRelation &>(*node);
+	SpjSource source;
+	source.sql = fromSql;
+	source.alias = alias;
+	source.tableIdentity = tableIdentity;
+	spj.sources.push_back(source);
+	for (const auto &guard : r.requiredNonNull) {
+		spj.whereConds.push_back(guard + " IS NOT NULL");
+	}
+	spj.distinct = true;
+	for (const auto &v : varNames) {
+		ColumnInfo col;
+		col.var = v;
+		fillColumnFromResolved(col, r, dialect);
+		spj.schema().push_back(col);
+	}
+	arms.push_back(std::move(node));
+}
+
+// One arm of the term universe for a fixed IRI (an rr:class, which is the
+// object of an rdf:type triple and so a node of the graph). Needs no FROM.
+void addConstantTermArm(std::vector<RelNodePtr> &arms, const std::string &value,
+                        const std::vector<std::string> &varNames, TranslationContext &ctx) {
+	const SqlDialect &dialect = ctx.dialect();
+	const std::string literal = dialect.stringLiteral(value);
+
+	RelNodePtr node(new RawRelation());
+	RawRelation &raw = static_cast<RawRelation &>(*node);
+	std::string sql = "SELECT ";
+	for (std::size_t i = 0; i < varNames.size(); ++i) {
+		if (i > 0) {
+			sql += ", ";
+		}
+		sql += literal + " AS " + mangleVar(varNames[i], dialect);
+	}
+	raw.sql = sql;
+	for (const auto &v : varNames) {
+		ColumnInfo col;
+		col.var = v;
+		col.nonNull = true;
+		raw.schema().push_back(col);
+	}
+	arms.push_back(std::move(node));
+}
+
 // Attempt to build one candidate branch's SpjRelation. Appends to `branches`
 // on success; silently does nothing if the candidate is statically prunable
 // (a bound position can never match this candidate's source).
 void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromSql, const std::string &fromAlias,
                      const std::string &fromIdentity, const TermSource &subjectSrc, const TermSource &predicateSrc,
-                     const TermSource &objectSrc, const PositionSpec &subjectSpec, const PredicateSpec &predicateSpec,
-                     const PositionSpec &objectSpec, bool mergeableSubject, TranslationContext &ctx) {
+                     const TermSource &objectSrc, const TermSpec &subjectSpec, const PredicateConstraint &predicateSpec,
+                     const TermSpec &objectSpec, bool mergeableSubject, TranslationContext &ctx) {
 	const SqlDialect &dialect = ctx.dialect();
 
 	std::vector<std::string> whereConditions;
@@ -247,13 +322,17 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 
 	Resolved predicateR = resolveSource(predicateSrc, dialect);
 	addUnique(requiredNonNull, predicateR.requiredNonNull);
-	if (!predicateSpec.isVar) {
-		sparql::ast::Iri predicateBoundTerm(predicateSpec.constantIri, predicateSpec.constantIri);
+	if (predicateSpec.kind == PredicateConstraint::ConstantIri) {
+		sparql::ast::Iri predicateBoundTerm(predicateSpec.iri, predicateSpec.iri);
 		InversionResult inv = resolveInversion(predicateSrc, predicateBoundTerm, dialect);
 		if (!inv.possible) {
 			return;
 		}
 		addUnique(whereConditions, inv.whereConditions);
+	} else if (predicateSpec.kind == PredicateConstraint::NotIn) {
+		if (!applyPredicateExclusions(predicateSrc, predicateSpec.excludedIris, dialect, whereConditions)) {
+			return;
+		}
 	}
 
 	Resolved objectR = resolveSource(objectSrc, dialect);
@@ -273,9 +352,10 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 		std::string varName;
 		const Resolved *resolved;
 	};
+	const bool predicateIsVar = predicateSpec.kind == PredicateConstraint::Variable;
 	PositionEntry positions[3] = {
 	    {subjectSpec.isVar, subjectSpec.varName, &subjectR},
-	    {predicateSpec.isVar, predicateSpec.varName, &predicateR},
+	    {predicateIsVar, predicateSpec.varName, &predicateR},
 	    {objectSpec.isVar, objectSpec.varName, &objectR},
 	};
 
@@ -293,21 +373,9 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 			}
 		}
 		if (!seen) {
-			const Resolved &r = *positions[i].resolved;
 			ColumnInfo col;
 			col.var = positions[i].varName;
-			col.renderedExpr = r.expr;
-			col.prov = r.prov;
-			col.sourceAlias = r.sourceAlias;
-			col.columnName = r.columnName;
-			col.tableIdentity = r.tableIdentity;
-			col.templateString = r.templateString;
-			if (r.prov == Provenance::PureColumn && !r.columnName.empty()) {
-				col.nativeColumnRef = r.sourceAlias + "." + dialect.quoteIdentifier(r.columnName);
-			} else if (r.prov == Provenance::TemplateExpr && !r.templateString.empty() && !r.sourceAlias.empty()) {
-				fillTemplateKeyInfo(col, dialect);
-			}
-			col.nonNull = true;
+			fillColumnFromResolved(col, *positions[i].resolved, dialect);
 			projections.push_back(col);
 		}
 	}
@@ -343,11 +411,57 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 
 } // namespace
 
-RelNodePtr translateTriplePattern(const sparql::ast::TriplePattern &tp, TranslationContext &ctx) {
-	PositionSpec subjectSpec = specFor(*tp.subject);
-	PredicateSpec predicateSpec = predicateSpecFor(*tp.predicate);
-	PositionSpec objectSpec = specFor(*tp.object);
+TermSpec termSpecFor(const sparql::ast::Term &term, TranslationContext &ctx) {
+	using sparql::ast::BlankNode;
+	using sparql::ast::TermKind;
+	using sparql::ast::Var;
+	TermSpec spec;
+	if (term.kind() == TermKind::Var) {
+		spec.isVar = true;
+		spec.varName = static_cast<const Var &>(term).name;
+	} else if (term.kind() == TermKind::BlankNode) {
+		spec.isVar = true;
+		spec.varName = "_bnode_" + static_cast<const BlankNode &>(term).label;
+		// A blank node is scoped like a variable during translation but is not
+		// a query variable, so it must never be projected by `SELECT *`.
+		ctx.markInternal(spec.varName);
+	} else {
+		spec.isVar = false;
+		spec.boundTerm = &term;
+	}
+	return spec;
+}
 
+TermSpec varTermSpec(const std::string &varName) {
+	TermSpec spec;
+	spec.isVar = true;
+	spec.varName = varName;
+	return spec;
+}
+
+PredicateConstraint constantPredicate(const std::string &iri) {
+	PredicateConstraint spec;
+	spec.kind = PredicateConstraint::ConstantIri;
+	spec.iri = iri;
+	return spec;
+}
+
+PredicateConstraint variablePredicate(const std::string &varName) {
+	PredicateConstraint spec;
+	spec.kind = PredicateConstraint::Variable;
+	spec.varName = varName;
+	return spec;
+}
+
+PredicateConstraint negatedPredicate(std::vector<std::string> excludedIris) {
+	PredicateConstraint spec;
+	spec.kind = PredicateConstraint::NotIn;
+	spec.excludedIris = std::move(excludedIris);
+	return spec;
+}
+
+RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateConstraint &predicateSpec,
+                                  const TermSpec &objectSpec, TranslationContext &ctx) {
 	// The pattern's variables, in subject/predicate/object first-occurrence
 	// order (matches the projection order tryAddCandidate produces).
 	std::vector<std::string> varOrder;
@@ -359,7 +473,7 @@ RelNodePtr translateTriplePattern(const sparql::ast::TriplePattern &tp, Translat
 	if (subjectSpec.isVar) {
 		addVar(subjectSpec.varName);
 	}
-	if (predicateSpec.isVar) {
+	if (predicateSpec.kind == PredicateConstraint::Variable) {
 		addVar(predicateSpec.varName);
 	}
 	if (objectSpec.isVar) {
@@ -379,7 +493,7 @@ RelNodePtr translateTriplePattern(const sparql::ast::TriplePattern &tp, Translat
 		}
 
 		const std::string childIdentity = logicalTableIdentity(*tm.logicalTable);
-		const bool predicateCouldBeRdfType = predicateSpec.isVar || predicateSpec.constantIri == kRdfTypeIri;
+		const bool predicateCouldBeRdfType = predicateCouldMatchIri(predicateSpec, kRdfTypeIri);
 
 		// --- rr:class candidates: synthetic (subject, rdf:type, classIRI) ---
 		if (predicateCouldBeRdfType && !tm.subjectMap->classIRIs.empty()) {
@@ -507,6 +621,88 @@ RelNodePtr translateTriplePattern(const sparql::ast::TriplePattern &tp, Translat
 		un.schema().push_back(col);
 	}
 	return node;
+}
+
+RelNodePtr allTermsRelation(const std::vector<std::string> &varNames, TranslationContext &ctx) {
+	std::vector<RelNodePtr> arms;
+
+	for (const auto &tmPtr : ctx.mapping().triplesMaps) {
+		const r2rml::TriplesMap &tm = *tmPtr;
+		if (!tm.logicalTable || !tm.subjectMap) {
+			continue;
+		}
+		const r2rml::TermMap *subjectValueMap = tm.subjectMap->valueTermMap();
+		if (!subjectValueMap) {
+			continue;
+		}
+		// A TriplesMap with neither an rr:class nor any predicate-object map
+		// emits no triples at all, so its subjects are not nodes of the graph.
+		if (tm.subjectMap->classIRIs.empty() && tm.predicateObjectMaps.empty()) {
+			continue;
+		}
+
+		const std::string identity = logicalTableIdentity(*tm.logicalTable);
+
+		std::string subjectAlias = ctx.nextAlias();
+		addTermArm(arms, logicalTableFromSql(*tm.logicalTable, subjectAlias, ctx.dialect()), subjectAlias, identity,
+		           *subjectValueMap, varNames, ctx);
+
+		for (const std::string &classIri : tm.subjectMap->classIRIs) {
+			addConstantTermArm(arms, classIri, varNames, ctx);
+		}
+
+		for (const auto &pomPtr : tm.predicateObjectMaps) {
+			for (const auto &objMapPtr : pomPtr->objectMaps) {
+				if (!objMapPtr) {
+					continue;
+				}
+				// A referencing object map's object terms are by construction
+				// the parent TriplesMap's subject terms, already contributed by
+				// that parent's own subject arm above.
+				if (dynamic_cast<const r2rml::ReferencingObjectMap *>(objMapPtr.get())) {
+					continue;
+				}
+				std::string alias = ctx.nextAlias();
+				addTermArm(arms, logicalTableFromSql(*tm.logicalTable, alias, ctx.dialect()), alias, identity,
+				           *objMapPtr, varNames, ctx);
+			}
+		}
+	}
+
+	if (arms.empty()) {
+		RelNodePtr node(new EmptyNode());
+		for (const auto &v : varNames) {
+			ColumnInfo col;
+			col.var = v;
+			col.nonNull = true;
+			node->schema().push_back(col);
+		}
+		return node;
+	}
+	if (arms.size() == 1) {
+		return std::move(arms.front());
+	}
+
+	RelNodePtr node(new UnionByNameNode());
+	UnionByNameNode &un = static_cast<UnionByNameNode &>(*node);
+	un.all = false; // the term universe is a set, not a bag.
+	un.arms = std::move(arms);
+	for (const auto &v : varNames) {
+		ColumnInfo col;
+		col.var = v;
+		col.nonNull = true;
+		un.schema().push_back(col);
+	}
+	return node;
+}
+
+RelNodePtr translateTriplePattern(const sparql::ast::TriplePattern &tp, TranslationContext &ctx) {
+	// Evaluate the endpoints before the path: termSpecFor registers blank-node
+	// variables as internal, and translatePath may mint further internal
+	// variables of its own.
+	TermSpec subjectSpec = termSpecFor(*tp.subject, ctx);
+	TermSpec objectSpec = termSpecFor(*tp.object, ctx);
+	return translatePath(*tp.predicate, subjectSpec, objectSpec, ctx);
 }
 
 } // namespace sparql2sql

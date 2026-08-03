@@ -394,6 +394,15 @@ bool isSubset(const std::set<std::string> &small, const std::set<std::string> &b
 	return true;
 }
 
+bool intersects(const std::set<std::string> &a, const std::set<std::string> &b) {
+	for (const auto &v : a) {
+		if (b.count(v)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 // Fold one FILTER conjunct into an SpjRelation's WHERE list.
 //
 // The predicate is rendered against a fresh sentinel alias, so every variable
@@ -463,6 +472,23 @@ RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::
 		}
 		std::set<std::string> leftVars = j.left->allVars();
 		std::set<std::string> rightVars = j.right->allVars();
+		// A nullSafe key's merged value is COALESCE(left, right): pushing a
+		// predicate onto a side where the variable is still nullable there
+		// would evaluate against a NULL that the join's null-tolerant ON
+		// condition (and the COALESCE projection) are specifically there to
+		// look past, wrongly dropping rows the other side would have rescued.
+		// Only push a nullSafe key's variable onto a side where it's
+		// guaranteed non-NULL.
+		std::set<std::string> leftUnsafe;
+		std::set<std::string> rightUnsafe;
+		for (const auto &k : j.keys) {
+			if (!k.leftCol.nonNull) {
+				leftUnsafe.insert(k.var);
+			}
+			if (!k.rightCol.nonNull) {
+				rightUnsafe.insert(k.var);
+			}
+		}
 		std::vector<const sparql::ast::Expression *> leftConj;
 		std::vector<const sparql::ast::Expression *> rightConj;
 		std::vector<const sparql::ast::Expression *> keep;
@@ -472,9 +498,9 @@ RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::
 				continue;
 			}
 			std::set<std::string> refs = varRefSet(*c);
-			if (isSubset(refs, leftVars)) {
+			if (isSubset(refs, leftVars) && !intersects(refs, leftUnsafe)) {
 				leftConj.push_back(c);
-			} else if (isSubset(refs, rightVars)) {
+			} else if (isSubset(refs, rightVars) && !intersects(refs, rightUnsafe)) {
 				rightConj.push_back(c);
 			} else {
 				keep.push_back(c);

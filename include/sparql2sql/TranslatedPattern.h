@@ -63,11 +63,39 @@ public:
 		return "t" + std::to_string(++aliasCounter_);
 	}
 
+	/// Mint a fresh internal variable name and register it as internal. Used
+	/// for the intermediate node of a sequence property path (`E1/E2` binds a
+	/// variable that joins the two halves but is not part of the query).
+	///
+	/// The "%" prefix cannot appear in a SPARQL VARNAME, so a minted name can
+	/// never collide with a user variable; registration (rather than a prefix
+	/// test) is what isInternal() actually consults, so the prefix is only a
+	/// readability aid in generated SQL.
+	std::string nextInternalVar() {
+		std::string name = "%p" + std::to_string(++internalVarCounter_);
+		markInternal(name);
+		return name;
+	}
+
+	/// Register a variable as internal: bound and joinable during translation,
+	/// but never projected by `SELECT *` (see translateQueryPattern). Also used
+	/// for blank-node positions, which are scoped variables rather than query
+	/// variables and so must not appear in query output.
+	void markInternal(const std::string &varName) {
+		internalVars_.insert(varName);
+	}
+
+	bool isInternal(const std::string &varName) const {
+		return internalVars_.count(varName) != 0;
+	}
+
 private:
 	const r2rml::R2RMLMapping &mapping_;
 	const SqlDialect &dialect_;
 	const TypeCatalog *catalog_;
 	std::size_t aliasCounter_;
+	std::size_t internalVarCounter_ = 0;
+	std::set<std::string> internalVars_;
 };
 
 /// Mangle a SPARQL variable name into its projected SQL column name

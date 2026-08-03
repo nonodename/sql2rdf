@@ -78,6 +78,12 @@ std::unique_ptr<DuckDBConnection> makeSeededDatabase() {
 	conn->execute("CREATE TABLE RELATIONS (PARENT BIGINT, CHILD BIGINT)");
 	conn->execute("INSERT INTO RELATIONS VALUES (100, 200)");
 
+	// Self-referencing chain (1 -> 2 -> 3 -> end) backing sparql2sql_path_terms.ttl,
+	// whose deliberately tiny mapping makes the zero-length property path's
+	// term universe small enough to assert row-exactly.
+	conn->execute("CREATE TABLE NODES (ID INTEGER, NEXT INTEGER)");
+	conn->execute("INSERT INTO NODES VALUES (1, 2), (2, 3), (3, NULL)");
+
 	return conn;
 }
 
@@ -192,6 +198,13 @@ TEST_CASE("emp_dept_optional.rq: JONES (no department) still appears with ?d unb
 	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7400"}, {"V_N", "JONES"}, {"V_D", kNull}}));
 	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/department/10"}, {"V_N", "APPSERVER"}, {"V_D", kNull}}));
 	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/department/20"}, {"V_N", "SALES"}, {"V_D", kNull}}));
+}
+
+TEST_CASE("emp_dept_xsd_cast.rq: xsd:integer() cast filters on the numeric STAFF column") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_xsd_cast.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_STAFF", "1"}}));
 }
 
 TEST_CASE("emp_dept_union.rq: bag union of ex:name and ex:location results") {
@@ -432,6 +445,31 @@ TEST_CASE("emp_dept_filter_optional.rq: FILTER on the optional var applies after
 	                  {{"V_E", "http://data.example.com/department/10"}, {"V_N", "APPSERVER"}, {"V_LOC", "NEW YORK"}}));
 }
 
+TEST_CASE("emp_dept_filter_optional_join.rq: FILTER on a var that's nullable via OPTIONAL on one join side but "
+          "required on the other is not dropped early") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_filter_optional_join.rq", "example_emp_dept.ttl");
+	// ?loc is nullable coming out of the OPTIONAL (no Employee has ex:location),
+	// but the required `?d2 ex:location ?loc` pattern re-binds it non-null via a
+	// nullSafe join key. SMITH and JONES both have OPTIONAL-unbound ?loc, so
+	// they're compatible with (and must join against) every ?d2 solution,
+	// including department 10's NEW YORK; department 10 itself also directly
+	// binds ?loc = NEW YORK. All three must survive the filter.
+	REQUIRE(rows.size() == 3);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"},
+	                         {"V_N", "SMITH"},
+	                         {"V_D2", "http://data.example.com/department/10"},
+	                         {"V_LOC", "NEW YORK"}}));
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7400"},
+	                         {"V_N", "JONES"},
+	                         {"V_D2", "http://data.example.com/department/10"},
+	                         {"V_LOC", "NEW YORK"}}));
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/department/10"},
+	                         {"V_N", "APPSERVER"},
+	                         {"V_D2", "http://data.example.com/department/10"},
+	                         {"V_LOC", "NEW YORK"}}));
+}
+
 TEST_CASE("emp_dept_filter_exists.rq: EXISTS filter (kept above the union) keeps only rows with a staff triple") {
 	auto conn = makeSeededDatabase();
 	auto rows = translateAndRun(*conn, "emp_dept_filter_exists.rq", "example_emp_dept.ttl");
@@ -450,4 +488,130 @@ TEST_CASE("emp_dept_filter_minus.rq: FILTER pushed onto the MINUS left side pres
 	// triple so MINUS keeps it.
 	REQUIRE(rows.size() == 1);
 	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_N", "SMITH"}}));
+}
+
+// --- Property paths -------------------------------------------------------
+//
+// Every operator below is desugared into the relational algebra by
+// PropertyPathTranslator; these cases are what actually pins down that the
+// desugaring is semantically right, since test_runner can only inspect the
+// shape of the generated SQL.
+
+TEST_CASE("emp_dept_path_seq.rq: a sequence path walks employee -> department -> name") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_path_seq.rq", "example_emp_dept.ttl");
+	// Only SMITH has a department; JONES's DEPTNO is NULL so the first hop
+	// drops it entirely.
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_DN", "APPSERVER"}}));
+}
+
+TEST_CASE("emp_dept_path_inverse.rq: an inverse path reverses subject and object") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_path_inverse.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(
+	    rows, {{"V_D", "http://data.example.com/department/10"}, {"V_E", "http://data.example.com/employee/7369"}}));
+}
+
+TEST_CASE("emp_dept_path_alt.rq: an alternative path returns both branches' objects") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_path_alt.rq", "example_emp_dept.ttl");
+	// ex:location and ex:staff, for both departments. STAFF is the view's
+	// correlated employee count: 1 for APPSERVER (SMITH), 0 for SALES.
+	REQUIRE(rows.size() == 4);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_V", "NEW YORK"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/20"}, {"V_V", "BOSTON"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_V", "1"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/20"}, {"V_V", "0"}}));
+}
+
+TEST_CASE("emp_dept_path_nested.rq: a sequence of a forward and an inverse path finds departmental peers") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_path_nested.rq", "example_emp_dept.ttl");
+	// SMITH is the only employee in department 10, so the only peer SMITH has
+	// is SMITH. (SPARQL does not exclude the reflexive pair here.)
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(
+	    rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_PEER", "http://data.example.com/employee/7369"}}));
+}
+
+TEST_CASE("emp_dept_path_nps.rq: a negated property set keeps every predicate it does not name") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_path_nps.rq", "example_emp_dept.ttl");
+	// !(ex:name|ex:staff) leaves rdf:type (from both rr:class assertions),
+	// ex:location and ex:department.
+	REQUIRE(rows.size() == 7);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_V", "NEW YORK"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/20"}, {"V_V", "BOSTON"}}));
+	CHECK(containsRow(rows,
+	                  {{"V_D", "http://data.example.com/department/10"}, {"V_V", "http://example.com/ns#Department"}}));
+	CHECK(containsRow(rows,
+	                  {{"V_D", "http://data.example.com/employee/7369"}, {"V_V", "http://example.com/ns#Employee"}}));
+	CHECK(containsRow(
+	    rows, {{"V_D", "http://data.example.com/employee/7369"}, {"V_V", "http://data.example.com/department/10"}}));
+	// The two excluded predicates contribute nothing.
+	CHECK_FALSE(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_V", "APPSERVER"}}));
+	CHECK_FALSE(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_V", "1"}}));
+}
+
+TEST_CASE("emp_dept_path_nps_inverse.rq: an all-inverse negated property set only matches reversed triples") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_path_nps_inverse.rq", "example_emp_dept.ttl");
+	// !(^ex:department) reverses every triple whose predicate is not
+	// ex:department: 2 rdf:type + 2 ex:name for departments, 2 ex:location,
+	// 2 ex:staff, 2 rdf:type + 2 ex:name for employees.
+	REQUIRE(rows.size() == 12);
+	CHECK(containsRow(rows, {{"V_S", "APPSERVER"}, {"V_O", "http://data.example.com/department/10"}}));
+	CHECK(containsRow(rows, {{"V_S", "SMITH"}, {"V_O", "http://data.example.com/employee/7369"}}));
+	CHECK(containsRow(rows,
+	                  {{"V_S", "http://example.com/ns#Employee"}, {"V_O", "http://data.example.com/employee/7369"}}));
+	// The one excluded predicate: department/10 must never appear as a subject
+	// of the reversed ex:department triple.
+	CHECK_FALSE(containsRow(
+	    rows, {{"V_S", "http://data.example.com/department/10"}, {"V_O", "http://data.example.com/employee/7369"}}));
+}
+
+TEST_CASE("emp_dept_path_zero_or_one.rq: a zero-or-one path matches both the zero-length and one-step routes") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_path_zero_or_one.rq", "example_emp_dept.ttl");
+	// <employee/7369> ex:department? ?d binds ?d to employee/7369 itself (zero
+	// length) and to department/10 (one step); each then supplies its ex:name.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_N", "SMITH"}}));
+	CHECK(containsRow(rows, {{"V_N", "APPSERVER"}}));
+}
+
+TEST_CASE("sparql2sql_path_terms.rq: a zero-length path with two unbound endpoints ranges over all graph terms") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_path_terms.rq", "sparql2sql_path_terms.ttl");
+	// The term universe is the three node subjects (NODES has no rr:class, and
+	// the referencing object map's objects are those same subjects), giving
+	// three reflexive pairs; ex:next then adds the two real edges. Node 3's
+	// NEXT is NULL, so it has no outgoing edge.
+	REQUIRE(rows.size() == 5);
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/1"}, {"V_Y", "http://ex.org/node/1"}}));
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/2"}, {"V_Y", "http://ex.org/node/2"}}));
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/3"}, {"V_Y", "http://ex.org/node/3"}}));
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/1"}, {"V_Y", "http://ex.org/node/2"}}));
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/2"}, {"V_Y", "http://ex.org/node/3"}}));
+}
+
+TEST_CASE("emp_dept_path_star_select.rq: SELECT * over a sequence path omits the intermediate variable") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_path_star_select.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	// Exactly the two query variables - the minted midpoint is not a column.
+	REQUIRE(rows[0].size() == 2);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_DN", "APPSERVER"}}));
+}
+
+TEST_CASE("emp_dept_bnode_select_star.rq: SELECT * omits a blank-node position") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_bnode_select_star.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 4);
+	// ?e only: the blank node constrains the pattern but is not a variable.
+	REQUIRE(rows[0].size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}}));
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/department/10"}}));
 }
