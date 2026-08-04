@@ -271,6 +271,30 @@ TEST_CASE("emp_dept_aggregate.rq: COUNT per department") {
 	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_CNT", "1"}}));
 }
 
+TEST_CASE("emp_dept_name_count.rq: COUNT(*) over a multi-candidate predicate doesn't double-count the "
+          "candidate union's own dedup") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_name_count.rq", "example_emp_dept.ttl");
+	// Same 4 rows as emp_dept_simple_select.rq (2 employees + 2 departments):
+	// each candidate SpjRelation's own DISTINCT and the candidate UNION's
+	// dedup (UNION BY NAME, not ALL) must survive under an aggregate query,
+	// since queryHasAggregate() suppresses the stripDistinct/UNION-ALL
+	// optimization that only applies when the outer SELECT DISTINCT/ASK
+	// already subsumes per-candidate dedup.
+	REQUIRE(rows.size() == 1);
+	CHECK(rows[0].at("V_CNT") == "4");
+}
+
+TEST_CASE("emp_dept_union_count.rq: COUNT(*) over an explicit bag UNION preserves duplicate solutions") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_union_count.rq", "example_emp_dept.ttl");
+	// Same 6 rows as emp_dept_union.rq: SPARQL UNION is bag-preserving (UNION
+	// ALL BY NAME), so the two branches' rows are not deduped against each
+	// other even though each branch's own SpjRelation is still DISTINCT.
+	REQUIRE(rows.size() == 1);
+	CHECK(rows[0].at("V_CNT") == "6");
+}
+
 TEST_CASE("emp_dept_ask.rq: ASK is true when the pattern matches at least once") {
 	auto conn = makeSeededDatabase();
 	auto rows = translateAndRun(*conn, "emp_dept_ask.rq", "example_emp_dept.ttl");

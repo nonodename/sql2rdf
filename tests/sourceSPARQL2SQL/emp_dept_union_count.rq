@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT (COUNT(*) AS ?cnt)
+WHERE {
+  { ?x ex:name ?n . }
+  UNION
+  { ?x ex:location ?n . }
+}
