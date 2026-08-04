@@ -47,6 +47,14 @@ std::string DuckDbDialect::concat(const std::vector<std::string> &parts) const {
 	return out;
 }
 
+std::string DuckDbDialect::percentEncode(const std::string &expr) const {
+	// DuckDB's built-in url_encode() leaves A-Za-z0-9-_.~ untouched and
+	// percent-encodes everything else (including '/') as an uppercase %XX
+	// escape, which is byte-for-byte what r2rml::AbstractMap::percentEncode
+	// does for forward R2RML generation.
+	return "url_encode(" + expr + ")";
+}
+
 std::string DuckDbDialect::limitOffsetClause(bool hasLimit, int64_t limit, bool hasOffset, int64_t offset) const {
 	std::string out;
 	if (hasLimit) {

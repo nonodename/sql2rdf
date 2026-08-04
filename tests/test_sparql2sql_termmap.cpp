@@ -88,6 +88,17 @@ TEST_CASE("buildProjectionSql reconstructs the template as a concatenation expre
 	CHECK(sql.find("'http://ex.org/e/'") != std::string::npos);
 }
 
+TEST_CASE("buildProjectionSql percent-encodes substituted placeholder columns but not literal text") {
+	DuckDbDialect dialect;
+	auto segs = parseTemplate("http://ex.org/e/{ID}");
+	std::string sql = buildProjectionSql(segs, "t1", dialect);
+	// The placeholder's column expression is wrapped so it percent-encodes at
+	// query time, matching forward R2RML generation (AbstractMap::percentEncode).
+	CHECK(sql.find("url_encode(CAST(t1.\"ID\" AS VARCHAR))") != std::string::npos);
+	// Literal template text is never encoded - only substituted values.
+	CHECK(sql.find("'http://ex.org/e/'") != std::string::npos);
+}
+
 TEST_CASE("invertTemplate: NeverMatches when the literal prefix doesn't fit") {
 	auto segs = parseTemplate("http://ex.org/e/{ID}");
 	auto outcome = invertTemplate(segs, "http://other.org/e/7");

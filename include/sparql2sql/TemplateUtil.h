@@ -32,9 +32,8 @@ std::vector<std::string> referencedColumns(const std::vector<TemplateSegment> &s
 
 /// Build a SQL expression that reconstructs the template's string value from
 /// the given source alias's columns (string concatenation of literal text
-/// and CAST(...AS VARCHAR) column references). V1 does not percent-encode
-/// substituted column values (documented limitation: assumes
-/// template-referenced columns hold only RFC3986-unreserved characters).
+/// and percent-encoded CAST(...AS VARCHAR) column references), matching what
+/// forward R2RML generation produces (r2rml::AbstractMap::percentEncode).
 std::string buildProjectionSql(const std::vector<TemplateSegment> &segments, const std::string &sourceAlias,
                                const SqlDialect &dialect);
 

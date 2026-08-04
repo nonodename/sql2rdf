@@ -71,6 +71,12 @@ std::unique_ptr<DuckDBConnection> makeSeededDatabase() {
 	conn->execute("CREATE TABLE WIDGETS (ID INTEGER, NAME VARCHAR)");
 	conn->execute("INSERT INTO WIDGETS VALUES (1, 'GADGET')");
 
+	// LABEL holds RFC3986 reserved characters (space, '/', '?', '#') to
+	// exercise percent-encode-on-projection / percent-decode-on-inversion for
+	// rr:template.
+	conn->execute("CREATE TABLE TAGS (ID INTEGER, LABEL VARCHAR)");
+	conn->execute("INSERT INTO TAGS VALUES (1, 'a b/c?d#e')");
+
 	// Cross-table integer join fixture (no declared R2RML FK): COMPANY.CAPIQ
 	// and RELATIONS.PARENT are both BIGINT, unified by a shared SPARQL var.
 	conn->execute("CREATE TABLE COMPANY (ID INTEGER, CAPIQ BIGINT, LEGALNAME VARCHAR)");
@@ -300,6 +306,22 @@ TEST_CASE("sparql2sql_multi_placeholder.rq: multi-placeholder template inversion
 	auto rows = translateAndRun(*conn, "sparql2sql_multi_placeholder.rq", "sparql2sql_multi_placeholder.ttl");
 	REQUIRE(rows.size() == 1);
 	CHECK(containsRow(rows, {{"V_O", "http://ex.org/order/42/99"}}));
+}
+
+TEST_CASE("sparql2sql_percent_encode.rq: subject template projection percent-encodes reserved characters") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_percent_encode.rq", "sparql2sql_percent_encode.ttl");
+	REQUIRE(rows.size() == 1);
+	// LABEL = "a b/c?d#e": space/'/'/? '#' must each be percent-encoded in the
+	// constructed subject IRI, while the plain rr:column object stays raw.
+	CHECK(containsRow(rows, {{"V_T", "http://ex.org/tag/a%20b%2Fc%3Fd%23e"}, {"V_L", "a b/c?d#e"}}));
+}
+
+TEST_CASE("sparql2sql_percent_encode_filter.rq: a percent-encoded bound IRI inverts back to the raw column value") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_percent_encode_filter.rq", "sparql2sql_percent_encode.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_L", "a b/c?d#e"}}));
 }
 
 TEST_CASE("sparql2sql_native_join.rq: a type catalog enables a native integer join, same rows") {

@@ -99,7 +99,8 @@ std::string buildProjectionSql(const std::vector<TemplateSegment> &segments, con
 	parts.reserve(segments.size());
 	for (const auto &seg : segments) {
 		if (seg.isPlaceholder) {
-			parts.push_back("CAST(" + sourceAlias + "." + dialect.quoteIdentifier(seg.text) + " AS VARCHAR)");
+			parts.push_back(dialect.percentEncode("CAST(" + sourceAlias + "." + dialect.quoteIdentifier(seg.text) +
+			                                      " AS VARCHAR)"));
 		} else {
 			parts.push_back(dialect.stringLiteral(seg.text));
 		}

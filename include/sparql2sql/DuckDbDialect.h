@@ -12,6 +12,7 @@ public:
 	std::string quoteIdentifier(const std::string &identifier) const override;
 	std::string stringLiteral(const std::string &value) const override;
 	std::string concat(const std::vector<std::string> &parts) const override;
+	std::string percentEncode(const std::string &expr) const override;
 	std::string limitOffsetClause(bool hasLimit, int64_t limit, bool hasOffset, int64_t offset) const override;
 	std::string booleanLiteral(bool value) const override;
 	std::string existsClause(bool negated, const std::string &subquerySql) const override;

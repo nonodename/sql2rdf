@@ -571,11 +571,6 @@ and joins use the VARCHAR-cast fallback.
     compared on the native (uncast) columns (see the `translateQuery` `catalog` parameter above).
     This changes only the join condition, not the VARCHAR representation of any projected
     variable.
-- **Template matching (`rr:template`) assumes RFC3986-unreserved-only column values**: forward
-  R2RML generation percent-encodes substituted column values, but the translator's reverse
-  direction (reconstructing/matching a template) does not apply percent-encoding — correct as
-  long as template-referenced columns hold only unreserved characters (typical for numeric/simple
-  string IDs), not guaranteed in general.
 - **Deferred builtin functions** (throw `TranslationError`): `ENCODE_FOR_URI()`; date/time
   accessors (`YEAR()`/`MONTH()`/`DAY()`/`HOURS()`/`MINUTES()`/`SECONDS()`/`TIMEZONE()`/`TZ()`);
   non-deterministic/context functions (`NOW()`/`RAND()`/`UUID()`/`STRUUID()`); `SHA384()`/`SHA512()`

@@ -31,6 +31,14 @@ public:
 	/// string-valued expression.
 	virtual std::string concat(const std::vector<std::string> &parts) const = 0;
 
+	/// Wrap a SQL scalar expression so it evaluates, at query time, to the
+	/// RFC3986 percent-encoding of its value (unreserved: A-Z a-z 0-9 - _ . ~,
+	/// everything else as an uppercase %XX escape). Must match
+	/// r2rml::AbstractMap::percentEncode's behavior exactly, since this is
+	/// used to reconstruct rr:template-generated terms so they agree with
+	/// forward R2RML generation.
+	virtual std::string percentEncode(const std::string &expr) const = 0;
+
 	/// Render a "LIMIT n OFFSET m" style clause (leading space included,
 	/// empty string if neither is set).
 	virtual std::string limitOffsetClause(bool hasLimit, int64_t limit, bool hasOffset, int64_t offset) const = 0;

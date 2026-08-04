@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?t ?l
+WHERE {
+  ?t a ex:Tag ;
+     ex:label ?l .
+}
