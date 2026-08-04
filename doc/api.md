@@ -546,6 +546,9 @@ and joins use the VARCHAR-cast fallback.
   requires both a transitive-closure IR node and a matching `SqlDialect` seam.
 - **No `GRAPH`/named graphs**: this R2RML mapping model never populates `rr:graph`/`rr:graphMap`,
   so `GRAPH` patterns have nothing to translate against and always throw.
+- **No `FROM`/`FROM NAMED` (dataset clauses)**: always throws `TranslationError`. A query is always
+  translated against the entire R2RML mapping's default graph; there is no notion of a queryable
+  named-graph dataset to restrict against (see the `GRAPH` limitation above).
 - **No `SERVICE`** (federated query): always throws, matching `sql2rdf_sparql`'s own "no
   federated-query execution semantics" stance.
 - **Every SPARQL variable is a plain SQL `VARCHAR`** holding the RDF term's lexical string form

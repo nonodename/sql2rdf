@@ -296,6 +296,12 @@ std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMa
                            const SqlDialect &dialect, const TypeCatalog *catalog) {
 	TranslationContext ctx(mapping, dialect, catalog);
 
+	if (!query.datasetClauses.empty()) {
+		throw TranslationError(
+		    "FROM / FROM NAMED dataset clauses are not supported; every query is translated against the entire "
+		    "R2RML mapping");
+	}
+
 	if (query.form == QueryForm::Ask) {
 		RelNodePtr rootNode = query.where ? fold(*query.where, ctx) : identityRelation(ctx);
 		if (query.valuesClause) {
