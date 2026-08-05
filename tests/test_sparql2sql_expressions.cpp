@@ -202,6 +202,61 @@ TEST_CASE("FILTER: xsd:integer/decimal/double/float/string casts translate witho
 	CHECK(sql.find("AS BIGINT)") != std::string::npos);
 }
 
+TEST_CASE("FILTER: xsd:decimal() casts to a fixed-point DECIMAL, not DOUBLE") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string decSql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                               "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(xsd:decimal(?n) != \"\") }",
+	                               mapping);
+	CHECK(decSql.find("AS DECIMAL(38,18))") != std::string::npos);
+
+	std::string doubleSql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                                  "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(xsd:double(?n) != \"\") }",
+	                                  mapping);
+	CHECK(doubleSql.find("AS DOUBLE)") != std::string::npos);
+	CHECK(doubleSql.find("DECIMAL") == std::string::npos);
+}
+
+TEST_CASE("FILTER: xsd:boolean() casts translate without throwing") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                            "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(xsd:boolean(?n) = \"true\") }",
+	                            mapping);
+	CHECK(sql.find("AS BOOLEAN)") != std::string::npos);
+}
+
+TEST_CASE("FILTER: xsd:date() casts translate without throwing") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                            "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(xsd:date(?n) != \"\") }",
+	                            mapping);
+	CHECK(sql.find("AS DATE)") != std::string::npos);
+}
+
+TEST_CASE("FILTER: xsd:dateTime() casts translate without throwing") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                            "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(xsd:dateTime(?n) != \"\") }",
+	                            mapping);
+	CHECK(sql.find("AS TIMESTAMP)") != std::string::npos);
+	CHECK(sql.find("REPLACE(") != std::string::npos);
+}
+
+TEST_CASE("FILTER: xsd:long/int/short/byte casts alias xsd:integer") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	for (const std::string &type : {"long", "int", "short", "byte"}) {
+		std::string sql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+		                            "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(xsd:" +
+		                                type + "(?n) > 5) }",
+		                            mapping);
+		CHECK(sql.find("AS BIGINT)") != std::string::npos);
+	}
+}
+
 TEST_CASE("FILTER: xsd:integer() comparison produces a numeric-aware comparison") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
@@ -222,6 +277,22 @@ TEST_CASE("BIND: xsd:integer introduces a computed column") {
 	CHECK(sql.find("AS BIGINT)") != std::string::npos);
 }
 
+TEST_CASE("BIND: xsd:boolean/xsd:dateTime introduce computed columns") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string boolSql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                                "SELECT ?e ?asbool WHERE { ?e ex:name ?n . BIND(xsd:boolean(?n) AS ?asbool) }",
+	                                mapping);
+	CHECK(boolSql.find("\"v_asbool\"") != std::string::npos);
+	CHECK(boolSql.find("AS BOOLEAN)") != std::string::npos);
+
+	std::string dtSql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                              "SELECT ?e ?asdt WHERE { ?e ex:name ?n . BIND(xsd:dateTime(?n) AS ?asdt) }",
+	                              mapping);
+	CHECK(dtSql.find("\"v_asdt\"") != std::string::npos);
+	CHECK(dtSql.find("AS TIMESTAMP)") != std::string::npos);
+}
+
 TEST_CASE("FILTER: xsd cast with wrong arity throws a named TranslationError") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
@@ -233,13 +304,21 @@ TEST_CASE("FILTER: xsd cast with wrong arity throws a named TranslationError") {
 	                          "SELECT ?e WHERE { ?e ex:name ?n . FILTER(xsd:integer(?n, ?n) > 0) }",
 	                          mapping),
 	                TranslationError);
+	CHECK_THROWS_AS(translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                          "SELECT ?e WHERE { ?e ex:name ?n . FILTER(xsd:boolean() = \"\") }",
+	                          mapping),
+	                TranslationError);
+	CHECK_THROWS_AS(translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                          "SELECT ?e WHERE { ?e ex:name ?n . FILTER(xsd:boolean(?n, ?n) = \"true\") }",
+	                          mapping),
+	                TranslationError);
 }
 
-TEST_CASE("FILTER: xsd:boolean is out of scope and still throws") {
+TEST_CASE("FILTER: an unsupported XSD constructor still throws a named TranslationError") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . "
-	                          "FILTER(<http://www.w3.org/2001/XMLSchema#boolean>(?n) = \"true\") }",
+	                          "FILTER(<http://www.w3.org/2001/XMLSchema#anyURI>(?n) = \"x\") }",
 	                          mapping),
 	                TranslationError);
 }

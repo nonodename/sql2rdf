@@ -575,8 +575,8 @@ and joins use the VARCHAR-cast fallback.
   `TIMEZONE()`/`TZ()` (they'd need to preserve a UTC offset, which this translator's plain-VARCHAR
   lexical-form term representation can't carry); non-deterministic/context functions
   (`NOW()`/`RAND()`/`UUID()`/`STRUUID()`); `SHA384()`/`SHA512()` (DuckDB has no built-in scalar
-  function for either); any non-builtin (IRI-named) function call except the five XSD constructor
-  casts described below. `MD5()`/`SHA1()`/`SHA256()`/`ABS()`/`CEIL()`/`FLOOR()`/`ROUND()`/
+  function for either); any non-builtin (IRI-named) function call except the twelve XSD
+  constructor casts described below. `MD5()`/`SHA1()`/`SHA256()`/`ABS()`/`CEIL()`/`FLOOR()`/`ROUND()`/
   `CONCAT()`/`STRLEN()`/`SUBSTR()`/`UCASE()`/`LCASE()`/`CONTAINS()`/`STRSTARTS()`/`STRENDS()`/
   `STRBEFORE()`/`STRAFTER()`/`REPLACE()`/`REGEX()`/`COALESCE()`/`IF()`/`isNUMERIC()`/`bound()`/
   `ENCODE_FOR_URI()`/the date/time accessors `YEAR()`/`MONTH()`/`DAY()`/`HOURS()`/`MINUTES()`/
@@ -586,18 +586,37 @@ and joins use the VARCHAR-cast fallback.
   go through `TRY_CAST(... AS TIMESTAMP)` then `EXTRACT(field FROM ...)`, null-tolerantly like the
   numeric idiom below; `SECONDS()` truncates to whole seconds (DuckDB's `EXTRACT(SECOND FROM ...)`
   semantics), not fractional.
-- **XSD constructor-function casts** — `xsd:integer()`, `xsd:decimal()`, `xsd:double()`,
-  `xsd:float()`, `xsd:string()` are the sole supported non-builtin (IRI-named) function calls;
-  every other IRI-named call (including `xsd:boolean()` and the rest of the XSD constructor
-  family) still throws `TranslationError`. These are **value-level casts, not XSD datatype
-  tagging** — this translator has no term-kind/datatype dimension at all (see above), so
-  `xsd:integer(?x)` doesn't give `?x` a tracked datatype, it just reinterprets the underlying
-  VARCHAR's numeric value, null-tolerantly, via the same `TRY_CAST(... AS DOUBLE)` idiom used
-  elsewhere in this file (non-numeric input yields SQL `NULL`, never a translation-time or
-  runtime error). `xsd:decimal()`/`xsd:double()`/`xsd:float()` all map to the same DOUBLE
-  round-trip (no fixed-precision `DECIMAL` type is modeled anywhere in this translator);
-  `xsd:integer()` additionally truncates through `BIGINT`; `xsd:string()` is an identity
-  pass-through.
+- **XSD constructor-function casts** — `xsd:integer()`, `xsd:long()`, `xsd:int()`, `xsd:short()`,
+  `xsd:byte()`, `xsd:decimal()`, `xsd:double()`, `xsd:float()`, `xsd:string()`, `xsd:boolean()`,
+  `xsd:date()`, `xsd:dateTime()` are the sole supported non-builtin (IRI-named) function calls;
+  every other IRI-named call still throws `TranslationError`. These are **value-level casts, not
+  XSD datatype tagging** — this translator has no term-kind/datatype dimension at all (see above),
+  so `xsd:integer(?x)` doesn't give `?x` a tracked datatype, it just reinterprets the underlying
+  VARCHAR's value, null-tolerantly (non-castable input yields SQL `NULL`, never a translation-time
+  or runtime error). Specifics:
+  - `xsd:integer()`, and its narrower aliases `xsd:long()`/`xsd:int()`/`xsd:short()`/`xsd:byte()`,
+    all go through the same `TRY_CAST(... AS DOUBLE)` → `CAST(... AS BIGINT)` idiom — truncating
+    toward zero via DuckDB's own cast semantics, not a hand-rolled XPath-conformant conversion, and
+    with **no range clamping** to the narrower subtypes' XSD bounds (they are pure aliases of
+    `xsd:integer()`).
+  - `xsd:double()`/`xsd:float()` map to `TRY_CAST(... AS DOUBLE)` (the correct IEEE
+    floating-point model for both).
+  - `xsd:decimal()` uses a dedicated fixed-point `TRY_CAST(... AS DECIMAL(38,18))` path (DuckDB's
+    maximum total precision, 18 fractional digits) rather than `DOUBLE`, so it doesn't silently
+    lose precision on values like financial data — XSD decimal is technically arbitrary-precision,
+    so this fixed precision/scale is itself a documented fidelity limit, not a full
+    arbitrary-precision implementation.
+  - `xsd:boolean()` uses `TRY_CAST(... AS BOOLEAN)`; DuckDB's `VARCHAR→BOOLEAN` cast already
+    accepts XSD boolean's lexical space (`true`/`false`/`1`/`0`) and its `BOOLEAN→VARCHAR` cast
+    renders lowercase `true`/`false`, matching XSD's canonical lexical form.
+  - `xsd:date()` uses `TRY_CAST(... AS DATE)`; DuckDB's `DATE→VARCHAR` cast already renders
+    `YYYY-MM-DD`, XSD date's canonical form.
+  - `xsd:dateTime()` uses `TRY_CAST(... AS TIMESTAMP)` then swaps the space separator DuckDB's
+    `TIMESTAMP→VARCHAR` cast produces for `T`, reaching XSD dateTime's canonical
+    `YYYY-MM-DDTHH:MM:SS` form — again not a hand-rolled XPath-conformant conversion (no explicit
+    fractional-second/timezone-offset handling beyond whatever DuckDB's own `TIMESTAMP` rendering
+    gives).
+  - `xsd:string()` is an identity pass-through.
 - **Out-of-scope variable references** in FILTER/BIND/ORDER BY/HAVING throw `TranslationError` at
   translation time, rather than emulating SPARQL's precise per-row unbound-variable/type-error
   semantics.

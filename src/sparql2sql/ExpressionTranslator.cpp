@@ -353,15 +353,25 @@ const char *const kXsdDecimal = "http://www.w3.org/2001/XMLSchema#decimal";
 const char *const kXsdDouble = "http://www.w3.org/2001/XMLSchema#double";
 const char *const kXsdFloat = "http://www.w3.org/2001/XMLSchema#float";
 const char *const kXsdString = "http://www.w3.org/2001/XMLSchema#string";
+const char *const kXsdBoolean = "http://www.w3.org/2001/XMLSchema#boolean";
+const char *const kXsdDateTime = "http://www.w3.org/2001/XMLSchema#dateTime";
+const char *const kXsdDate = "http://www.w3.org/2001/XMLSchema#date";
+const char *const kXsdLong = "http://www.w3.org/2001/XMLSchema#long";
+const char *const kXsdInt = "http://www.w3.org/2001/XMLSchema#int";
+const char *const kXsdShort = "http://www.w3.org/2001/XMLSchema#short";
+const char *const kXsdByte = "http://www.w3.org/2001/XMLSchema#byte";
 
 bool isXsdCastFunction(const std::string &iri) {
-	return iri == kXsdInteger || iri == kXsdDecimal || iri == kXsdDouble || iri == kXsdFloat || iri == kXsdString;
+	return iri == kXsdInteger || iri == kXsdDecimal || iri == kXsdDouble || iri == kXsdFloat || iri == kXsdString ||
+	       iri == kXsdBoolean || iri == kXsdDateTime || iri == kXsdDate || iri == kXsdLong || iri == kXsdInt ||
+	       iri == kXsdShort || iri == kXsdByte;
 }
 
-// xsd:decimal/double/float all round-trip through DOUBLE: this translator has
-// no fixed-precision DECIMAL modeling anywhere else, so DOUBLE is the right
-// level of fidelity for all three, matching how the rest of this file treats
-// "numeric" uniformly as DOUBLE.
+// xsd:double/float round-trip through DOUBLE (the correct IEEE
+// floating-point model for both); xsd:decimal gets its own fixed-point
+// DECIMAL(38,18) path via dialect.tryCastToDecimal() instead, since DOUBLE
+// silently loses precision on values like financial data that decimal is
+// meant to represent exactly (up to its fixed scale).
 std::string translateXsdCast(const std::string &iri, const FunctionCallExpr &fc, const TranslatedPattern &scope,
                              const std::string &alias, TranslationContext &ctx) {
 	if (fc.args.size() != 1) {
@@ -372,11 +382,36 @@ std::string translateXsdCast(const std::string &iri, const FunctionCallExpr &fc,
 	if (iri == kXsdString) {
 		return "(" + arg + ")";
 	}
-	if (iri == kXsdInteger) {
+	if (iri == kXsdInteger || iri == kXsdLong || iri == kXsdInt || iri == kXsdShort || iri == kXsdByte) {
 		// Truncates toward zero via DuckDB's own DOUBLE->BIGINT CAST
 		// semantics, not a hand-rolled XPath-conformant conversion - same
-		// stance as ROUND()/CEIL()/FLOOR() above.
+		// stance as ROUND()/CEIL()/FLOOR() above. The narrower integer
+		// subtypes (long/int/short/byte) are treated identically to
+		// xsd:integer - no range clamping to their narrower XSD bounds.
 		return "CAST(CAST(" + dialect.tryCastToDouble(arg) + " AS BIGINT) AS VARCHAR)";
+	}
+	if (iri == kXsdDecimal) {
+		return "CAST(" + dialect.tryCastToDecimal(arg) + " AS VARCHAR)";
+	}
+	if (iri == kXsdBoolean) {
+		// DuckDB's VARCHAR->BOOLEAN cast already accepts XSD boolean's
+		// lexical space (true/false/1/0), and BOOLEAN->VARCHAR renders
+		// lowercase true/false, matching XSD's canonical lexical form.
+		return "CAST(" + dialect.tryCastToBoolean(arg) + " AS VARCHAR)";
+	}
+	if (iri == kXsdDate) {
+		// DuckDB's DATE->VARCHAR cast already renders YYYY-MM-DD, matching
+		// XSD date's canonical form directly.
+		return "CAST(" + dialect.tryCastToDate(arg) + " AS VARCHAR)";
+	}
+	if (iri == kXsdDateTime) {
+		// DuckDB renders TIMESTAMP->VARCHAR as "YYYY-MM-DD HH:MM:SS[.ffffff]";
+		// swapping the separator space for 'T' reaches XSD dateTime's
+		// canonical "YYYY-MM-DDTHH:MM:SS" form. Not a hand-rolled
+		// XPath-conformant conversion (no explicit fractional-second/
+		// timezone-offset handling beyond what DuckDB's own TIMESTAMP
+		// rendering gives) - same fidelity stance as the integer cast above.
+		return "REPLACE(CAST(" + dialect.tryCastToTimestamp(arg) + " AS VARCHAR), ' ', 'T')";
 	}
 	return "CAST(" + dialect.tryCastToDouble(arg) + " AS VARCHAR)";
 }

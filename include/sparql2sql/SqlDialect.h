@@ -56,6 +56,18 @@ public:
 	/// an error) for non-timestamp-parseable input.
 	virtual std::string tryCastToTimestamp(const std::string &expr) const = 0;
 
+	/// Attempt a cast to a boolean type that yields SQL NULL (rather than an
+	/// error) for non-boolean-parseable input.
+	virtual std::string tryCastToBoolean(const std::string &expr) const = 0;
+
+	/// Attempt a cast to a date type that yields SQL NULL (rather than an
+	/// error) for non-date-parseable input.
+	virtual std::string tryCastToDate(const std::string &expr) const = 0;
+
+	/// Attempt a cast to a fixed-point decimal type that yields SQL NULL
+	/// (rather than an error) for non-numeric input.
+	virtual std::string tryCastToDecimal(const std::string &expr) const = 0;
+
 	/// Render a (possibly negated) regular-expression match test.
 	virtual std::string regexMatch(const std::string &text, const std::string &pattern, const std::string &flags,
 	                               bool negated) const = 0;

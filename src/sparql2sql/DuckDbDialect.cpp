@@ -85,6 +85,23 @@ std::string DuckDbDialect::tryCastToTimestamp(const std::string &expr) const {
 	return "TRY_CAST(" + expr + " AS TIMESTAMP)";
 }
 
+std::string DuckDbDialect::tryCastToBoolean(const std::string &expr) const {
+	return "TRY_CAST(" + expr + " AS BOOLEAN)";
+}
+
+std::string DuckDbDialect::tryCastToDate(const std::string &expr) const {
+	return "TRY_CAST(" + expr + " AS DATE)";
+}
+
+std::string DuckDbDialect::tryCastToDecimal(const std::string &expr) const {
+	// DECIMAL(38,18): DuckDB's maximum total precision, with 18 fractional
+	// digits - a fixed-point round trip for xsd:decimal instead of the
+	// lossy DOUBLE one used for xsd:double/xsd:float. XSD decimal is
+	// technically arbitrary-precision; this is a documented fidelity limit
+	// (see doc/api.md), not a full XPath-conformant decimal implementation.
+	return "TRY_CAST(" + expr + " AS DECIMAL(38,18))";
+}
+
 std::string DuckDbDialect::regexMatch(const std::string &text, const std::string &pattern, const std::string &flags,
                                       bool negated) const {
 	std::string call = "regexp_matches(" + text + ", " + pattern;

@@ -1,0 +1,11 @@
+PREFIX ex: <http://example.com/ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?e ?b ?dt ?d ?dec ?i
+WHERE {
+  ?e ex:name "SMITH" .
+  BIND(xsd:boolean("1") AS ?b)
+  BIND(xsd:dateTime("2020-05-15T10:30:45") AS ?dt)
+  BIND(xsd:date("2020-05-15T10:30:45") AS ?d)
+  BIND(xsd:decimal("123456789012345678.123456789012345678") AS ?dec)
+  BIND(xsd:long("42") AS ?i)
+}

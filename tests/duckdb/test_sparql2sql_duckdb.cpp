@@ -213,6 +213,18 @@ TEST_CASE("emp_dept_xsd_cast.rq: xsd:integer() cast filters on the numeric STAFF
 	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_STAFF", "1"}}));
 }
 
+TEST_CASE("emp_dept_xsd_cast_extra.rq: xsd:boolean/dateTime/date/decimal/long casts on literals") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_xsd_cast_extra.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"},
+	                         {"V_B", "true"},
+	                         {"V_DT", "2020-05-15T10:30:45"},
+	                         {"V_D", "2020-05-15"},
+	                         {"V_DEC", "123456789012345678.123456789012345678"},
+	                         {"V_I", "42"}}));
+}
+
 TEST_CASE("emp_dept_datetime_accessors.rq: YEAR/MONTH/DAY/HOURS/MINUTES/SECONDS extract from a literal timestamp") {
 	auto conn = makeSeededDatabase();
 	auto rows = translateAndRun(*conn, "emp_dept_datetime_accessors.rq", "example_emp_dept.ttl");
