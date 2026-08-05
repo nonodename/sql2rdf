@@ -321,14 +321,21 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 	case BuiltinFunction::EncodeForUri:
 		throw TranslationError("unsupported: ENCODE_FOR_URI() is not supported");
 	case BuiltinFunction::Year:
+		return "CAST(EXTRACT(YEAR FROM " + dialect.tryCastToTimestamp(argSql(0)) + ") AS VARCHAR)";
 	case BuiltinFunction::Month:
+		return "CAST(EXTRACT(MONTH FROM " + dialect.tryCastToTimestamp(argSql(0)) + ") AS VARCHAR)";
 	case BuiltinFunction::Day:
+		return "CAST(EXTRACT(DAY FROM " + dialect.tryCastToTimestamp(argSql(0)) + ") AS VARCHAR)";
 	case BuiltinFunction::Hours:
+		return "CAST(EXTRACT(HOUR FROM " + dialect.tryCastToTimestamp(argSql(0)) + ") AS VARCHAR)";
 	case BuiltinFunction::Minutes:
+		return "CAST(EXTRACT(MINUTE FROM " + dialect.tryCastToTimestamp(argSql(0)) + ") AS VARCHAR)";
 	case BuiltinFunction::Seconds:
+		return "CAST(EXTRACT(SECOND FROM " + dialect.tryCastToTimestamp(argSql(0)) + ") AS VARCHAR)";
 	case BuiltinFunction::Timezone:
 	case BuiltinFunction::Tz:
-		throw TranslationError("unsupported: date/time accessor functions are not supported in this phase");
+		throw TranslationError("unsupported: TIMEZONE()/TZ() require preserving a UTC offset, which this translator's "
+		                       "plain-VARCHAR lexical-form term representation cannot carry");
 	case BuiltinFunction::Now:
 	case BuiltinFunction::Rand:
 	case BuiltinFunction::Uuid:

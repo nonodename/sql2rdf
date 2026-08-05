@@ -52,6 +52,10 @@ public:
 	/// non-numeric input.
 	virtual std::string tryCastToDouble(const std::string &expr) const = 0;
 
+	/// Attempt a cast to a timestamp type that yields SQL NULL (rather than
+	/// an error) for non-timestamp-parseable input.
+	virtual std::string tryCastToTimestamp(const std::string &expr) const = 0;
+
 	/// Render a (possibly negated) regular-expression match test.
 	virtual std::string regexMatch(const std::string &text, const std::string &pattern, const std::string &flags,
 	                               bool negated) const = 0;

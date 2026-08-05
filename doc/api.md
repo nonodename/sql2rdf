@@ -571,14 +571,18 @@ and joins use the VARCHAR-cast fallback.
     compared on the native (uncast) columns (see the `translateQuery` `catalog` parameter above).
     This changes only the join condition, not the VARCHAR representation of any projected
     variable.
-- **Deferred builtin functions** (throw `TranslationError`): `ENCODE_FOR_URI()`; date/time
-  accessors (`YEAR()`/`MONTH()`/`DAY()`/`HOURS()`/`MINUTES()`/`SECONDS()`/`TIMEZONE()`/`TZ()`);
-  non-deterministic/context functions (`NOW()`/`RAND()`/`UUID()`/`STRUUID()`); `SHA384()`/`SHA512()`
-  (DuckDB has no built-in scalar function for either); any non-builtin (IRI-named) function call
-  except the five XSD constructor casts described below. `MD5()`/`SHA1()`/`SHA256()`/`ABS()`/
-  `CEIL()`/`FLOOR()`/`ROUND()`/`CONCAT()`/`STRLEN()`/`SUBSTR()`/`UCASE()`/`LCASE()`/`CONTAINS()`/
-  `STRSTARTS()`/`STRENDS()`/`STRBEFORE()`/`STRAFTER()`/`REPLACE()`/`REGEX()`/`COALESCE()`/`IF()`/
-  `isNUMERIC()`/`bound()` are all implemented.
+- **Deferred builtin functions** (throw `TranslationError`): `ENCODE_FOR_URI()`; the timezone
+  accessors `TIMEZONE()`/`TZ()` (they'd need to preserve a UTC offset, which this translator's
+  plain-VARCHAR lexical-form term representation can't carry); non-deterministic/context functions
+  (`NOW()`/`RAND()`/`UUID()`/`STRUUID()`); `SHA384()`/`SHA512()` (DuckDB has no built-in scalar
+  function for either); any non-builtin (IRI-named) function call except the five XSD constructor
+  casts described below. `MD5()`/`SHA1()`/`SHA256()`/`ABS()`/`CEIL()`/`FLOOR()`/`ROUND()`/
+  `CONCAT()`/`STRLEN()`/`SUBSTR()`/`UCASE()`/`LCASE()`/`CONTAINS()`/`STRSTARTS()`/`STRENDS()`/
+  `STRBEFORE()`/`STRAFTER()`/`REPLACE()`/`REGEX()`/`COALESCE()`/`IF()`/`isNUMERIC()`/`bound()`/
+  the date/time accessors `YEAR()`/`MONTH()`/`DAY()`/`HOURS()`/`MINUTES()`/`SECONDS()` are all
+  implemented. The date/time accessors go through `TRY_CAST(... AS TIMESTAMP)` then
+  `EXTRACT(field FROM ...)`, null-tolerantly like the numeric idiom below; `SECONDS()` truncates to
+  whole seconds (DuckDB's `EXTRACT(SECOND FROM ...)` semantics), not fractional.
 - **XSD constructor-function casts** — `xsd:integer()`, `xsd:decimal()`, `xsd:double()`,
   `xsd:float()`, `xsd:string()` are the sole supported non-builtin (IRI-named) function calls;
   every other IRI-named call (including `xsd:boolean()` and the rest of the XSD constructor

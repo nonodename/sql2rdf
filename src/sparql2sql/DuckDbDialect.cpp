@@ -81,6 +81,10 @@ std::string DuckDbDialect::tryCastToDouble(const std::string &expr) const {
 	return "TRY_CAST(" + expr + " AS DOUBLE)";
 }
 
+std::string DuckDbDialect::tryCastToTimestamp(const std::string &expr) const {
+	return "TRY_CAST(" + expr + " AS TIMESTAMP)";
+}
+
 std::string DuckDbDialect::regexMatch(const std::string &text, const std::string &pattern, const std::string &flags,
                                       bool negated) const {
 	std::string call = "regexp_matches(" + text + ", " + pattern;

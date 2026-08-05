@@ -129,8 +129,9 @@ TEST_CASE("FILTER: deferred builtins throw a named TranslationError") {
 	                TranslationError);
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(SHA512(?n) = \"x\") }", mapping),
 	                TranslationError);
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(YEAR(?n) = 2020) }", mapping),
+	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(TIMEZONE(?n) = \"\") }", mapping),
 	                TranslationError);
+	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(TZ(?n) = \"\") }", mapping), TranslationError);
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(ENCODE_FOR_URI(?n) = \"\") }", mapping),
 	                TranslationError);
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(RAND() > 0.5) }", mapping), TranslationError);
@@ -333,6 +334,23 @@ TEST_CASE("FILTER: numeric builtins ABS/CEIL/FLOOR/ROUND") {
 	CHECK(sql.find("CEIL(") != std::string::npos);
 	CHECK(sql.find("FLOOR(") != std::string::npos);
 	CHECK(sql.find("ROUND(") != std::string::npos);
+}
+
+TEST_CASE("FILTER: date/time accessors YEAR/MONTH/DAY/HOURS/MINUTES/SECONDS translate via EXTRACT") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?e ?n WHERE { ?e ex:name ?n . "
+	                            "FILTER(YEAR(?n) != \"0\" || MONTH(?n) != \"0\" || DAY(?n) != \"0\" || "
+	                            "HOURS(?n) != \"0\" || MINUTES(?n) != \"0\" || SECONDS(?n) != \"0\") }",
+	                            mapping);
+	CHECK(sql.find("EXTRACT(YEAR") != std::string::npos);
+	CHECK(sql.find("EXTRACT(MONTH") != std::string::npos);
+	CHECK(sql.find("EXTRACT(DAY") != std::string::npos);
+	CHECK(sql.find("EXTRACT(HOUR") != std::string::npos);
+	CHECK(sql.find("EXTRACT(MINUTE") != std::string::npos);
+	CHECK(sql.find("EXTRACT(SECOND") != std::string::npos);
+	CHECK(sql.find("TRY_CAST") != std::string::npos);
+	CHECK(sql.find("AS TIMESTAMP)") != std::string::npos);
 }
 
 TEST_CASE("BIND: COALESCE, IF, SAMETERM, and ISNUMERIC") {
