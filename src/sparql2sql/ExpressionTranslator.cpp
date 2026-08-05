@@ -319,7 +319,7 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 	case BuiltinFunction::Bnode:
 		throw TranslationError("unsupported: RDF term-construction functions (IRI()/URI()/BNODE()) are not supported");
 	case BuiltinFunction::EncodeForUri:
-		throw TranslationError("unsupported: ENCODE_FOR_URI() is not supported");
+		return dialect.percentEncode(argSql(0));
 	case BuiltinFunction::Year:
 		return "CAST(EXTRACT(YEAR FROM " + dialect.tryCastToTimestamp(argSql(0)) + ") AS VARCHAR)";
 	case BuiltinFunction::Month:

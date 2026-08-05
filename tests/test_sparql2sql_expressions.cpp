@@ -132,9 +132,18 @@ TEST_CASE("FILTER: deferred builtins throw a named TranslationError") {
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(TIMEZONE(?n) = \"\") }", mapping),
 	                TranslationError);
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(TZ(?n) = \"\") }", mapping), TranslationError);
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(ENCODE_FOR_URI(?n) = \"\") }", mapping),
-	                TranslationError);
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(RAND() > 0.5) }", mapping), TranslationError);
+}
+
+TEST_CASE("FILTER/BIND: ENCODE_FOR_URI() percent-encodes via the dialect, matching forward R2RML generation") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql =
+	    translate("SELECT ?e ?enc WHERE { ?e ex:name ?n . BIND(ENCODE_FOR_URI(?n) AS ?enc) }", mapping);
+	CHECK(sql.find("url_encode(") != std::string::npos);
+	CHECK(sql.find("\"v_enc\"") != std::string::npos);
+
+	CHECK_NOTHROW(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(ENCODE_FOR_URI(?n) = \"x\") }", mapping));
 }
 
 TEST_CASE("FILTER: a non-builtin function call throws a named TranslationError") {
