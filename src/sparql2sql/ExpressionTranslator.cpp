@@ -337,11 +337,13 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 		throw TranslationError("unsupported: TIMEZONE()/TZ() require preserving a UTC offset, which this translator's "
 		                       "plain-VARCHAR lexical-form term representation cannot carry");
 	case BuiltinFunction::Now:
+		return dialect.stringLiteral(ctx.nowLiteral());
 	case BuiltinFunction::Rand:
+		return "CAST(random() AS VARCHAR)";
 	case BuiltinFunction::Uuid:
+		return dialect.concat({dialect.stringLiteral("urn:uuid:"), "CAST(uuid() AS VARCHAR)"});
 	case BuiltinFunction::Struuid:
-		throw TranslationError("unsupported: non-deterministic/context functions (NOW/RAND/UUID/STRUUID) are not "
-		                       "supported in this phase");
+		return "CAST(uuid() AS VARCHAR)";
 	}
 	throw std::logic_error("translateBuiltIn: unhandled BuiltinFunction");
 }

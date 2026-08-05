@@ -226,6 +226,32 @@ TEST_CASE("emp_dept_datetime_accessors.rq: YEAR/MONTH/DAY/HOURS/MINUTES/SECONDS 
 	                         {"V_S", "45"}}));
 }
 
+TEST_CASE("emp_dept_nondeterministic_functions.rq: NOW() is stable while RAND()/UUID()/STRUUID() vary per row") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_nondeterministic_functions.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	const Row &row = rows.front();
+
+	// NOW() must be the exact same value for both calls within this query.
+	REQUIRE(row.count("V_N1") == 1);
+	REQUIRE(row.count("V_N2") == 1);
+	CHECK(row.at("V_N1") == row.at("V_N2"));
+	CHECK(row.at("V_N1") != kNull);
+
+	// RAND() must produce a value parseable as a double in [0, 1).
+	REQUIRE(row.count("V_R") == 1);
+	double r = std::stod(row.at("V_R"));
+	CHECK(r >= 0.0);
+	CHECK(r < 1.0);
+
+	// UUID() must produce a fresh urn:uuid: IRI; STRUUID() the bare UUID string.
+	REQUIRE(row.count("V_U") == 1);
+	REQUIRE(row.count("V_SU") == 1);
+	CHECK(row.at("V_U").substr(0, 9) == "urn:uuid:");
+	CHECK(row.at("V_SU").substr(0, 9) != "urn:uuid:");
+	CHECK(row.at("V_U") != "urn:uuid:" + row.at("V_SU"));
+}
+
 TEST_CASE("emp_dept_union.rq: bag union of ex:name and ex:location results") {
 	auto conn = makeSeededDatabase();
 	auto rows = translateAndRun(*conn, "emp_dept_union.rq", "example_emp_dept.ttl");

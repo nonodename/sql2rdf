@@ -132,14 +132,51 @@ TEST_CASE("FILTER: deferred builtins throw a named TranslationError") {
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(TIMEZONE(?n) = \"\") }", mapping),
 	                TranslationError);
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(TZ(?n) = \"\") }", mapping), TranslationError);
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(RAND() > 0.5) }", mapping), TranslationError);
+}
+
+TEST_CASE("BIND: NOW() stamps a single literal, reused for every call in the query") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql =
+	    translate("SELECT ?e ?n1 ?n2 WHERE { ?e ex:name ?x . BIND(NOW() AS ?n1) BIND(NOW() AS ?n2) }", mapping);
+	// NOW() must not be rendered as a per-row SQL function - only a fixed
+	// string literal, stamped once and reused for every call.
+	CHECK(sql.find("current_timestamp") == std::string::npos);
+	CHECK(sql.find("CURRENT_TIMESTAMP") == std::string::npos);
+	CHECK(sql.find("now(") == std::string::npos);
+
+	std::size_t firstQuote = sql.find('\'');
+	REQUIRE(firstQuote != std::string::npos);
+	std::size_t closeQuote = sql.find('\'', firstQuote + 1);
+	REQUIRE(closeQuote != std::string::npos);
+	std::string literal = sql.substr(firstQuote, closeQuote - firstQuote + 1);
+	CHECK(literal.size() == 21); // 'YYYY-MM-DDTHH:MM:SS'
+
+	// The exact same literal must appear a second time, for the second BIND.
+	std::size_t secondOccurrence = sql.find(literal, closeQuote + 1);
+	CHECK(secondOccurrence != std::string::npos);
+}
+
+TEST_CASE("FILTER/BIND: RAND()/UUID()/STRUUID() map to per-row DuckDB scalar functions") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+
+	std::string randSql = translate("SELECT ?e ?r WHERE { ?e ex:name ?n . BIND(RAND() AS ?r) }", mapping);
+	CHECK(randSql.find("random()") != std::string::npos);
+
+	std::string uuidSql = translate("SELECT ?e ?u WHERE { ?e ex:name ?n . BIND(UUID() AS ?u) }", mapping);
+	CHECK(uuidSql.find("uuid()") != std::string::npos);
+	CHECK(uuidSql.find("urn:uuid:") != std::string::npos);
+
+	std::string struuidSql = translate("SELECT ?e ?u WHERE { ?e ex:name ?n . BIND(STRUUID() AS ?u) }", mapping);
+	CHECK(struuidSql.find("uuid()") != std::string::npos);
+	CHECK(struuidSql.find("urn:uuid:") == std::string::npos);
 }
 
 TEST_CASE("FILTER/BIND: ENCODE_FOR_URI() percent-encodes via the dialect, matching forward R2RML generation") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
-	std::string sql =
-	    translate("SELECT ?e ?enc WHERE { ?e ex:name ?n . BIND(ENCODE_FOR_URI(?n) AS ?enc) }", mapping);
+	std::string sql = translate("SELECT ?e ?enc WHERE { ?e ex:name ?n . BIND(ENCODE_FOR_URI(?n) AS ?enc) }", mapping);
 	CHECK(sql.find("url_encode(") != std::string::npos);
 	CHECK(sql.find("\"v_enc\"") != std::string::npos);
 
