@@ -36,8 +36,16 @@ SerdNode TemplateTermMap::generateRDFTerm(const SQLRow &row, const SerdEnv & /*e
 		}
 	}
 
-	// Return a URI node whose buf points into expanded_ (no allocation).
-	return serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(expanded_.c_str()));
+	// Return a node whose buf points into expanded_ (no allocation). A template
+	// term map is an IRI unless rr:termType says otherwise (R2RML 7.4); the
+	// rr:BlankNode case takes the expanded string as the blank node identifier.
+	SerdType nodeType = SERD_URI;
+	if (termType == TermType::BlankNode) {
+		nodeType = SERD_BLANK;
+	} else if (termType == TermType::Literal) {
+		nodeType = SERD_LITERAL;
+	}
+	return serd_node_from_string(nodeType, reinterpret_cast<const uint8_t *>(expanded_.c_str()));
 }
 
 std::ostream &TemplateTermMap::print(std::ostream &os) const {

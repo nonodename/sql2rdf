@@ -52,6 +52,12 @@ public:
 	/// non-numeric input.
 	virtual std::string tryCastToDouble(const std::string &expr) const = 0;
 
+	/// Attempt a cast to a 64-bit integer type that yields SQL NULL (rather
+	/// than an error) for non-integral input. Used to keep arithmetic over
+	/// statically integral operands integral, so `?a + 1` renders "10" rather
+	/// than the "10.0" a DOUBLE round-trip would give.
+	virtual std::string tryCastToBigInt(const std::string &expr) const = 0;
+
 	/// Attempt a cast to a timestamp type that yields SQL NULL (rather than
 	/// an error) for non-timestamp-parseable input.
 	virtual std::string tryCastToTimestamp(const std::string &expr) const = 0;

@@ -9,6 +9,7 @@
 #include "sparql-parser/ast/Term.h"
 #include "sparql2sql/SqlDialect.h"
 #include "sparql2sql/TemplateUtil.h"
+#include "sparql2sql/TypeCatalog.h"
 
 namespace sparql2sql {
 
@@ -46,7 +47,94 @@ std::vector<std::string> qualifiedColumnRefs(const std::vector<std::string> &col
 	return out;
 }
 
+// Derive a term map's static term annotation. `columnName` is the term map's
+// single source column, or empty for a template/constant map.
+//
+// Applies the *position-independent* half of R2RML 7.4 only. It must not
+// re-apply the positional default ("an object map defaults to rr:Literal"):
+// the parser already does that where it applies, and re-applying it here -
+// where there is no notion of position - would wrongly demote a templated-IRI
+// object map to a literal.
+TermInfo annotate(const r2rml::TermMap &termMap, const std::string &columnName, const TypeCatalog *catalog,
+                  const std::string &tableIdentity) {
+	TermInfo out;
+	switch (termMap.termType) {
+	case r2rml::TermType::IRI:
+		out.kind = RdfTermKind::Iri;
+		break;
+	case r2rml::TermType::BlankNode:
+		out.kind = RdfTermKind::BlankNode;
+		break;
+	case r2rml::TermType::Literal:
+		out.kind = RdfTermKind::Literal;
+		break;
+	}
+	// R2RML 7.4: a term map with rr:language or rr:datatype is a literal,
+	// whatever else was inferred. This closes a real parser gap - an object map
+	// written `rr:template "..."; rr:datatype xsd:integer` keeps termType IRI,
+	// because the parser only applies the Literal default to rr:column maps.
+	if (termMap.languageTag || termMap.datatypeIRI) {
+		out.kind = RdfTermKind::Literal;
+	}
+	if (out.kind != RdfTermKind::Literal) {
+		return out; // An IRI or blank node carries no datatype or language.
+	}
+	if (termMap.languageTag && !termMap.languageTag->empty()) {
+		out.lang = *termMap.languageTag;
+		out.datatypeIri = kRdfLangString;
+		return out;
+	}
+	if (termMap.datatypeIRI && !termMap.datatypeIRI->empty()) {
+		out.datatypeIri = *termMap.datatypeIRI;
+		return out;
+	}
+	if (columnName.empty()) {
+		// A templated literal has no single source column to type. A constant
+		// literal has already lost its datatype: the parser builds it from the
+		// Turtle object's bare lexical value, discarding any ^^xsd:foo. Leaving
+		// the datatype unknown is the honest answer in both cases - defaulting
+		// to xsd:string would be a guess DATATYPE() would then report as fact.
+		return out;
+	}
+	if (catalog == nullptr || tableIdentity.empty()) {
+		return out;
+	}
+	// R2RML 10.2's natural mapping. Misses for an rr:sqlQuery view, whose
+	// tableIdentity is a "view:<sql>" key, which is correct: a view's columns
+	// have no declared type to consult.
+	out.datatypeIri = naturalXsdDatatype(catalog->typeOf(tableIdentity, columnName));
+	return out;
+}
+
 } // namespace
+
+TermInfo termInfoOfTerm(const sparql::ast::Term &term) {
+	TermInfo out;
+	switch (term.kind()) {
+	case sparql::ast::TermKind::Iri:
+		out.kind = RdfTermKind::Iri;
+		break;
+	case sparql::ast::TermKind::BlankNode:
+		out.kind = RdfTermKind::BlankNode;
+		break;
+	case sparql::ast::TermKind::Literal: {
+		const auto &literal = static_cast<const sparql::ast::RdfLiteral &>(term);
+		out.kind = RdfTermKind::Literal;
+		if (!literal.languageTag.empty()) {
+			out.lang = literal.languageTag;
+			out.datatypeIri = kRdfLangString;
+		} else if (literal.datatype) {
+			out.datatypeIri = literal.datatype->value;
+		} else {
+			out.datatypeIri = xsd::kString;
+		}
+		break;
+	}
+	case sparql::ast::TermKind::Var:
+		break; // Unknown: a variable's term depends on what binds it.
+	}
+	return out;
+}
 
 std::string termLexicalForm(const sparql::ast::Term &term) {
 	using sparql::ast::BlankNode;
@@ -67,11 +155,13 @@ std::string termLexicalForm(const sparql::ast::Term &term) {
 	return std::string();
 }
 
-SqlExpr termMapToSqlExpr(const r2rml::TermMap &termMap, const std::string &sourceAlias, const SqlDialect &dialect) {
+SqlExpr termMapToSqlExpr(const r2rml::TermMap &termMap, const std::string &sourceAlias, const SqlDialect &dialect,
+                         const TypeCatalog *catalog, const std::string &tableIdentity) {
 	if (const auto *col = dynamic_cast<const r2rml::ColumnTermMap *>(&termMap)) {
 		SqlExpr result;
 		result.expr = columnExpr(sourceAlias, col->columnName, dialect);
 		result.requiredNonNullColumns.push_back(qualifiedColumnRef(sourceAlias, col->columnName, dialect));
+		result.term = annotate(termMap, col->columnName, catalog, tableIdentity);
 		return result;
 	}
 	if (const auto *tmpl = dynamic_cast<const r2rml::TemplateTermMap *>(&termMap)) {
@@ -79,11 +169,13 @@ SqlExpr termMapToSqlExpr(const r2rml::TermMap &termMap, const std::string &sourc
 		SqlExpr result;
 		result.expr = buildProjectionSql(segments, sourceAlias, dialect);
 		result.requiredNonNullColumns = qualifiedColumnRefs(referencedColumns(segments), sourceAlias, dialect);
+		result.term = annotate(termMap, std::string(), catalog, tableIdentity);
 		return result;
 	}
 	if (const auto *constant = dynamic_cast<const r2rml::ConstantTermMap *>(&termMap)) {
 		SqlExpr result;
 		result.expr = dialect.stringLiteral(constantTermMapText(*constant));
+		result.term = annotate(termMap, std::string(), catalog, tableIdentity);
 		return result;
 	}
 	throw std::logic_error("termMapToSqlExpr: unrecognized TermMap subtype");

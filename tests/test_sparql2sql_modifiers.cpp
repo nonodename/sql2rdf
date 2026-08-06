@@ -87,7 +87,7 @@ TEST_CASE("HAVING filters on an aggregate condition") {
 	CHECK(sql.find("HAVING") != std::string::npos);
 }
 
-TEST_CASE("GROUP BY (expr AS ?var) is selectable and orderable via its alias") {
+TEST_CASE("GROUP BY (expr AS ?var) is selectable and orderable via its alias, and the count sorts numerically") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
 	std::string sql = translate("SELECT ?u (COUNT(?e) AS ?cnt) WHERE { ?e ex:name ?u . } "
@@ -95,7 +95,11 @@ TEST_CASE("GROUP BY (expr AS ?var) is selectable and orderable via its alias") {
 	                            mapping);
 	CHECK(sql.find("UPPER(") != std::string::npos);
 	CHECK(sql.find("GROUP BY \"v_u\"") != std::string::npos);
-	CHECK(sql.find("ORDER BY \"v_cnt\"") != std::string::npos);
+	// The ORDER BY key is still the bare SELECT-list alias, but now wrapped in a
+	// cast: ?cnt is only defined as an output alias, so it used to be emitted
+	// naked and sorted as text - which put a count of 11 before a count of 2.
+	// The type comes from resolving the alias back to its COUNT() definition.
+	CHECK(sql.find("ORDER BY TRY_CAST(\"v_cnt\" AS BIGINT)") != std::string::npos);
 }
 
 TEST_CASE("ORDER BY ASC/DESC") {

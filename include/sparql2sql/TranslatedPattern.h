@@ -4,8 +4,11 @@
 #include <cstddef>
 #include <cstdio>
 #include <ctime>
+#include <map>
 #include <set>
 #include <string>
+
+#include "sparql2sql/TermInfo.h"
 
 namespace r2rml {
 class R2RMLMapping;
@@ -26,6 +29,19 @@ struct TranslatedPattern {
 	std::set<std::string> optionalVars; // may be NULL in some rows
 	bool isIdentity = false;            // true only for the fold's starting relation
 
+	/// Per-variable static RDF term dimension, as far as the R2RML mapping
+	/// determines it. A variable ABSENT from this map is Unknown, so the map is
+	/// always safe to under-populate but never to over-populate: every consumer
+	/// falls back to the pre-term-tracking behaviour on Unknown. Always read it
+	/// through termInfoOf(), never with operator[] or a raw find().
+	///
+	/// Deliberately kept alongside boundVars/optionalVars rather than folded
+	/// into one map-of-everything: nullability already has two well-tested
+	/// homes across dozens of assertion sites, and a second copy of that fact
+	/// here would be a second source of truth. Both views are derived by the
+	/// same fillScopeFromSchema(), which is what keeps them in step.
+	std::map<std::string, TermInfo> termInfo;
+
 	std::set<std::string> allVars() const {
 		std::set<std::string> out = boundVars;
 		out.insert(optionalVars.begin(), optionalVars.end());
@@ -34,6 +50,13 @@ struct TranslatedPattern {
 
 	bool hasOuterJoinLineage() const {
 		return !optionalVars.empty();
+	}
+
+	/// The static term annotation of `var`, or a default (Unknown) one if the
+	/// variable is absent - which is always a safe answer.
+	TermInfo termInfoOf(const std::string &var) const {
+		std::map<std::string, TermInfo>::const_iterator it = termInfo.find(var);
+		return it == termInfo.end() ? TermInfo() : it->second;
 	}
 };
 

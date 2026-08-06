@@ -19,7 +19,15 @@ SerdNode ColumnTermMap::generateRDFTerm(const SQLRow &row, const SerdEnv & /*env
 
 	cachedValue_ = val->asString();
 
-	SerdType nodeType = (termType == TermType::IRI) ? SERD_URI : SERD_LITERAL;
+	// R2RML 7.4's three term types. rr:BlankNode takes the column's value as
+	// the blank node identifier; per the spec the mapping is responsible for
+	// that value being a valid one.
+	SerdType nodeType = SERD_LITERAL;
+	if (termType == TermType::IRI) {
+		nodeType = SERD_URI;
+	} else if (termType == TermType::BlankNode) {
+		nodeType = SERD_BLANK;
+	}
 	return serd_node_from_string(nodeType, reinterpret_cast<const uint8_t *>(cachedValue_.c_str()));
 }
 

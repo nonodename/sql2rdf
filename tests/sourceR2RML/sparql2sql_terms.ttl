@@ -1,0 +1,58 @@
+@prefix rr:  <http://www.w3.org/ns/r2rml#>.
+@prefix ex:  <http://example.com/ns#>.
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#>.
+
+# Toy mapping for the SPARQL-to-SQL translator's static RDF term dimension.
+# Every term map here pins one point of the TermInfo lattice, so a query that
+# binds a variable through one of these predicates has a known, *specific*
+# annotation to assert on:
+#
+#   subject      -> IRI, via rr:template
+#   ex:amount    -> Literal, xsd:integer  (declared rr:datatype)
+#   ex:price     -> Literal, xsd:decimal  (declared)
+#   ex:when      -> Literal, xsd:dateTime (declared)
+#   ex:title     -> Literal, rdf:langString @en  (declared rr:language)
+#   ex:plain     -> Literal, datatype NOT statically known (bare rr:column, and
+#                   no TypeCatalog is supplied by test_runner) - the case that
+#                   keeps a meaningful DATATYPE() negative alive
+#   ex:rawamount -> same, over a numeric column: the STRDT() re-tagging input
+#   ex:homepage  -> IRI, via rr:termType on an rr:column
+#   ex:badtyped  -> Literal, *mis-declared* xsd:integer over a VARCHAR column:
+#                   pins that a declared datatype that the data contradicts
+#                   yields NULL (row dropped) rather than a runtime error
+#
+# ex:mixed is produced by BOTH triples maps with DIFFERENT term kinds (an IRI
+# from <#Measure>, a literal from <#Note>), so its meet is Unknown - the case
+# where the term-kind builtins must still refuse to fold.
+
+<#Measure>
+    rr:logicalTable [ rr:tableName "MEASURES" ];
+    rr:subjectMap [ rr:template "http://ex.org/m/{ID}" ];
+    rr:predicateObjectMap [ rr:predicate ex:amount;
+        rr:objectMap [ rr:column "AMOUNT"; rr:datatype xsd:integer ] ];
+    rr:predicateObjectMap [ rr:predicate ex:rawamount;
+        rr:objectMap [ rr:column "AMOUNT" ] ];
+    rr:predicateObjectMap [ rr:predicate ex:price;
+        rr:objectMap [ rr:column "PRICE"; rr:datatype xsd:decimal ] ];
+    rr:predicateObjectMap [ rr:predicate ex:when;
+        rr:objectMap [ rr:column "WHEN_DT"; rr:datatype xsd:dateTime ] ];
+    rr:predicateObjectMap [ rr:predicate ex:title;
+        rr:objectMap [ rr:column "TITLE"; rr:language "en" ] ];
+    rr:predicateObjectMap [ rr:predicate ex:plain;
+        rr:objectMap [ rr:column "TITLE" ] ];
+    rr:predicateObjectMap [ rr:predicate ex:badtyped;
+        rr:objectMap [ rr:column "TITLE"; rr:datatype xsd:integer ] ];
+    rr:predicateObjectMap [ rr:predicate ex:homepage;
+        rr:objectMap [ rr:column "HOMEPAGE"; rr:termType rr:IRI ] ];
+    rr:predicateObjectMap [ rr:predicate ex:mixed;
+        rr:objectMap [ rr:template "http://ex.org/m/{REF}" ] ].
+
+# A blank-node subject map - only reachable since buildSubjectMap started
+# honouring rr:termType (see tests/sourceR2RML/subject_blanknode.ttl).
+<#Note>
+    rr:logicalTable [ rr:tableName "NOTES" ];
+    rr:subjectMap [ rr:template "note{NID}"; rr:termType rr:BlankNode ];
+    rr:predicateObjectMap [ rr:predicate ex:body;
+        rr:objectMap [ rr:column "BODY" ] ];
+    rr:predicateObjectMap [ rr:predicate ex:mixed;
+        rr:objectMap [ rr:column "BODY" ] ].

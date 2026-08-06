@@ -8,6 +8,8 @@
 #include "sparql2sql/ExpressionTranslator.h"
 #include "sparql2sql/PatternFolder.h"
 #include "sparql2sql/SqlDialect.h"
+#include "sparql2sql/TermInference.h"
+#include "sparql2sql/TermInfo.h"
 #include "sparql2sql/TranslationError.h"
 #include "sparql2sql/ir/Optimizer.h"
 #include "sparql2sql/ir/RelNode.h"
@@ -143,6 +145,52 @@ std::string translateHaving(const Query &query, const TranslatedPattern &source,
 	return havingSql;
 }
 
+// The expression that *defines* a SELECT-list-only output alias: a
+// `(expr AS ?var)` GROUP BY condition, or a computed SELECT item. Null when the
+// name is not defined by an expression.
+//
+// ORDER BY over such a name is emitted as a bare alias reference, which by
+// itself carries no type information - so without this lookup, `ORDER BY ?cnt`
+// over `(COUNT(?x) AS ?cnt)` would sort the stringified count lexicographically
+// and put "11" before "2". Resolving the alias back to its definition is what
+// lets the sort key be typed.
+const Expression *aliasDefinition(const Query &query, const std::string &name) {
+	for (const auto &gc : query.solutionModifier.groupBy) {
+		if (gc.asVar && gc.asVar->name == name) {
+			return gc.expr.get();
+		}
+	}
+	for (const auto &item : query.selectItems) {
+		if (item.expr && item.var->name == name) {
+			return item.expr.get();
+		}
+	}
+	return nullptr;
+}
+
+// Wrap a sort key in a cast to its statically known type, so ordering is
+// numeric or chronological rather than lexicographic. Only the *sort key* is
+// cast - never the projected value, which keeps its lexical form.
+//
+// A value that contradicts its declared datatype fails the TRY_CAST and sorts
+// as NULL (last, for ASC in DuckDB) rather than raising - consistent with the
+// null-tolerant idiom used everywhere else here.
+std::string typedSortKey(const std::string &exprSql, const TermInfo &info, const SqlDialect &dialect) {
+	if (info.isIntegral()) {
+		return dialect.tryCastToBigInt(exprSql);
+	}
+	if (info.isNumeric()) {
+		return dialect.tryCastToDouble(exprSql);
+	}
+	if (info.datatypeIri == xsd::kDate) {
+		return dialect.tryCastToDate(exprSql);
+	}
+	if (info.isTemporal()) {
+		return dialect.tryCastToTimestamp(exprSql);
+	}
+	return exprSql;
+}
+
 std::string translateOrderBy(const Query &query, const TranslatedPattern &source, const std::string &alias,
                              const std::set<std::string> &selectListAliasNames, TranslationContext &ctx) {
 	if (query.solutionModifier.orderBy.empty()) {
@@ -160,13 +208,20 @@ std::string translateOrderBy(const Query &query, const TranslatedPattern &source
 				// Only defined as a SELECT-list output alias (e.g. a GROUP
 				// BY (expr AS ?var) or an aggregate SELECT item) - reference
 				// it bare, relying on DuckDB's support for ORDER BY
-				// referencing SELECT-list aliases directly.
-				sql += mangleVar(name, ctx.dialect());
+				// referencing SELECT-list aliases directly. Its type comes from
+				// the expression that defines it, not from the bare reference.
+				const Expression *definition = aliasDefinition(query, name);
+				TermInfo info;
+				if (definition != nullptr) {
+					info = inferExprTermInfo(*definition, source);
+				}
+				sql += typedSortKey(mangleVar(name, ctx.dialect()), info, ctx.dialect());
 				sql += (oc.direction == OrderDirection::Desc) ? " DESC" : " ASC";
 				continue;
 			}
 		}
-		sql += translateExpression(*oc.expr, source, alias, ctx);
+		sql += typedSortKey(translateExpression(*oc.expr, source, alias, ctx), inferExprTermInfo(*oc.expr, source),
+		                    ctx.dialect());
 		sql += (oc.direction == OrderDirection::Desc) ? " DESC" : " ASC";
 	}
 	return sql;
@@ -284,9 +339,24 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 				result.optionalVars.insert(v);
 			}
 		}
+		// A projected variable carries its term annotation straight through:
+		// `SELECT *` renames nothing and computes nothing.
+		for (const auto &v : result.allVars()) {
+			TermInfo term = source.termInfoOf(v);
+			if (term.kindKnown()) {
+				result.termInfo[v] = term;
+			}
+		}
 	} else {
 		for (const auto &item : query.selectItems) {
 			result.boundVars.insert(item.var->name);
+			// A computed item's annotation comes from the expression; a bare one
+			// passes the source variable's through. Either may be Unknown, in
+			// which case it is simply left out of the map.
+			TermInfo term = item.expr ? inferExprTermInfo(*item.expr, source) : source.termInfoOf(item.var->name);
+			if (term.kindKnown()) {
+				result.termInfo[item.var->name] = term;
+			}
 		}
 	}
 	return result;

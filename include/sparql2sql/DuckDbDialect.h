@@ -17,6 +17,7 @@ public:
 	std::string booleanLiteral(bool value) const override;
 	std::string existsClause(bool negated, const std::string &subquerySql) const override;
 	std::string tryCastToDouble(const std::string &expr) const override;
+	std::string tryCastToBigInt(const std::string &expr) const override;
 	std::string tryCastToTimestamp(const std::string &expr) const override;
 	std::string tryCastToBoolean(const std::string &expr) const override;
 	std::string tryCastToDate(const std::string &expr) const override;

@@ -33,9 +33,11 @@
 #define SOURCE_R2RML_DIR ""
 #endif
 
+#include "r2rml/ColumnTermMap.h"
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/R2RMLParser.h"
 #include "r2rml/SQLConnection.h"
+#include "r2rml/SubjectMap.h"
 #include "r2rml/SQLResultSet.h"
 #include "r2rml/SQLRow.h"
 #include "r2rml/SQLValue.h"
@@ -426,4 +428,93 @@ TEST_CASE("processDatabase throws on the first row with an unresolvable IRI inst
 	// Rows 2 and 3 must never have been reached.
 	REQUIRE(out.find("\"y\"") == std::string::npos);
 	REQUIRE(out.find("\"z\"") == std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// Spec 7.4 - rr:termType on a *subject* map.
+//
+// Mapping: subject_blanknode.ttl
+//
+// Until this was fixed, buildSubjectMap never read rr:termType at all (unlike
+// buildTermMap, which does it for predicate/object maps), so a declared
+// rr:BlankNode subject was silently parsed - and emitted - as an IRI. That is
+// also what made a blank-node term kind unreachable for the SPARQL-to-SQL
+// translator, which reads TermMap::termType directly.
+// ---------------------------------------------------------------------------
+TEST_CASE("subject map: rr:termType rr:BlankNode is parsed rather than silently ignored") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "subject_blanknode.ttl");
+	REQUIRE(mapping.isValid());
+
+	int checked = 0;
+	for (const auto &tm : mapping.triplesMaps) {
+		REQUIRE(tm->subjectMap != nullptr);
+		const r2rml::TermMap *value = tm->subjectMap->valueTermMap();
+		REQUIRE(value != nullptr);
+		// Both blank-node maps (templated and column-valued) must have kept the
+		// declared term type; the rr:Literal one must have been coerced to IRI.
+		if (dynamic_cast<const r2rml::ColumnTermMap *>(value) != nullptr) {
+			CHECK(value->termType == r2rml::TermType::BlankNode);
+			++checked;
+		}
+	}
+	CHECK(checked == 1);
+
+	// Exactly one of the three subject maps declares a valid non-default term
+	// type per kind; count the BlankNodes across the whole mapping.
+	int blankNodes = 0;
+	int iris = 0;
+	for (const auto &tm : mapping.triplesMaps) {
+		switch (tm->subjectMap->valueTermMap()->termType) {
+		case r2rml::TermType::BlankNode:
+			++blankNodes;
+			break;
+		case r2rml::TermType::IRI:
+			++iris;
+			break;
+		case r2rml::TermType::Literal:
+			FAIL("a subject map must never be left as rr:Literal");
+			break;
+		}
+	}
+	CHECK(blankNodes == 2);
+	CHECK(iris == 1);
+}
+
+TEST_CASE("subject map: rr:termType rr:Literal is rejected as a parse error and falls back to rr:IRI") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "subject_blanknode.ttl");
+
+	bool reported = false;
+	for (const auto &err : mapping.parseErrors) {
+		if (err.find("rr:Literal is not allowed on a subject map") != std::string::npos) {
+			reported = true;
+		}
+	}
+	CHECK(reported);
+}
+
+TEST_CASE("processDatabase: a rr:BlankNode subject map emits a blank node, not an IRI") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "subject_blanknode.ttl");
+	REQUIRE(mapping.isValid());
+
+	MockSQLConnection conn;
+	conn.addResult("NOTES", {makeRow({{"NID", StringSQLValue(std::string("1"))},
+	                                  {"BODY", StringSQLValue(std::string("note one"))}})});
+	conn.addResult("LABELS", {makeRow({{"LABEL", StringSQLValue(std::string("lbl7"))},
+	                                   {"BODY", StringSQLValue(std::string("labelled"))}})});
+
+	std::string out = runProcessDatabase(mapping, conn);
+
+	// The templated blank-node subject map.
+	CHECK(out.find("_:note1") != std::string::npos);
+	// The column-valued one.
+	CHECK(out.find("_:lbl7") != std::string::npos);
+	// And they must not also have been emitted as IRIs - the pre-fix behaviour.
+	CHECK(out.find("<note1>") == std::string::npos);
+	CHECK(out.find("<lbl7>") == std::string::npos);
+	// The rr:Literal subject map, coerced to IRI, emits an IRI subject rather
+	// than a literal in the subject position (which is not even representable).
+	CHECK(out.find("<http://data.example.com/note/1>") != std::string::npos);
 }

@@ -513,6 +513,59 @@ public:
 // sparql::ParseError, so existing `catch (const std::exception&)` sites keep working.
 ```
 
+The static RDF term dimension the translator derives from the mapping (see "Known limitations"
+below for what it enables) is described by these two headers. Most consumers never touch them
+directly — they matter when adding a translator feature that needs to know what kind of term a
+column holds.
+
+```cpp
+#include "sparql2sql/TermInfo.h"
+
+enum class sparql2sql::RdfTermKind { Unknown, Iri, BlankNode, Literal };
+
+struct sparql2sql::TermInfo {
+    RdfTermKind kind = RdfTermKind::Unknown;
+    std::string datatypeIri;   // empty == NOT STATICALLY KNOWN, never "absent by default"
+    std::string lang;          // ditto; a language-tagged literal also sets datatypeIri to
+                               // rdf:langString
+    bool kindKnown() const;  bool isKnownLiteral() const;
+    bool isNumeric() const;  bool isIntegral() const;
+    bool isTemporal() const; bool isStringy() const;
+};
+
+// Greatest lower bound: identical infos meet to themselves, disagreement degrades field by field
+// and never guesses, and an Unknown kind clears the datatype and language too. Commutative,
+// associative, idempotent, with a default-constructed TermInfo as the absorbing element.
+sparql2sql::TermInfo sparql2sql::meet(const TermInfo& a, const TermInfo& b);
+
+// Canonical XSD/RDF datatype IRIs (sparql2sql::xsd::kInteger etc., sparql2sql::kRdfLangString)
+// plus isXsdNumericIri / isXsdIntegralIri / isXsdTemporalIri / isXsdCastIri.
+```
+
+`TermInfo` describes the term whose lexical form the generated SQL **actually produces**, not the
+term SPARQL's abstract semantics would produce; where the two differ, SQL truth wins. It appears as
+`ColumnInfo::term` on every IR column and as `TranslatedPattern::termInfo` (read it via
+`termInfoOf()`, which returns a default `Unknown` for an absent variable).
+
+```cpp
+#include "sparql2sql/TermInference.h"
+
+// The TermInfo of the value expr's translated SQL will produce. Pure, and NEVER throws: anything
+// it cannot analyse (including an out-of-scope variable) is Unknown. translateExpression remains
+// the sole place that rejects an expression.
+sparql2sql::TermInfo sparql2sql::inferExprTermInfo(const sparql::ast::Expression& expr,
+                                                   const TranslatedPattern& scope);
+```
+
+```cpp
+#include "sparql2sql/TypeCatalog.h"
+
+// R2RML Section 10.2's natural mapping from a SQL type name to an XSD datatype IRI. Case- and
+// precision-insensitive ("DECIMAL(18,2)" == "decimal"); returns "" for an unmapped or unrecognised
+// type, meaning "no datatype can be inferred" - never a guess.
+std::string sparql2sql::naturalXsdDatatype(const std::string& sqlTypeName);
+```
+
 The CLI exposes this via `-T <file.rq> [--dialect <name>]` (default dialect: `duckdb`), paired
 with the mapping-file positional argument. If the database-file positional is also given, the CLI
 reads that database's column types into a `TypeCatalog` (so native-typed join keys are enabled),
@@ -552,31 +605,86 @@ and joins use the VARCHAR-cast fallback.
 - **No `SERVICE`** (federated query): always throws, matching `sql2rdf_sparql`'s own "no
   federated-query execution semantics" stance.
 - **Every SPARQL variable is a plain SQL `VARCHAR`** holding the RDF term's lexical string form
-  (IRI string / literal lexical form / blank node label) — no term-kind, datatype, or language
-  dimension is tracked. This is the single biggest scope simplification and disables/approximates:
-  - `isIRI()`/`isBLANK()`/`isLITERAL()`/`datatype()`/`lang()`/`langMatches()`/`STRLANG()`/
-    `STRDT()`/`IRI()`/`URI()`/`BNODE()` — all throw `TranslationError` (would need the missing
-    term-kind dimension).
-  - `sameTerm()` is approximated as plain string equality (not full type/datatype/language
-    matching).
-  - `ORDER BY` and `MIN()`/`MAX()` sort/compare **lexicographically**, not numerically, for
-    variables that happen to hold numbers — there is no static per-variable type inference across
-    the UNION-ALL-combined candidate relations that make up a triple pattern's translation.
-  - Numeric comparisons/arithmetic (`<`, `>`, `+`, aggregates, etc.) go through
-    `TRY_CAST(... AS DOUBLE)` at point of use; `=`/`<>`/`<`/`>`/`<=`/`>=` fall back to a plain
-    VARCHAR comparison when either side isn't numeric-castable, so e.g. `FILTER(?name < "M")`
-    (string ordering) still works correctly.
-  - The one exception is an equi-**join** key: with a `TypeCatalog`, a join between two pure base
-    columns — or between two same-invertible-template terms — of comparable declared type is
+  (IRI string / literal lexical form / blank node label). The *value* representation is unchanged,
+  but the translator additionally tracks a **static term dimension** alongside it: for each column
+  it derives, from the R2RML mapping, whether the term is an IRI, a blank node or a literal, and
+  for a literal its datatype IRI and language tag. That comes from `rr:termType`, `rr:datatype` and
+  `rr:language` on the contributing term maps or — when no `rr:datatype` is declared and a
+  `TypeCatalog` is supplied — from R2RML §10.2's natural mapping of the underlying SQL column type.
+  It is combined across everything that can produce one variable (the several candidate term maps
+  of a single triple pattern, a `UNION`'s arms, an `OPTIONAL`'s `COALESCE`d column) by a **meet**:
+  any disagreement degrades to *unknown*, and unknown always means "behave exactly as this
+  translator did before term tracking existed". Nothing is ever guessed. Consequences:
+  - `isIRI()`/`isURI()`/`isBLANK()`/`isLITERAL()`/`lang()`/`datatype()`/`langMatches()` are resolved
+    **at translation time** from the mapping and fold to a SQL constant — NULL-guarded for a
+    variable that may be unbound, so an unbound term yields SQL `NULL`, which a `FILTER` drops and a
+    `BIND` leaves unbound (matching SPARQL's treat-an-error-as-unbound). When the mapping does not
+    determine the answer they still throw `TranslationError` naming the function and why.
+    `datatype()` in particular still throws for a bare `rr:column` literal with no `rr:datatype` and
+    no `TypeCatalog`: the datatype is genuinely not known, and defaulting to `xsd:string` would
+    contradict R2RML's own natural mapping. Note that whether a term-kind builtin throws is
+    **optimizer-dependent** in a useful direction: filter pushdown re-renders a predicate against
+    one union arm at a time, where the kind may be known even though the arms' meet is not — so
+    `FILTER(isIRI(?x))` over disagreeing arms folds per arm instead of failing.
+  - `STRDT()`/`STRLANG()` are supported **only with a constant datatype IRI / language tag**, and
+    are then a lexical pass-through that re-tags the expression's static term dimension. They emit
+    no SQL of their own; the value is that a downstream `FILTER`/`ORDER BY` becomes numeric or
+    temporal — the escape hatch for mappings that declare no `rr:datatype`. A per-row
+    datatype/language argument throws. `STRDT()` does not validate the lexical form against the
+    datatype (SPARQL permits an ill-formed literal), and a non-literal first argument is a type
+    error that is not detected.
+  - `IRI()`/`URI()`/`BNODE()` still throw: they mint *new* terms, which needs term construction, not
+    term tracking.
+  - `sameTerm()` is still string equality, but tightened: two terms of statically different kinds
+    (or statically different declared datatypes/languages) compare `FALSE` without touching data.
+  - Comparisons drop their string-fallback `CASE WHEN` when both operands' datatypes are statically
+    known and compatible: both numeric compare as `DOUBLE`, both `xsd:date`/`xsd:dateTime` as
+    `DATE`/`TIMESTAMP` (which also fixes lexicographic comparison of non-canonical or offset-bearing
+    dateTimes), both `xsd:string` as bare `VARCHAR`. Additionally, `=`/`<>` between two statically
+    *different term kinds* folds to a constant, since no IRI is ever equal to a literal; `<`/`>` are
+    deliberately not folded, because a cross-kind ordering comparison is a genuine type error rather
+    than a false one. Every typed branch keeps `TRY_CAST`, so a value contradicting its declared
+    datatype yields `NULL` (row dropped) rather than a runtime error. When either side is unknown,
+    the `TRY_CAST(... AS DOUBLE)` + `CASE WHEN` fallback below is used exactly as before, so
+    `FILTER(?name < "M")` still works.
+  - Arithmetic over two statically integral operands (`xsd:integer` and its narrower aliases) stays
+    integral via `TRY_CAST(... AS BIGINT)`, so `?a + 1` renders `"10"` rather than `"10.0"`. The same
+    applies to `SUM()`. Division, and any operand of unknown or non-integral type, still goes
+    through `DOUBLE`.
+  - `ORDER BY` and `MIN()`/`MAX()` sort and aggregate **in the key's static type** when it is known
+    numeric or temporal, and lexicographically otherwise (the previous behaviour). Three caveats: a
+    value failing the `TRY_CAST` sorts as `NULL` (last, for `ASC`) rather than raising; a typed
+    `MIN()`/`MAX()` returns the SQL engine's canonical rendering of the value, so `MIN()` over
+    `xsd:integer` values `"007"` and `"42"` returns `"7"`, not `"007"`; and an `ORDER BY` key that
+    exists only as a SELECT-list alias (e.g. `ORDER BY ?cnt` over `(COUNT(?x) AS ?cnt)`) is typed
+    from the expression that defines it — previously it was emitted bare and sorted as text.
+  - Where the SQL this translator emits is lossier than SPARQL's abstract semantics, the tracked
+    datatype follows the **SQL**, not the spec: `SECONDS()` is reported `xsd:integer` (not
+    `xsd:decimal`) because `EXTRACT(SECOND ...)` yields a whole number, and integer division is
+    reported `xsd:double` (not `xsd:decimal`). Otherwise `datatype()` would name a datatype whose
+    canonical lexical form is not the text actually in the column.
+  - Two gaps worth knowing. A `{ SELECT ... }` subquery's columns carry their annotations through,
+    but a variable bound only through a computed expression the inference cannot analyse is
+    unknown. And an unconstrained pattern like `?s ?p ?o` unions one arm per (triples map ×
+    predicate-object map), which genuinely disagree — so the annotation pays off where a bound
+    predicate prunes the union, not on wildcard patterns.
+  - The equi-**join** key optimization is unchanged: with a `TypeCatalog`, a join between two pure
+    base columns — or between two same-invertible-template terms — of comparable declared type is
     compared on the native (uncast) columns (see the `translateQuery` `catalog` parameter above).
     This changes only the join condition, not the VARCHAR representation of any projected
     variable.
 - **Deferred builtin functions** (throw `TranslationError`): the timezone accessors
-  `TIMEZONE()`/`TZ()` (they'd need to preserve a UTC offset, which this translator's plain-VARCHAR
-  lexical-form term representation can't carry); non-deterministic/context functions
-  (`NOW()`/`RAND()`/`UUID()`/`STRUUID()`); `SHA384()`/`SHA512()` (DuckDB has no built-in scalar
-  function for either); any non-builtin (IRI-named) function call except the twelve XSD
-  constructor casts described below. `MD5()`/`SHA1()`/`SHA256()`/`ABS()`/`CEIL()`/`FLOOR()`/`ROUND()`/
+  `TIMEZONE()`/`TZ()`; `SHA384()`/`SHA512()` (DuckDB has no built-in scalar function for either);
+  any non-builtin (IRI-named) function call except the twelve XSD constructor casts described
+  below. `TIMEZONE()`/`TZ()` are worth a word now that `xsd:dateTime` *is* statically recognised:
+  the UTC offset is present in the literal's lexical form and could in principle be recovered, but
+  only by lexically parsing the `Z`/`±hh:mm` suffix, since `TRY_CAST(... AS TIMESTAMP)` discards it.
+  That parse — plus `TIMEZONE()`'s `xsd:dayTimeDuration` return type, which has no place in the
+  current term model — is deliberately not implemented.
+  `NOW()`/`RAND()`/`UUID()`/`STRUUID()` **are** implemented: `NOW()` is stamped once per translation
+  into a fixed `xsd:dateTime` string literal (SPARQL 1.1 §17.4.1.7's same-value-per-query
+  requirement) rather than emitted as a per-row `current_timestamp`; `RAND()`/`UUID()`/`STRUUID()`
+  are per-row. `MD5()`/`SHA1()`/`SHA256()`/`ABS()`/`CEIL()`/`FLOOR()`/`ROUND()`/
   `CONCAT()`/`STRLEN()`/`SUBSTR()`/`UCASE()`/`LCASE()`/`CONTAINS()`/`STRSTARTS()`/`STRENDS()`/
   `STRBEFORE()`/`STRAFTER()`/`REPLACE()`/`REGEX()`/`COALESCE()`/`IF()`/`isNUMERIC()`/`bound()`/
   `ENCODE_FOR_URI()`/the date/time accessors `YEAR()`/`MONTH()`/`DAY()`/`HOURS()`/`MINUTES()`/
@@ -589,11 +697,13 @@ and joins use the VARCHAR-cast fallback.
 - **XSD constructor-function casts** — `xsd:integer()`, `xsd:long()`, `xsd:int()`, `xsd:short()`,
   `xsd:byte()`, `xsd:decimal()`, `xsd:double()`, `xsd:float()`, `xsd:string()`, `xsd:boolean()`,
   `xsd:date()`, `xsd:dateTime()` are the sole supported non-builtin (IRI-named) function calls;
-  every other IRI-named call still throws `TranslationError`. These are **value-level casts, not
-  XSD datatype tagging** — this translator has no term-kind/datatype dimension at all (see above),
-  so `xsd:integer(?x)` doesn't give `?x` a tracked datatype, it just reinterprets the underlying
-  VARCHAR's value, null-tolerantly (non-castable input yields SQL `NULL`, never a translation-time
-  or runtime error). Specifics:
+  every other IRI-named call still throws `TranslationError`. These remain **value-level casts**:
+  `xsd:integer(?x)` reinterprets the underlying VARCHAR's value null-tolerantly (non-castable input
+  yields SQL `NULL`, never a translation-time or runtime error), and it does **not** rewrite `?x`'s
+  own tracked datatype. What it does do is give the *result expression* a statically known datatype,
+  which feeds the typed comparison / arithmetic / `ORDER BY` / `MIN`/`MAX` paths above — so
+  `FILTER(xsd:integer(?x) > 5)` emits a direct numeric comparison rather than the string-fallback
+  form. Specifics:
   - `xsd:integer()`, and its narrower aliases `xsd:long()`/`xsd:int()`/`xsd:short()`/`xsd:byte()`,
     all go through the same `TRY_CAST(... AS DOUBLE)` → `CAST(... AS BIGINT)` idiom — truncating
     toward zero via DuckDB's own cast semantics, not a hand-rolled XPath-conformant conversion, and
@@ -631,8 +741,11 @@ and joins use the VARCHAR-cast fallback.
 
 `SqlDialect` (`include/sparql2sql/SqlDialect.h`) abstracts only the handful of SQL syntax points
 that actually vary across engines and are exercised by the translator (identifier/string quoting,
-`LIMIT`/`OFFSET` syntax, `EXISTS`, numeric try-cast, regex match, string/any-value aggregation,
-and DuckDB's `UNION [ALL] BY NAME` schema-extending union). Constructs close enough to universal
+`LIMIT`/`OFFSET` syntax, `EXISTS`, the null-tolerant try-casts to double/bigint/decimal/boolean/
+date/timestamp, regex match, string/any-value aggregation, and DuckDB's `UNION [ALL] BY NAME`
+schema-extending union). `tryCastToBigInt` is the seam that keeps statically integral arithmetic
+integral — without it `?a + 1` would round-trip through `DOUBLE` and render `"10.0"`. Constructs
+close enough to universal
 across engines are emitted directly rather than routed through the dialect. `DuckDbDialect` is
 currently the only implementation; add a new one by implementing `SqlDialect` and registering it
 in `createDialect()` (`src/sparql2sql/DialectFactory.cpp`).

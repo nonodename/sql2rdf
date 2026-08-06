@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "sparql2sql/TermInfo.h"
+
 namespace sparql {
 namespace ast {
 class Expression;
@@ -60,6 +62,17 @@ struct ColumnInfo {
 	bool templateInvertible = false;
 
 	bool nonNull = true; ///< guaranteed non-NULL in every row (bound) vs may be NULL (optional).
+
+	/// What the R2RML mapping statically says about the RDF term this column
+	/// produces. Purely descriptive - `renderedExpr` is unaffected by it - so a
+	/// default (Unknown) annotation reproduces the translator's behaviour from
+	/// before term tracking existed, byte for byte.
+	///
+	/// Written by termMapToSqlExpr at the producers, and combined by `meet` at
+	/// every node fed by more than one input. Never hand-assemble the three
+	/// fields elsewhere; go through meet/meetColumns so the lattice stays the
+	/// single definition of how disagreement degrades.
+	TermInfo term;
 };
 
 enum class RelKind {
@@ -107,6 +120,24 @@ protected:
 };
 
 using RelNodePtr = std::unique_ptr<RelNode>;
+
+/// Meet the term annotations of several inputs that feed one output column.
+///
+/// A **null** entry contributes nothing and is skipped rather than treated as
+/// Unknown: a variable that an arm (or one side of an outer join) does not bind
+/// is SQL NULL in those rows and denotes no RDF term at all, so it must not
+/// poison the arms that do bind it. Without that rule every schema-extending
+/// UNION would collapse to Unknown and the annotation would be worthless.
+///
+/// With no non-null contributions at all the result is Unknown.
+TermInfo meetColumns(const std::vector<const ColumnInfo *> &sources);
+
+/// meetColumns over one variable across a union node's arms - the common case,
+/// factored out so the gather loop isn't repeated at each union site.
+///
+/// Call this while the arms are still owned by the caller: after
+/// `node.arms = std::move(branches)` the moved-from pointers are null.
+TermInfo meetAcrossArms(const std::string &var, const std::vector<RelNodePtr> &arms);
 
 /// One FROM source of an SpjRelation: a table/view/inline-join SQL fragment
 /// already suffixed with its alias ("TABLE" AS t1 / (view) AS t1 / child JOIN

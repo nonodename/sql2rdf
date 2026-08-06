@@ -19,14 +19,18 @@ namespace {
 // anchored at a bound endpoint. Shaped like translateInlineData's single-row
 // case, and like it leaves renderedExpr empty: a Raw node's columns are only
 // ever referenced across a derived-table boundary, by mangled name.
-RelNodePtr singleTermRelation(const std::string &varName, const std::string &lexicalForm, TranslationContext &ctx) {
+//
+// Takes the bound Term rather than its lexical form so the column's term kind
+// comes from the term itself; it could not be recovered from the string.
+RelNodePtr singleTermRelation(const std::string &varName, const sparql::ast::Term &term, TranslationContext &ctx) {
 	const SqlDialect &dialect = ctx.dialect();
 	RelNodePtr node(new RawRelation());
 	RawRelation &raw = static_cast<RawRelation &>(*node);
-	raw.sql = "SELECT " + dialect.stringLiteral(lexicalForm) + " AS " + mangleVar(varName, dialect);
+	raw.sql = "SELECT " + dialect.stringLiteral(termLexicalForm(term)) + " AS " + mangleVar(varName, dialect);
 	ColumnInfo col;
 	col.var = varName;
 	col.nonNull = true;
+	col.term = termInfoOfTerm(term);
 	raw.schema().push_back(col);
 	return node;
 }
@@ -107,7 +111,7 @@ RelNodePtr zeroLengthPath(const TermSpec &subject, const TermSpec &object, Trans
 		// holds whether or not the term occurs in the graph.
 		const TermSpec &boundEnd = subject.isVar ? object : subject;
 		const TermSpec &varEnd = subject.isVar ? subject : object;
-		return singleTermRelation(varEnd.varName, termLexicalForm(*boundEnd.boundTerm), ctx);
+		return singleTermRelation(varEnd.varName, *boundEnd.boundTerm, ctx);
 	}
 
 	// Two variables, and so nothing to anchor to: range over every term the

@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+#include "sparql2sql/TermInfo.h"
+
 namespace r2rml {
 class TermMap;
 } // namespace r2rml
@@ -16,6 +18,7 @@ class Term;
 namespace sparql2sql {
 
 class SqlDialect;
+struct TypeCatalog;
 
 /// A SQL scalar expression together with the source columns that must be
 /// non-NULL for it to be well-defined (mirrors R2RML forward generation's
@@ -28,6 +31,13 @@ class SqlDialect;
 struct SqlExpr {
 	std::string expr;
 	std::vector<std::string> requiredNonNullColumns;
+
+	/// What the term map statically declares about the RDF term `expr` builds,
+	/// from its own rr:termType/rr:datatype/rr:language plus (for a plain
+	/// rr:column literal) the optional TypeCatalog. Copied onto the ColumnInfo
+	/// the caller projects. Unknown means "not inferable", which is what every
+	/// column carried before term tracking existed.
+	TermInfo term;
 };
 
 /// Extract a bound SPARQL term's lexical string form (IRI's absolute value,
@@ -42,7 +52,28 @@ std::string termLexicalForm(const sparql::ast::Term &term);
 /// Dispatches via dynamic_cast, matching the codebase's own established
 /// idiom (e.g. PredicateObjectMap::processRow's dynamic_cast dispatch
 /// against ReferencingObjectMap).
-SqlExpr termMapToSqlExpr(const r2rml::TermMap &termMap, const std::string &sourceAlias, const SqlDialect &dialect);
+///
+/// `catalog` and `tableIdentity` are optional and affect only the returned
+/// SqlExpr's `term` annotation, never its SQL: for an rr:column literal term
+/// map that declares neither rr:datatype nor rr:language, the column's SQL type
+/// is looked up in the catalog and run through R2RML Section 10.2's natural
+/// mapping. Both are inert for a template or constant term map (no single
+/// source column), and the lookup necessarily misses for an rr:sqlQuery view,
+/// whose tableIdentity is a "view:<sql>" key no catalog contains.
+SqlExpr termMapToSqlExpr(const r2rml::TermMap &termMap, const std::string &sourceAlias, const SqlDialect &dialect,
+                         const TypeCatalog *catalog = nullptr, const std::string &tableIdentity = std::string());
+
+/// The RDF term kind (plus a literal's datatype and language) of a bound SPARQL
+/// term - the AST counterpart of the TermMap-driven annotation above, used for
+/// inline VALUES cells and constant subject/predicate/object positions. A Var
+/// yields Unknown.
+///
+/// Per RDF 1.1 a plain literal with neither language tag nor datatype IS an
+/// xsd:string, and a language-tagged literal's datatype IS rdf:langString, so
+/// both are filled in here rather than left empty. That is sound because the
+/// term is written out in the query: unlike an rr:column literal, there is no
+/// hidden SQL type that could have implied something else.
+TermInfo termInfoOfTerm(const sparql::ast::Term &term);
 
 struct InversionResult {
 	bool possible = false;

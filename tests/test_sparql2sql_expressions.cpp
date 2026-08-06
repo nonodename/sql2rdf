@@ -118,11 +118,10 @@ TEST_CASE("FILTER: deferred builtins throw a named TranslationError") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
 
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(isIRI(?e)) }", mapping), TranslationError);
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(isBLANK(?e)) }", mapping), TranslationError);
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(isLITERAL(?n)) }", mapping), TranslationError);
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(lang(?n) = \"\") }", mapping),
-	                TranslationError);
+	// datatype(?n) is the term-kind builtin that still refuses under this
+	// mapping: ?n is a *known literal* (so isLITERAL() folds - see below), but
+	// its datatype is not declared and test_runner supplies no TypeCatalog, so
+	// there is genuinely nothing to report.
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(datatype(?n) = ex:foo) }", mapping),
 	                TranslationError);
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(SHA384(?n) = \"x\") }", mapping),
@@ -132,6 +131,34 @@ TEST_CASE("FILTER: deferred builtins throw a named TranslationError") {
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(TIMEZONE(?n) = \"\") }", mapping),
 	                TranslationError);
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(TZ(?n) = \"\") }", mapping), TranslationError);
+	// Term construction is still out of scope: these mint new terms, which
+	// needs more than term *tracking*.
+	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(IRI(?n) = ex:foo) }", mapping),
+	                TranslationError);
+	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(BNODE(?n) = ?e) }", mapping), TranslationError);
+}
+
+// Coverage transferred from the case above: isIRI/isBLANK/isLITERAL/lang used
+// to throw here, and now resolve, because example_emp_dept.ttl's subject maps
+// are rr:template IRIs and its ex:name object map is a bare rr:column literal.
+TEST_CASE("FILTER: term-kind builtins fold against a mapping that determines the kind") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+
+	// ?e is a template-generated IRI in every candidate arm.
+	CHECK(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(isIRI(?e)) }", mapping).find("TRUE") !=
+	      std::string::npos);
+	CHECK(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(isBLANK(?e)) }", mapping).find("FALSE") !=
+	      std::string::npos);
+	// ?n is a known literal even though its datatype is not known.
+	CHECK(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(isLITERAL(?n)) }", mapping).find("TRUE") !=
+	      std::string::npos);
+	// A literal with no rr:language has the empty tag - a known answer.
+	CHECK(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(lang(?n) = \"\") }", mapping).find("''") !=
+	      std::string::npos);
+	// lang() on a statically-IRI argument is a type error, not an unknown.
+	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(lang(?e) = \"\") }", mapping),
+	                TranslationError);
 }
 
 TEST_CASE("BIND: NOW() stamps a single literal, reused for every call in the query") {
@@ -257,12 +284,29 @@ TEST_CASE("FILTER: xsd:long/int/short/byte casts alias xsd:integer") {
 	}
 }
 
-TEST_CASE("FILTER: xsd:integer() comparison produces a numeric-aware comparison") {
+TEST_CASE("FILTER: xsd:integer() comparison produces a direct numeric comparison") {
+	// Both operands are statically typed here - the cast types its result, and
+	// the integer literal carries xsd:integer - so the string-fallback wrapper
+	// is dropped. (It used to be emitted unconditionally; see the sibling case
+	// below for the untyped shape that still needs it.)
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
 	std::string sql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
 	                            "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(xsd:integer(?n) > 5) }",
 	                            mapping);
+	CHECK(sql.find("CASE WHEN") == std::string::npos);
+	CHECK(sql.find("IS NOT NULL AND") == std::string::npos);
+	CHECK(sql.find("TRY_CAST") != std::string::npos);
+	CHECK(sql.find("AS DOUBLE") != std::string::npos);
+}
+
+TEST_CASE("FILTER: an untyped variable comparison keeps the numeric-aware fallback") {
+	// ?n is a bare rr:column with no rr:datatype and no TypeCatalog is supplied,
+	// so nothing is statically known and the pre-existing form must survive
+	// verbatim. This is the no-regression anchor for the typed-comparison work.
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(?n > 5) }", mapping);
 	CHECK(sql.find("CASE WHEN") != std::string::npos);
 	CHECK(sql.find("IS NOT NULL AND") != std::string::npos);
 }
@@ -368,10 +412,28 @@ TEST_CASE("FILTER: IN and NOT IN translate to SQL IN/NOT IN lists") {
 }
 
 TEST_CASE("FILTER: a bare IriRef operand translates to its lexical IRI value") {
+	// Compared against ?e, which is itself a template-generated IRI: same term
+	// kind, so the comparison survives as a real string comparison and the IRI's
+	// text has to appear in it.
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
-	std::string sql = translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(?n != ex:foo) }", mapping);
+	std::string sql = translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(?e != ex:foo) }", mapping);
 	CHECK(sql.find("example.com/ns#foo") != std::string::npos);
+}
+
+TEST_CASE("FILTER: comparing a known literal with an IRI folds, since no literal is ever an IRI") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	// ?n is a known literal and ex:foo an IRI, so RDF term equality settles this
+	// without looking at any data: != is TRUE, = is FALSE.
+	CHECK(translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(?n != ex:foo) }", mapping).find("TRUE") !=
+	      std::string::npos);
+	CHECK(translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(?n = ex:foo) }", mapping).find("FALSE") !=
+	      std::string::npos);
+	// Ordering comparisons are NOT folded: a literal-vs-IRI `<` is a genuine
+	// type error, and answering FALSE would be wrong rather than imprecise.
+	CHECK(translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(?n < ex:foo) }", mapping).find("example.com/ns#foo") !=
+	      std::string::npos);
 }
 
 TEST_CASE("FILTER EXISTS: correlates on multiple shared variables joined with AND") {

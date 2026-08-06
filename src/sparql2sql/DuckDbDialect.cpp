@@ -81,6 +81,10 @@ std::string DuckDbDialect::tryCastToDouble(const std::string &expr) const {
 	return "TRY_CAST(" + expr + " AS DOUBLE)";
 }
 
+std::string DuckDbDialect::tryCastToBigInt(const std::string &expr) const {
+	return "TRY_CAST(" + expr + " AS BIGINT)";
+}
+
 std::string DuckDbDialect::tryCastToTimestamp(const std::string &expr) const {
 	return "TRY_CAST(" + expr + " AS TIMESTAMP)";
 }
