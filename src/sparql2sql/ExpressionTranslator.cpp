@@ -40,6 +40,37 @@ std::string tr(const Expression &e, const TranslatedPattern &scope, const std::s
 	return translateExpression(e, scope, alias, ctx);
 }
 
+// Whether an expression can evaluate to SQL NULL, i.e. can be unbound. Only a
+// reference to an optional variable can be; a computed expression over bound
+// inputs cannot introduce unboundedness in this representation.
+bool mayBeUnbound(const Expression &e, const TranslatedPattern &scope) {
+	std::vector<std::string> refs;
+	collectVarRefs(e, refs);
+	for (const auto &v : refs) {
+		if (scope.optionalVars.count(v) != 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// Guards a folded boolean constant on either operand being unbound (SQL NULL),
+// mirroring foldedConstant() below but for a two-operand fold: SPARQL's
+// treat-an-error-as-false semantics fall through to "unbound", so a FILTER
+// over `?opt = <iri>` must still drop the row when ?opt is unbound rather than
+// answering the statically-proven-different-kinds constant.
+std::string foldedConstantTwoOperand(bool value, const std::string &leftSql, bool leftNullable,
+                                     const std::string &rightSql, bool rightNullable, const SqlDialect &dialect) {
+	if (!leftNullable && !rightNullable) {
+		return dialect.booleanLiteral(value);
+	}
+	std::string guard = leftNullable ? (leftSql + " IS NULL") : std::string();
+	if (rightNullable) {
+		guard += (guard.empty() ? "" : " OR ") + rightSql + " IS NULL";
+	}
+	return "(CASE WHEN " + guard + " THEN NULL ELSE " + dialect.booleanLiteral(value) + " END)";
+}
+
 // The fallback comparison, used whenever the operands' datatypes are not both
 // statically known: compare as DOUBLE when both TRY_CAST successfully, else as
 // plain VARCHAR. This is what lets `FILTER(?price > 10)` (numeric) and
@@ -73,10 +104,11 @@ std::string numericAwareComparison(const std::string &left, const std::string &r
 // can lie about a dirty column, and a hard cast error would kill the whole
 // query where TRY_CAST yields NULL and merely drops the row.
 std::string comparison(const std::string &left, const TermInfo &leftInfo, const std::string &right,
-                       const TermInfo &rightInfo, const std::string &op, const SqlDialect &dialect) {
+                       const TermInfo &rightInfo, const std::string &op, const SqlDialect &dialect, bool leftNullable,
+                       bool rightNullable) {
 	const bool equality = (op == "=" || op == "<>");
 	if (equality && leftInfo.kindKnown() && rightInfo.kindKnown() && leftInfo.kind != rightInfo.kind) {
-		return dialect.booleanLiteral(op == "<>");
+		return foldedConstantTwoOperand(op == "<>", left, leftNullable, right, rightNullable, dialect);
 	}
 	if (leftInfo.isNumeric() && rightInfo.isNumeric()) {
 		return "(" + dialect.tryCastToDouble(left) + " " + op + " " + dialect.tryCastToDouble(right) + ")";
@@ -120,23 +152,25 @@ std::string translateBinary(const BinaryExpr &b, const TranslatedPattern &scope,
 	std::string r = tr(*b.right, scope, alias, ctx);
 	const TermInfo li = inferExprTermInfo(*b.left, scope);
 	const TermInfo ri = inferExprTermInfo(*b.right, scope);
+	const bool leftNullable = mayBeUnbound(*b.left, scope);
+	const bool rightNullable = mayBeUnbound(*b.right, scope);
 	switch (b.op) {
 	case BinaryOp::Or:
 		return "(" + l + " OR " + r + ")";
 	case BinaryOp::And:
 		return "(" + l + " AND " + r + ")";
 	case BinaryOp::Eq:
-		return comparison(l, li, r, ri, "=", dialect);
+		return comparison(l, li, r, ri, "=", dialect, leftNullable, rightNullable);
 	case BinaryOp::Ne:
-		return comparison(l, li, r, ri, "<>", dialect);
+		return comparison(l, li, r, ri, "<>", dialect, leftNullable, rightNullable);
 	case BinaryOp::Lt:
-		return comparison(l, li, r, ri, "<", dialect);
+		return comparison(l, li, r, ri, "<", dialect, leftNullable, rightNullable);
 	case BinaryOp::Gt:
-		return comparison(l, li, r, ri, ">", dialect);
+		return comparison(l, li, r, ri, ">", dialect, leftNullable, rightNullable);
 	case BinaryOp::Le:
-		return comparison(l, li, r, ri, "<=", dialect);
+		return comparison(l, li, r, ri, "<=", dialect, leftNullable, rightNullable);
 	case BinaryOp::Ge:
-		return comparison(l, li, r, ri, ">=", dialect);
+		return comparison(l, li, r, ri, ">=", dialect, leftNullable, rightNullable);
 	case BinaryOp::Add:
 		return arithmetic(l, li, r, ri, "+", dialect);
 	case BinaryOp::Sub:
@@ -276,20 +310,6 @@ std::string foldedString(const std::string &value, const std::string &operandSql
 		return dialect.stringLiteral(value);
 	}
 	return "(CASE WHEN " + operandSql + " IS NULL THEN NULL ELSE " + dialect.stringLiteral(value) + " END)";
-}
-
-// Whether an expression can evaluate to SQL NULL, i.e. can be unbound. Only a
-// reference to an optional variable can be; a computed expression over bound
-// inputs cannot introduce unboundedness in this representation.
-bool mayBeUnbound(const Expression &e, const TranslatedPattern &scope) {
-	std::vector<std::string> refs;
-	collectVarRefs(e, refs);
-	for (const auto &v : refs) {
-		if (scope.optionalVars.count(v) != 0) {
-			return true;
-		}
-	}
-	return false;
 }
 
 const char *builtinName(BuiltinFunction fn) {
@@ -442,7 +462,8 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 		const bool langsDiffer =
 		    a.isKnownLiteral() && b.isKnownLiteral() && !a.lang.empty() && !b.lang.empty() && a.lang != b.lang;
 		if (kindsDiffer || datatypesDiffer || langsDiffer) {
-			return dialect.booleanLiteral(false);
+			return foldedConstantTwoOperand(false, argSql(0), mayBeUnbound(*args[0], scope), argSql(1),
+			                                mayBeUnbound(*args[1], scope), dialect);
 		}
 		return "(" + argSql(0) + " = " + argSql(1) + ")";
 	}

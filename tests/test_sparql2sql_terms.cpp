@@ -243,6 +243,29 @@ TEST_CASE("sameTerm: an unknown language tag from a union meet does not fold to 
 	CHECK(contains(sql, " = "));
 }
 
+TEST_CASE("sameTerm: a nullable known-differing-kind operand is NULL-guarded, not folded to a bare FALSE",
+          "[sparql2sql]") {
+	// Mirrors the isIRI nullable case above: sameTerm(?h, ?p) is statically
+	// FALSE when bound (IRI vs Literal never match), but ?h can be unbound via
+	// the OPTIONAL, and SPARQL's sameTerm(unbound, x) must not evaluate to a
+	// bare true/false - it has to fall through to NULL so the FILTER drops the
+	// row, exactly like the untyped comparison path already does.
+	const std::string sql =
+	    translate("SELECT ?m ?h WHERE { ?m ex:plain ?p . OPTIONAL { ?m ex:homepage ?h } FILTER(sameTerm(?h, ?p)) }");
+	CHECK(contains(sql, "IS NULL THEN NULL"));
+}
+
+TEST_CASE("comparison: a nullable known-differing-kind operand is NULL-guarded, not folded to a bare FALSE",
+          "[sparql2sql]") {
+	// Same gap as above, but for `=`/`<>`'s own kind-mismatch fold in
+	// comparison(): folding straight to a bare boolean would make
+	// `FILTER(?h = ?p)` keep rows where ?h is unbound, diverging from
+	// SPARQL's treat-an-error-as-false semantics.
+	const std::string sql =
+	    translate("SELECT ?m ?h WHERE { ?m ex:plain ?p . OPTIONAL { ?m ex:homepage ?h } FILTER(?h = ?p) }");
+	CHECK(contains(sql, "IS NULL THEN NULL"));
+}
+
 // --- STRDT / STRLANG ---
 
 TEST_CASE("STRDT: a constant datatype IRI translates as a lexical pass-through", "[sparql2sql]") {
