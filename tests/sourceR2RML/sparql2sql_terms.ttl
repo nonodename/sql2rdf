@@ -24,6 +24,12 @@
 # ex:mixed is produced by BOTH triples maps with DIFFERENT term kinds (an IRI
 # from <#Measure>, a literal from <#Note>), so its meet is Unknown - the case
 # where the term-kind builtins must still refuse to fold.
+#
+# ex:desc is produced by BOTH triples maps as a literal in each arm, but with
+# DIFFERENT rr:language values ("en" vs "fr"), so its meet is a literal known
+# to be rdf:langString whose specific tag is not statically known - the case
+# where LANG() must still refuse to fold, the same way DATATYPE() refuses when
+# only the kind (not the datatype) is known.
 
 <#Measure>
     rr:logicalTable [ rr:tableName "MEASURES" ];
@@ -45,7 +51,9 @@
     rr:predicateObjectMap [ rr:predicate ex:homepage;
         rr:objectMap [ rr:column "HOMEPAGE"; rr:termType rr:IRI ] ];
     rr:predicateObjectMap [ rr:predicate ex:mixed;
-        rr:objectMap [ rr:template "http://ex.org/m/{REF}" ] ].
+        rr:objectMap [ rr:template "http://ex.org/m/{REF}" ] ];
+    rr:predicateObjectMap [ rr:predicate ex:desc;
+        rr:objectMap [ rr:column "TITLE"; rr:language "en" ] ].
 
 # A blank-node subject map - only reachable since buildSubjectMap started
 # honouring rr:termType (see tests/sourceR2RML/subject_blanknode.ttl).
@@ -55,4 +63,6 @@
     rr:predicateObjectMap [ rr:predicate ex:body;
         rr:objectMap [ rr:column "BODY" ] ];
     rr:predicateObjectMap [ rr:predicate ex:mixed;
-        rr:objectMap [ rr:column "BODY" ] ].
+        rr:objectMap [ rr:column "BODY" ] ];
+    rr:predicateObjectMap [ rr:predicate ex:desc;
+        rr:objectMap [ rr:column "BODY"; rr:language "fr" ] ].

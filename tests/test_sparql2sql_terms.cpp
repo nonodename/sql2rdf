@@ -132,6 +132,28 @@ TEST_CASE("LANG: an IRI-valued argument is a static type error", "[sparql2sql]")
 	CHECK_THROWS_AS(translate("SELECT ?m WHERE { ?m ex:amount ?a . FILTER(lang(?m) = \"\") }"), TranslationError);
 }
 
+TEST_CASE("LANG: candidate arms tagged with different rr:language values still throw", "[sparql2sql]") {
+	// ex:desc is a literal in both <#Measure> ("en") and <#Note> ("fr"), so the
+	// meet at the union knows the kind AND the datatype (rdf:langString in both
+	// arms) but not the specific tag - meet() degrades disagreeing langs to "".
+	// Folding that empty string in would silently answer lang(?d) = "" for a
+	// row that is actually @en or @fr, so this must throw instead - same
+	// rationale as DATATYPE() refusing when only the kind is known. The BIND
+	// makes this pushdown-proof, mirroring the Unknown-kind case above.
+	const std::string q = "SELECT ?x WHERE { ?m ex:desc ?d . BIND(?d AS ?x) ";
+	CHECK_THROWS_AS(translate(q + "FILTER(lang(?x) = \"\") }"), TranslationError);
+}
+
+TEST_CASE("LANG: disagreeing rr:language candidate arms are resolved per arm by pushdown", "[sparql2sql]") {
+	// Without the BIND indirection above, filter pushdown distributes the
+	// FILTER into each union arm, where the specific language IS known - so
+	// instead of throwing, each arm folds to its own static tag.
+	const std::string sql = translate("SELECT ?d WHERE { ?m ex:desc ?d . FILTER(lang(?d) = \"en\") }");
+	CHECK(contains(sql, "'en'"));
+	CHECK(contains(sql, "'fr'"));
+	CHECK(contains(sql, "UNION"));
+}
+
 TEST_CASE("DATATYPE: a declared rr:datatype folds to that IRI", "[sparql2sql]") {
 	CHECK(contains(translate("SELECT ?a WHERE { ?m ex:amount ?a . FILTER(datatype(?a) = xsd:integer) }"),
 	               "'http://www.w3.org/2001/XMLSchema#integer'"));

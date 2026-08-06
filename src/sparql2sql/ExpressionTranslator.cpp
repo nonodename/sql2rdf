@@ -482,8 +482,18 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 			throw TranslationError(
 			    "lang(): the argument is statically an IRI or blank node, which has no language tag");
 		}
-		// A literal with no rr:language has the empty tag - which is a known
-		// answer, not an unknown one.
+		if (info.datatypeIri == kRdfLangString && info.lang.empty()) {
+			// Known to be language-tagged, but meet() degraded the specific tag
+			// because two contributing term maps disagreed (e.g. different
+			// rr:language values across a UNION's arms). Folding the empty tag in
+			// here would silently answer "" for a literal that is actually
+			// tagged - same rationale as the datatypeIri.empty() guard below.
+			throw TranslationError(
+			    "unsupported: lang() - the argument is known to be language-tagged, but the specific language is "
+			    "not statically known (its contributing term maps declare different rr:language values)");
+		}
+		// A literal with no rr:language at all has the empty tag - which is a
+		// known answer, not an unknown one.
 		return foldedString(info.lang, argSql(0), mayBeUnbound(*args[0], scope), dialect);
 	}
 	case BuiltinFunction::Datatype: {
