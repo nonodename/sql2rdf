@@ -167,7 +167,7 @@ SqlExpr termMapToSqlExpr(const r2rml::TermMap &termMap, const std::string &sourc
 	if (const auto *tmpl = dynamic_cast<const r2rml::TemplateTermMap *>(&termMap)) {
 		std::vector<TemplateSegment> segments = parseTemplate(tmpl->templateString);
 		SqlExpr result;
-		result.expr = buildProjectionSql(segments, sourceAlias, dialect);
+		result.expr = buildProjectionSql(segments, sourceAlias, dialect, tmpl->termType == r2rml::TermType::IRI);
 		result.requiredNonNullColumns = qualifiedColumnRefs(referencedColumns(segments), sourceAlias, dialect);
 		result.term = annotate(termMap, std::string(), catalog, tableIdentity);
 		return result;
@@ -198,15 +198,16 @@ InversionResult invertTermMapAgainstBoundTerm(const r2rml::TermMap &termMap, con
 	}
 	if (const auto *tmpl = dynamic_cast<const r2rml::TemplateTermMap *>(&termMap)) {
 		std::vector<TemplateSegment> segments = parseTemplate(tmpl->templateString);
-		InversionOutcome outcome = invertTemplate(segments, boundValue);
+		const bool percentEncoded = tmpl->termType == r2rml::TermType::IRI;
+		InversionOutcome outcome = invertTemplate(segments, boundValue, percentEncoded);
 		if (outcome.kind == InversionKind::NeverMatches) {
 			result.possible = false;
 			return result;
 		}
 		result.possible = true;
 		if (outcome.kind == InversionKind::WholeTemplateMatch) {
-			result.whereConditions.push_back(buildProjectionSql(segments, sourceAlias, dialect) + " = " +
-			                                 dialect.stringLiteral(boundValue));
+			result.whereConditions.push_back(buildProjectionSql(segments, sourceAlias, dialect, percentEncoded) +
+			                                 " = " + dialect.stringLiteral(boundValue));
 			return result;
 		}
 		for (const auto &columnValue : outcome.columnValues) {

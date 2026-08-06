@@ -363,6 +363,37 @@ TEST_CASE("TemplateTermMap leaves unreserved characters untouched") {
 	serd_env_free(env);
 }
 
+TEST_CASE("TemplateTermMap does not percent-encode substituted values for rr:BlankNode term type") {
+	// R2RML 7.3 only prescribes percent-encoding of substituted template
+	// values for rr:IRI. A '%' in a blank node label would be invalid per
+	// N-Triples' BLANK_NODE_LABEL production, so it must be left untouched.
+	TemplateTermMap tt("note{NID}");
+	tt.termType = TermType::BlankNode;
+	SerdEnv *env = serd_env_new(nullptr);
+
+	auto row = makeRow({{"NID", StringSQLValue(std::string("a b/c"))}});
+	SerdNode node = tt.generateRDFTerm(row, *env);
+
+	REQUIRE(node.type == SERD_BLANK);
+	REQUIRE(nodeUri(node) == "notea b/c");
+	serd_env_free(env);
+}
+
+TEST_CASE("TemplateTermMap does not percent-encode substituted values for rr:Literal term type") {
+	// Same rule as rr:BlankNode above: percent-encoding a literal's
+	// substituted value would corrupt its lexical form.
+	TemplateTermMap tt("note-{NID}");
+	tt.termType = TermType::Literal;
+	SerdEnv *env = serd_env_new(nullptr);
+
+	auto row = makeRow({{"NID", StringSQLValue(std::string("a b/c"))}});
+	SerdNode node = tt.generateRDFTerm(row, *env);
+
+	REQUIRE(node.type == SERD_LITERAL);
+	REQUIRE(nodeUri(node) == "note-a b/c");
+	serd_env_free(env);
+}
+
 TEST_CASE("TemplateTermMap malformed template (unmatched '{') truncates gracefully") {
 	// No closing '}' after the placeholder start; generateRDFTerm must not
 	// crash and should treat the remainder as consumed rather than throwing.

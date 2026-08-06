@@ -91,7 +91,7 @@ std::vector<std::string> referencedColumns(const std::vector<TemplateSegment> &s
 }
 
 std::string buildProjectionSql(const std::vector<TemplateSegment> &segments, const std::string &sourceAlias,
-                               const SqlDialect &dialect) {
+                               const SqlDialect &dialect, bool percentEncodeValues) {
 	if (segments.empty()) {
 		return dialect.stringLiteral("");
 	}
@@ -99,8 +99,8 @@ std::string buildProjectionSql(const std::vector<TemplateSegment> &segments, con
 	parts.reserve(segments.size());
 	for (const auto &seg : segments) {
 		if (seg.isPlaceholder) {
-			parts.push_back(dialect.percentEncode("CAST(" + sourceAlias + "." + dialect.quoteIdentifier(seg.text) +
-			                                      " AS VARCHAR)"));
+			std::string columnExpr = "CAST(" + sourceAlias + "." + dialect.quoteIdentifier(seg.text) + " AS VARCHAR)";
+			parts.push_back(percentEncodeValues ? dialect.percentEncode(columnExpr) : columnExpr);
 		} else {
 			parts.push_back(dialect.stringLiteral(seg.text));
 		}
@@ -108,7 +108,8 @@ std::string buildProjectionSql(const std::vector<TemplateSegment> &segments, con
 	return dialect.concat(parts);
 }
 
-InversionOutcome invertTemplate(const std::vector<TemplateSegment> &segments, const std::string &boundValue) {
+InversionOutcome invertTemplate(const std::vector<TemplateSegment> &segments, const std::string &boundValue,
+                                bool percentDecodeValues) {
 	InversionOutcome outcome;
 
 	if (segments.empty()) {
@@ -176,7 +177,7 @@ InversionOutcome invertTemplate(const std::vector<TemplateSegment> &segments, co
 			span = boundValue.substr(pos);
 			pos = boundValue.size();
 		}
-		outcome.columnValues.emplace_back(seg.text, percentDecode(span));
+		outcome.columnValues.emplace_back(seg.text, percentDecodeValues ? percentDecode(span) : span);
 	}
 
 	if (pos != boundValue.size()) {
