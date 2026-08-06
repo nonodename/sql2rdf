@@ -229,6 +229,20 @@ TEST_CASE("sameTerm: two terms of the same known kind keep the string equality",
 	CHECK(contains(sql, " = "));
 }
 
+TEST_CASE("sameTerm: an unknown language tag from a union meet does not fold to FALSE", "[sparql2sql]") {
+	// ex:desc is @en in one union arm and @fr in the other, so meet() degrades
+	// the language to "" (unknown) while kind and datatype (rdf:langString)
+	// stay known - the same case the LANG throw test above exercises. An
+	// unknown lang is not "known to differ" from ex:title's known @en tag, so
+	// this must fall through to a real string comparison instead of folding to
+	// FALSE, which would silently drop rows where ?x is actually @en and equal
+	// to ?t. The BIND makes this pushdown-proof, mirroring the LANG test.
+	const std::string q = "SELECT ?x WHERE { ?m ex:desc ?d . ?m ex:title ?t . BIND(?d AS ?x) ";
+	const std::string sql = translate(q + "FILTER(sameTerm(?x, ?t)) }");
+	CHECK_FALSE(contains(sql, "FALSE"));
+	CHECK(contains(sql, " = "));
+}
+
 // --- STRDT / STRLANG ---
 
 TEST_CASE("STRDT: a constant datatype IRI translates as a lexical pass-through", "[sparql2sql]") {

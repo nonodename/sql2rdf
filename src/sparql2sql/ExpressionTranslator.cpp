@@ -439,7 +439,8 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 		const bool kindsDiffer = a.kindKnown() && b.kindKnown() && a.kind != b.kind;
 		const bool datatypesDiffer = a.isKnownLiteral() && b.isKnownLiteral() && !a.datatypeIri.empty() &&
 		                             !b.datatypeIri.empty() && a.datatypeIri != b.datatypeIri;
-		const bool langsDiffer = a.isKnownLiteral() && b.isKnownLiteral() && a.lang != b.lang;
+		const bool langsDiffer =
+		    a.isKnownLiteral() && b.isKnownLiteral() && !a.lang.empty() && !b.lang.empty() && a.lang != b.lang;
 		if (kindsDiffer || datatypesDiffer || langsDiffer) {
 			return dialect.booleanLiteral(false);
 		}
