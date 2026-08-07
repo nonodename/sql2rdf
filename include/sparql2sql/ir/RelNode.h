@@ -76,15 +76,16 @@ struct ColumnInfo {
 };
 
 enum class RelKind {
-	Spj,         ///< fused Select-Project-Join block (base of flattening/self-join).
-	Join,        ///< binary Inner/LeftOuter join of two arbitrary relations.
-	AntiJoin,    ///< MINUS (NOT EXISTS).
-	UnionByName, ///< schema-extending union of >=1 relations.
-	Filter,      ///< a FILTER over a (composite) child: deferred predicate expression.
-	Bind,        ///< a BIND: child columns plus one computed column.
-	Raw,         ///< a pre-rendered SELECT string (VALUES, subselect) with a declared schema.
-	SingleRow,   ///< the fold's identity relation (SELECT 1).
-	Empty        ///< a provably empty relation (WHERE FALSE) with a declared schema.
+	Spj,              ///< fused Select-Project-Join block (base of flattening/self-join).
+	Join,             ///< binary Inner/LeftOuter join of two arbitrary relations.
+	AntiJoin,         ///< MINUS (NOT EXISTS).
+	UnionByName,      ///< schema-extending union of >=1 relations.
+	Filter,           ///< a FILTER over a (composite) child: deferred predicate expression.
+	Bind,             ///< a BIND: child columns plus one computed column.
+	Raw,              ///< a pre-rendered SELECT string (VALUES, subselect) with a declared schema.
+	SingleRow,        ///< the fold's identity relation (SELECT 1).
+	Empty,            ///< a provably empty relation (WHERE FALSE) with a declared schema.
+	TransitiveClosure ///< E+ (one-or-more property path): a WITH RECURSIVE closure of `step`.
 };
 
 class RelNode {
@@ -264,6 +265,56 @@ class EmptyNode : public RelNode {
 public:
 	EmptyNode() : RelNode(RelKind::Empty) {
 	}
+};
+
+/// E+ (SPARQL 1.1 Section 9.3/18.1.7 rule closure): the transitive closure of
+/// a one-hop "step" relation between two internal endpoint variables
+/// (`fromVar`/`toVar`, both minted via TranslationContext::nextInternalVar()),
+/// seeded and projected according to which of the pattern's *real*
+/// subject/object endpoints are bound. `E*` is not represented here at all -
+/// PropertyPathTranslator composes a TransitiveClosureNode with
+/// zeroLengthPath via unionAll(dedup=true), exactly as ZeroOrOne composes the
+/// child path with zeroLengthPath - so this node's minimum cardinality is
+/// always 1 and there is no separate zero-or-more mode to encode.
+///
+/// `step` is a live child relation (typically the UnionByName-of-Spj-arms
+/// shape translateAtomicPattern produces for the path's underlying
+/// predicate), not pre-rendered SQL: this lets it participate in the outer
+/// tree's flatten/selfJoinWalk before this node's own renderer ever sees it.
+/// This node itself is an optimizer boundary - never merged/rewritten - but
+/// `step` still optimizes normally, exactly like FilterNode/BindNode's child.
+class TransitiveClosureNode : public RelNode {
+public:
+	enum class Mode {
+		ForwardFromSubject, ///< subject bound, object variable: unary reachable-set seeded forward.
+		BackwardFromObject, ///< object bound, subject variable: unary reachable-set seeded backward.
+		BothBound,          ///< both bound (and unequal): forward reachable-set + EXISTS membership test.
+		BothVars            ///< both variable: full (from, to) pairs closure.
+	};
+
+	TransitiveClosureNode() : RelNode(RelKind::TransitiveClosure) {
+	}
+
+	RelNodePtr step;
+	std::string fromVar; ///< step's internal "from" endpoint variable name.
+	std::string toVar;   ///< step's internal "to" endpoint variable name.
+	Mode mode = Mode::BothVars;
+
+	/// The bound endpoint's already-dialect-quoted SQL string literal
+	/// (dialect.stringLiteral(termLexicalForm(...))). Used by every mode
+	/// except BothVars, where there is no anchor.
+	std::string anchorLiteral;
+
+	/// BothBound only: the *other* bound endpoint's literal, tested for
+	/// closure membership via EXISTS rather than projected.
+	std::string targetLiteral;
+
+	// schema_ (inherited) declares exactly what this node projects:
+	//  - BothBound:            0 columns.
+	//  - ForwardFromSubject:   1 column, var = object's real SPARQL var name.
+	//  - BackwardFromObject:   1 column, var = subject's real SPARQL var name.
+	//  - BothVars, subject != object var: 2 columns, order [subjectVar, objectVar].
+	//  - BothVars, subject == object var (`?x p+ ?x`): 1 column, that shared name.
 };
 
 } // namespace sparql2sql

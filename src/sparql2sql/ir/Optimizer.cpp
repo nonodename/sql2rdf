@@ -171,6 +171,11 @@ RelNodePtr flatten(RelNodePtr node, const TypeCatalog *catalog) {
 		b.child = flatten(std::move(b.child), catalog);
 		return node;
 	}
+	case RelKind::TransitiveClosure: {
+		TransitiveClosureNode &t = static_cast<TransitiveClosureNode &>(*node);
+		t.step = flatten(std::move(t.step), catalog);
+		return node; // non-mergeable: the node itself is never hoisted/merged.
+	}
 	case RelKind::Spj:
 	case RelKind::Raw:
 	case RelKind::SingleRow:
@@ -308,6 +313,9 @@ void selfJoinWalk(RelNode &node) {
 	case RelKind::Bind:
 		selfJoinWalk(*static_cast<BindNode &>(node).child);
 		break;
+	case RelKind::TransitiveClosure:
+		selfJoinWalk(*static_cast<TransitiveClosureNode &>(node).step);
+		break;
 	case RelKind::Raw:
 	case RelKind::SingleRow:
 	case RelKind::Empty:
@@ -350,6 +358,9 @@ void stripDistinct(RelNode &node) {
 		break;
 	case RelKind::Bind:
 		stripDistinct(*static_cast<BindNode &>(node).child);
+		break;
+	case RelKind::TransitiveClosure:
+		stripDistinct(*static_cast<TransitiveClosureNode &>(node).step);
 		break;
 	case RelKind::Raw:
 	case RelKind::SingleRow:
@@ -572,6 +583,11 @@ RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::
 		}
 		return wrapFilters(std::move(child), keep);
 	}
+	case RelKind::TransitiveClosure:
+		// The closure's own output vars (subject/object) are unrelated to
+		// step's internal from/to vars, so a filter over the output cannot
+		// be re-expressed over step; boundary, same as Bind/Raw/SingleRow/Empty.
+		return wrapFilters(std::move(child), conjuncts);
 	default:
 		// Bind, Raw, SingleRow, Empty: boundary.
 		return wrapFilters(std::move(child), conjuncts);
@@ -616,6 +632,11 @@ RelNodePtr pushFilters(RelNodePtr node, TranslationContext *ctx) {
 	case RelKind::Raw:
 	case RelKind::SingleRow:
 	case RelKind::Empty:
+	case RelKind::TransitiveClosure:
+		// TransitiveClosure: nothing above it needs to push a filter into
+		// step (that's pushConjuncts's job, handled above); step itself was
+		// never wrapped by an unpushed FilterNode from the closure's own
+		// construction.
 		return node;
 	}
 	return node;

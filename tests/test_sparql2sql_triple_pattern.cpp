@@ -210,10 +210,12 @@ TEST_CASE("translateTriplePattern: a pattern matching zero candidates is a valid
 	CHECK(result.sql.find("WHERE FALSE") != std::string::npos);
 }
 
-// The path operators that ARE supported desugar into ordinary triple patterns
-// before reaching here; see test_sparql2sql_paths.cpp. Only the two recursive
-// operators still reach a translation error.
-TEST_CASE("translateTriplePattern: the one-or-more property path operator throws TranslationError") {
+// Every path operator, including the two recursive ones, desugars into an IR
+// relation rather than reaching a translation error; see
+// test_sparql2sql_paths.cpp for the property-path-specific structural
+// coverage of `+`/`*`. This is a smoke test that translateTriplePattern's own
+// entry point reaches the same result for `+` rather than throwing.
+TEST_CASE("translateTriplePattern: the one-or-more property path operator translates without throwing") {
 	Parser parser;
 	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "unsupported_property_path.rq");
 	R2RMLParser mappingParser;
@@ -222,7 +224,10 @@ TEST_CASE("translateTriplePattern: the one-or-more property path operator throws
 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
-	CHECK_THROWS_AS(translateTriplePattern(nthTriple(*q, 0), ctx), TranslationError);
+	TranslatedPattern result = translated(nthTriple(*q, 0), ctx);
+
+	CHECK(result.boundVars.count("s") == 1);
+	CHECK(result.boundVars.count("o") == 1);
 }
 
 // ---------------------------------------------------------------------------

@@ -294,6 +294,87 @@ std::string renderBind(const BindNode &b, TranslationContext &ctx) {
 	       alias;
 }
 
+// E+ closure rendering. Registers two CTEs on `ctx` (the one-hop step
+// relation, then the recursive closure over it - never inlining step's SQL
+// twice, since both the seed and the recursive term reference it) and
+// returns a bare "SELECT ... FROM <closureCte> ..." reference, analogous to
+// how RawRelation returns its pre-rendered sql verbatim.
+//
+// Two shapes, chosen by tc.mode:
+//  - BothVars: a full (from, to) pairs closure - the seed is every one-hop
+//    edge, the recursive term extends a known pair by one more hop. This is
+//    the only shape that needs both endpoint columns; the other three anchor
+//    at a bound literal and only need a unary "reachable node" column, which
+//    is far cheaper.
+//  - ForwardFromSubject/BackwardFromObject/BothBound: seed from the bound
+//    endpoint's literal and walk the step relation forward or backward one
+//    hop at a time. BothBound projects nothing and tests membership via
+//    EXISTS instead, mirroring zeroLengthPath's both-bound-unequal Empty
+//    shape (0 columns, existence only).
+//
+// Every recursive term is combined with its seed via a deduplicating UNION
+// (never UNION ALL): this is what makes the closure terminate on cyclic edge
+// data, which real graphs frequently have.
+std::string renderTransitiveClosure(const TransitiveClosureNode &tc, TranslationContext &ctx) {
+	const SqlDialect &dialect = ctx.dialect();
+	std::string fromCol = mangleVar(tc.fromVar, dialect);
+	std::string toCol = mangleVar(tc.toVar, dialect);
+
+	std::string stepCte = ctx.nextCteName();
+	ctx.addCte(stepCte, renderNode(*tc.step, ctx));
+	std::string closureCte = ctx.nextCteName();
+
+	if (tc.mode == TransitiveClosureNode::Mode::BothVars) {
+		std::string cteFrom = dialect.quoteIdentifier("cte_from");
+		std::string cteTo = dialect.quoteIdentifier("cte_to");
+		std::string s1 = ctx.nextAlias();
+		std::string s2 = ctx.nextAlias();
+		std::string r = ctx.nextAlias();
+		std::string seed = "SELECT " + s1 + "." + fromCol + " AS " + cteFrom + ", " + s1 + "." + toCol + " AS " +
+		                   cteTo + " FROM " + stepCte + " AS " + s1;
+		std::string recursive = "SELECT " + r + "." + cteFrom + ", " + s2 + "." + toCol + " FROM " + closureCte +
+		                        " AS " + r + " JOIN " + stepCte + " AS " + s2 + " ON " + r + "." + cteTo + " = " + s2 +
+		                        "." + fromCol;
+		ctx.addCte(closureCte, seed + " UNION " + recursive);
+
+		std::string c = ctx.nextAlias();
+		if (tc.schema().size() == 1) {
+			// Subject and object share one variable (`?x p+ ?x`): only the
+			// diagonal of the pairs closure satisfies the pattern.
+			return "SELECT " + c + "." + cteFrom + " AS " + mangleVar(tc.schema()[0].var, dialect) + " FROM " +
+			       closureCte + " AS " + c + " WHERE " + c + "." + cteFrom + " = " + c + "." + cteTo;
+		}
+		return "SELECT " + c + "." + cteFrom + " AS " + mangleVar(tc.schema()[0].var, dialect) + ", " + c + "." +
+		       cteTo + " AS " + mangleVar(tc.schema()[1].var, dialect) + " FROM " + closureCte + " AS " + c;
+	}
+
+	// Unary reachable-set: ForwardFromSubject/BackwardFromObject walk the
+	// step relation in the direction that starts at the bound endpoint;
+	// BothBound reuses the forward walk (seeded from the subject) and only
+	// tests membership.
+	std::string cteNode = dialect.quoteIdentifier("cte_node");
+	bool forward = tc.mode != TransitiveClosureNode::Mode::BackwardFromObject;
+	const std::string &walkCol = forward ? fromCol : toCol;
+	const std::string &landCol = forward ? toCol : fromCol;
+
+	std::string s = ctx.nextAlias();
+	std::string r = ctx.nextAlias();
+	std::string seed = "SELECT " + tc.anchorLiteral + " AS " + cteNode;
+	std::string recursive = "SELECT " + s + "." + landCol + " FROM " + closureCte + " AS " + r + " JOIN " + stepCte +
+	                        " AS " + s + " ON " + r + "." + cteNode + " = " + s + "." + walkCol;
+	ctx.addCte(closureCte, seed + " UNION " + recursive);
+
+	if (tc.mode == TransitiveClosureNode::Mode::BothBound) {
+		return "SELECT 1 AS " + dialect.quoteIdentifier("_dummy") + " WHERE " +
+		       dialect.existsClause(false,
+		                            "SELECT 1 FROM " + closureCte + " WHERE " + cteNode + " = " + tc.targetLiteral);
+	}
+
+	std::string c = ctx.nextAlias();
+	return "SELECT " + c + "." + cteNode + " AS " + mangleVar(tc.schema()[0].var, dialect) + " FROM " + closureCte +
+	       " AS " + c;
+}
+
 std::string renderEmpty(const EmptyNode &e, TranslationContext &ctx) {
 	const SqlDialect &dialect = ctx.dialect();
 	if (e.schema().empty()) {
@@ -330,6 +411,8 @@ std::string renderNode(const RelNode &node, TranslationContext &ctx) {
 		return "SELECT 1 AS " + ctx.dialect().quoteIdentifier("_dummy");
 	case RelKind::Empty:
 		return renderEmpty(static_cast<const EmptyNode &>(node), ctx);
+	case RelKind::TransitiveClosure:
+		return renderTransitiveClosure(static_cast<const TransitiveClosureNode &>(node), ctx);
 	}
 	return std::string();
 }

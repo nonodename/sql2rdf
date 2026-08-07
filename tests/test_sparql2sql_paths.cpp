@@ -209,20 +209,84 @@ TEST_CASE("SELECT * never projects a blank-node position") {
 	CHECK_FALSE(contains(projection, "_bnode_"));
 }
 
-TEST_CASE("translatePath: the unsupported one-or-more operator throws and names itself") {
+TEST_CASE("translatePath: a one-or-more path with both endpoints unbound is a full pairs closure") {
+	// unsupported_property_path.rq: ?s ex:knows+ ?o - the pre-recursive-CTE
+	// codebase rejected this; both endpoints are variables, so this is the
+	// expensive full (from, to) pairs closure case. The WITH RECURSIVE prefix
+	// is only emitted by translateQuery's two top-level call sites, so this
+	// (unlike the other translatePath tests in this file) must go through the
+	// whole-query path rather than translateFirstTriple/renderRelation.
 	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
 	DuckDbDialect dialect;
-	Parser parser;
-	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "unsupported_property_path.rq");
-	TranslationContext ctx(mapping, dialect);
-	CHECK_THROWS_AS(translateTriplePattern(firstTriple(*q), ctx), TranslationError);
+	std::string sql = translateWholeQuery("unsupported_property_path.rq", mapping, dialect);
+
+	CHECK(contains(sql, "WITH RECURSIVE"));
+	CHECK(contains(sql, "UNION"));
+	CHECK_FALSE(contains(sql, "UNION ALL"));
+	CHECK(contains(outerSelectList(sql), "\"v_s\""));
+	CHECK(contains(outerSelectList(sql), "\"v_o\""));
 }
 
-TEST_CASE("translatePath: the unsupported zero-or-more operator throws and names itself") {
+TEST_CASE("translatePath: a zero-or-more path unions the one-or-more closure with the zero-length path") {
+	// unsupported_path_star.rq: ?s ex:knows* ?o.
 	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
 	DuckDbDialect dialect;
-	Parser parser;
-	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "unsupported_path_star.rq");
-	TranslationContext ctx(mapping, dialect);
-	CHECK_THROWS_AS(translateTriplePattern(firstTriple(*q), ctx), TranslationError);
+	std::string sql = translateWholeQuery("unsupported_path_star.rq", mapping, dialect);
+
+	CHECK(contains(sql, "WITH RECURSIVE"));
+	// The outer relation unions the E+ closure with the zero-length arm.
+	CHECK(contains(sql, "UNION"));
+	CHECK(contains(outerSelectList(sql), "\"v_s\""));
+	CHECK(contains(outerSelectList(sql), "\"v_o\""));
+}
+
+TEST_CASE("translatePath: a one-or-more path with a bound subject seeds a unary reachable-set forward") {
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	std::string sql = translateWholeQuery("emp_dept_path_plus_bound_subject.rq", mapping, dialect);
+
+	// <employee/7369> ex:knows+ ?m - seeded forward from the bound subject: a
+	// unary "cte_node" reachable-set, not a two-column pairs CTE.
+	CHECK(contains(sql, "WITH RECURSIVE"));
+	CHECK(contains(sql, "\"cte_node\""));
+	CHECK_FALSE(contains(sql, "\"cte_from\""));
+	CHECK(contains(sql, "http://data.example.com/employee/7369"));
+	CHECK(contains(outerSelectList(sql), "\"v_m\""));
+}
+
+TEST_CASE("translatePath: a one-or-more path with a bound object seeds a unary reachable-set backward") {
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	std::string sql = translateWholeQuery("emp_dept_path_plus_bound_object.rq", mapping, dialect);
+
+	// ?m ex:knows+ <employee/7839> - seeded backward from the bound object:
+	// still a unary reachable-set, walked in reverse.
+	CHECK(contains(sql, "WITH RECURSIVE"));
+	CHECK(contains(sql, "\"cte_node\""));
+	CHECK_FALSE(contains(sql, "\"cte_from\""));
+	CHECK(contains(sql, "http://data.example.com/employee/7839"));
+	CHECK(contains(outerSelectList(sql), "\"v_m\""));
+}
+
+TEST_CASE("translatePath: a one-or-more path with both endpoints bound is an EXISTS membership test") {
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	TranslatedPattern result = translateFirstTriple("emp_dept_path_plus_bound_both.rq", mapping, dialect);
+
+	// Both bound and unequal: no columns to project, just closure membership.
+	CHECK(result.boundVars.empty());
+	CHECK(contains(result.sql, "EXISTS"));
+	CHECK_FALSE(contains(result.sql, "\"cte_from\""));
+}
+
+TEST_CASE("translatePath: a one-or-more path with the same variable on both ends filters the closure diagonal") {
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	std::string sql = translateWholeQuery("emp_dept_path_plus_same_var.rq", mapping, dialect);
+
+	// ?m ex:knows+ ?m - only the diagonal of the pairs closure satisfies the
+	// pattern, so exactly one variable is projected.
+	CHECK(contains(sql, "WITH RECURSIVE"));
+	CHECK(contains(sql, "\"cte_from\" = "));
+	CHECK(contains(outerSelectList(sql), "\"v_m\""));
 }

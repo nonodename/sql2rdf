@@ -227,6 +227,33 @@ std::string translateOrderBy(const Query &query, const TranslatedPattern &source
 	return sql;
 }
 
+// Prepend the query's collected WITH-clause entries (registered by
+// TransitiveClosureNode rendering) ahead of the final top-level statement.
+// Called only at the two actual outermost sites (the ASK branch and the
+// SELECT-form return below), never inside translateQueryPattern itself,
+// which is reentrant for SubSelectElement subqueries sharing the same ctx -
+// a CTE registered while rendering a nested query still belongs to the one
+// outermost WITH clause, not a WITH clause of its own.
+//
+// One "WITH RECURSIVE ..." prefix covers every entry even though not all of
+// them self-reference (e.g. a closure's non-recursive step CTE): RECURSIVE
+// is a clause-level flag enabling recursive self-reference for whichever
+// CTEs in the list use it, not a per-entry requirement, in both Postgres and
+// DuckDB.
+std::string prependCtes(const TranslationContext &ctx, const std::string &body) {
+	if (ctx.pendingCtes().empty()) {
+		return body;
+	}
+	std::string sql = "WITH RECURSIVE ";
+	for (std::size_t i = 0; i < ctx.pendingCtes().size(); ++i) {
+		if (i > 0) {
+			sql += ", ";
+		}
+		sql += ctx.pendingCtes()[i].name + " AS (" + ctx.pendingCtes()[i].bodySql + ")";
+	}
+	return sql + " " + body;
+}
+
 } // namespace
 
 TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, TranslationContext &ctx) {
@@ -408,7 +435,8 @@ std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMa
 		}
 		// ORDER BY/LIMIT/OFFSET are intentionally ignored for ASK: they are
 		// semantically inert for an existence check.
-		return "SELECT " + dialect.existsClause(false, innerSql) + " AS " + dialect.quoteIdentifier("ask");
+		return prependCtes(ctx,
+		                   "SELECT " + dialect.existsClause(false, innerSql) + " AS " + dialect.quoteIdentifier("ask"));
 	}
 
 	if (query.form != QueryForm::Select) {
@@ -417,7 +445,7 @@ std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMa
 	}
 
 	TranslatedPattern result = translateQueryPattern(query, ctx);
-	return result.sql;
+	return prependCtes(ctx, result.sql);
 }
 
 } // namespace sparql2sql
