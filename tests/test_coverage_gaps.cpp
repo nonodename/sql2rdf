@@ -887,6 +887,65 @@ TEST_CASE("parseString: strict mode throws on non-fatal errors, lenient mode rec
 	REQUIRE_THROWS_AS(parser.parseString(turtle, "http://example.com/mapping/", false), std::runtime_error);
 }
 
+TEST_CASE("parseString: strict mode aggregates MULTIPLE non-fatal errors into one thrown message") {
+	// buildMappingFromTriples' strict-mode throw path (R2RMLParser.cpp, the
+	// "fatal, non-ignored errors" branch around lines 737-746) builds `msg` by
+	// appending every accumulated error, each followed by "\n", before
+	// throwing a single std::runtime_error. The existing "strict mode throws
+	// on non-fatal errors" test above only ever triggers ONE error (an
+	// unrecognised logical table) before throwing, so the loop body
+	// (`msg << e << "\n";`) is only ever exercised for a single iteration.
+	// This fixture triggers TWO independent non-fatal errors in the same
+	// document - an unrecognised logical table predicate on one TriplesMap,
+	// and an unresolved rr:parentTriplesMap reference on another - so the
+	// aggregation loop must run for two accumulated errors before the throw.
+	const std::string turtle =
+	    "@prefix rr: <http://www.w3.org/ns/r2rml#>.\n"
+	    "@prefix ex: <http://example.com/ns#>.\n"
+	    "<#TriplesMapBadTable>\n"
+	    "    rr:logicalTable [ rr:notATableName \"EMP\" ];\n"
+	    "    rr:subjectMap [ rr:template \"http://data.example.com/x/{ID}\" ].\n"
+	    "<#TriplesMapBadParent>\n"
+	    "    rr:logicalTable [ rr:tableName \"EMP\" ];\n"
+	    "    rr:subjectMap [ rr:template \"http://data.example.com/y/{ID}\" ];\n"
+	    "    rr:predicateObjectMap [\n"
+	    "        rr:predicate ex:department;\n"
+	    "        rr:objectMap [ rr:parentTriplesMap <#GhostTriplesMap>; rr:joinCondition [ rr:child \"DEPTNO\"; "
+	    "rr:parent \"DEPTNO\" ] ];\n"
+	    "    ].\n";
+
+	R2RMLParser parser;
+
+	// Lenient mode: both non-fatal errors are recorded independently.
+	R2RMLMapping lenient = parser.parseString(turtle, "http://example.com/mapping/", true);
+	REQUIRE(lenient.parseErrors.size() == 2);
+	bool sawLogicalTableError = false, sawParentError = false;
+	for (const auto &e : lenient.parseErrors) {
+		if (e.find("unrecognised logical table") != std::string::npos) {
+			sawLogicalTableError = true;
+		}
+		if (e.find("unresolved parentTriplesMap") != std::string::npos) {
+			sawParentError = true;
+		}
+	}
+	REQUIRE(sawLogicalTableError);
+	REQUIRE(sawParentError);
+
+	// Strict mode: both errors must be aggregated into the single thrown
+	// message, each on its own line.
+	try {
+		parser.parseString(turtle, "http://example.com/mapping/", false);
+		FAIL("expected std::runtime_error to be thrown");
+	} catch (const std::runtime_error &ex) {
+		const std::string what = ex.what();
+		REQUIRE(what.find("unrecognised logical table") != std::string::npos);
+		REQUIRE(what.find("unresolved parentTriplesMap") != std::string::npos);
+		// Both errors are newline-terminated, so the message contains at
+		// least two newlines (one per aggregated error).
+		REQUIRE(std::count(what.begin(), what.end(), '\n') >= 2);
+	}
+}
+
 TEST_CASE("parseString: rr:constant literal object becomes a Literal-typed ConstantTermMap") {
 	// rr:constant with a literal object (as opposed to a URI object) must
 	// produce a ConstantTermMap whose termType is Literal.

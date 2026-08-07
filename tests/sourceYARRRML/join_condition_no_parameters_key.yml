@@ -1,0 +1,21 @@
+prefixes:
+  ex: http://example.com/ns#
+
+mappings:
+  department:
+    sources:
+      - table: DEPT
+    s: http://data.example.com/department/$(DEPTNO)
+    po:
+      - [ex:name, $(DNAME)]
+
+  employee:
+    sources:
+      - table: EMP
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - p: ex:department
+        o:
+          - mapping: department
+            condition:
+              function: equal

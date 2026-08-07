@@ -159,6 +159,32 @@ TEST_CASE("translatePath: an all-inverse negated property set emits only the rev
 	CHECK_FALSE(contains(result.sql, "\"DEPTNO\" = "));
 }
 
+TEST_CASE("translatePath: a negated property set with both forward and inverse IRIs emits both arms, each "
+          "excluding only its own list") {
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	TranslatedPattern result = translateFirstTriple("emp_dept_path_nps_mixed.rq", mapping, dialect);
+
+	// !(ex:name|^ex:department): forwardIris = {ex:name}, inverseIris =
+	// {ex:department}, both non-empty, so translateNegatedPropertySet's guard
+	// (`!forwardIris.empty() || inverseIris.empty()`) takes its true branch via
+	// the first operand *and* the second arm's `!inverseIris.empty()` guard is
+	// also true - both arms get emitted in the same call, unlike the
+	// forward-only and inverse-only fixtures above.
+	CHECK(result.boundVars.count("d") == 1);
+	CHECK(result.boundVars.count("v") == 1);
+	CHECK(contains(result.sql, "UNION"));
+	// The forward arm excludes only ex:name, so ex:department's referencing
+	// object join (fixed-IRI predicate, not in forwardIris) survives forward.
+	CHECK(contains(result.sql, "\"DEPTNO\" = "));
+	CHECK(contains(result.sql, "\"LOC\""));
+	CHECK(contains(result.sql, "\"STAFF\""));
+	// The inverse arm excludes only ex:department (reversed), so ex:name's
+	// candidates (fixed IRI, not in inverseIris) survive in the reverse arm.
+	CHECK(contains(result.sql, "\"DNAME\""));
+	CHECK(contains(result.sql, "\"ENAME\""));
+}
+
 TEST_CASE("translatePath: a zero-or-one path unions the one-step path with the zero-length path") {
 	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
 	DuckDbDialect dialect;
@@ -169,6 +195,50 @@ TEST_CASE("translatePath: a zero-or-one path unions the one-step path with the z
 	CHECK(result.boundVars.count("d") == 1);
 	CHECK(contains(result.sql, "UNION"));
 	CHECK(contains(result.sql, "http://data.example.com/employee/7369"));
+}
+
+TEST_CASE("translatePath: a zero-or-one path with two bound, unequal endpoints degenerates to just the child path") {
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	TranslatedPattern result = translateFirstTriple("emp_dept_path_zero_or_one_bound_both.rq", mapping, dialect);
+
+	// <employee/7369> ex:department? <department/99> - both endpoints bound and
+	// unequal, so zeroLengthPath returns an EmptyNode with no schema: the
+	// `zero->kind() == RelKind::Empty && zero->schema().empty()` short-circuit
+	// in translateZeroOrOne fires and the union collapses to just the one-step
+	// child path, with no zero-length arm and no UNION at all.
+	CHECK(result.boundVars.empty());
+	CHECK_FALSE(contains(result.sql, "UNION"));
+	CHECK(contains(result.sql, "\"DEPTNO\" = "));
+	// Bound IRIs are inverted back to their raw template values for the
+	// filter, not compared against the full IRI string.
+	CHECK(contains(result.sql, "'7369'"));
+	CHECK(contains(result.sql, "'99'"));
+}
+
+TEST_CASE("translatePath: a zero-or-more path with two bound, unequal endpoints degenerates to just the "
+          "one-or-more closure") {
+	// Like the one-or-more/both-bound test below, the recursive CTE's WITH
+	// RECURSIVE prefix is only emitted by translateQuery's top-level call
+	// sites, so this must go through translateWholeQuery rather than
+	// translateFirstTriple/renderRelation.
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	std::string sql = translateWholeQuery("emp_dept_path_zero_or_more_bound_both.rq", mapping, dialect);
+
+	// <employee/7369> ex:knows* <employee/9999> - both endpoints bound and
+	// unequal, so zeroLengthPath's EmptyNode/empty-schema short-circuit fires
+	// in translateZeroOrMore: the result is exactly translateOneOrMore's
+	// BothBound EXISTS closure, with no zero-length arm unioned in and no
+	// UNION at all (unlike the two-unbound-endpoints ZeroOrMore case above,
+	// which always unions the closure with the zero-length arm).
+	// A single UNION remains (the recursive step's own base/step union inside
+	// the CTE), but no outer UNION combines the closure with a zero-length arm.
+	CHECK(sql.find("UNION") == sql.rfind("UNION"));
+	CHECK(contains(sql, "WITH RECURSIVE"));
+	CHECK(contains(sql, "EXISTS"));
+	CHECK(contains(sql, "http://data.example.com/employee/7369"));
+	CHECK(contains(sql, "http://data.example.com/employee/9999"));
 }
 
 TEST_CASE("translatePath: a zero-length path with two unbound endpoints ranges over all graph terms") {

@@ -95,6 +95,31 @@ TEST_CASE("comparison: two xsd:dateTime operands compare as timestamps", "[sparq
 	CHECK_FALSE(contains(sql, "CASE WHEN"));
 }
 
+TEST_CASE("comparison: two xsd:date operands compare as dates, not timestamps", "[sparql2sql]") {
+	// STRDT re-tags the untyped ex:plain column as xsd:date on both sides, so
+	// leftInfo.datatypeIri == rightInfo.datatypeIri == xsd:date and bothDates
+	// is true - the ternary's DATE arm, as opposed to the dateTime test above
+	// which only ever exercises the TIMESTAMP arm.
+	const std::string sql =
+	    translate("SELECT ?m WHERE { ?m ex:plain ?p . FILTER(STRDT(?p, xsd:date) = \"2020-01-01\"^^xsd:date) }");
+	CHECK(contains(sql, "AS DATE"));
+	CHECK_FALSE(contains(sql, "AS TIMESTAMP"));
+	CHECK_FALSE(contains(sql, "CASE WHEN"));
+}
+
+TEST_CASE("comparison: an xsd:date operand against an xsd:dateTime one compares as timestamps", "[sparql2sql]") {
+	// Both operands are temporal but not both xsd:date, so bothDates is false
+	// and *both* sides - including the date-typed left operand - go through
+	// tryCastToTimestamp rather than tryCastToDate. This is the mixed-type
+	// sibling of the two same-typed tests above: it forces the ternary's
+	// non-date arm specifically when one operand IS statically xsd:date.
+	const std::string sql =
+	    translate("SELECT ?m WHERE { ?m ex:plain ?p . ?m ex:when ?w . FILTER(STRDT(?p, xsd:date) < ?w) }");
+	CHECK(contains(sql, "AS TIMESTAMP"));
+	CHECK_FALSE(contains(sql, "AS DATE"));
+	CHECK_FALSE(contains(sql, "CASE WHEN"));
+}
+
 TEST_CASE("comparison: an IRI-kind operand equated with a literal-kind one folds", "[sparql2sql]") {
 	CHECK(contains(translate("SELECT ?m WHERE { ?m ex:homepage ?h . ?m ex:plain ?p . FILTER(?h = ?p) }"), "FALSE"));
 	CHECK(contains(translate("SELECT ?m WHERE { ?m ex:homepage ?h . ?m ex:plain ?p . FILTER(?h != ?p) }"), "TRUE"));
@@ -138,6 +163,20 @@ TEST_CASE("arithmetic: an unknown-datatype operand keeps the DOUBLE path", "[spa
 
 TEST_CASE("arithmetic: a decimal operand is numeric but not integral", "[sparql2sql]") {
 	const std::string sql = translate("SELECT ?s WHERE { ?m ex:price ?p . BIND(?p + 1 AS ?s) }");
+	CHECK(contains(sql, "AS DOUBLE"));
+	CHECK_FALSE(contains(sql, "AS BIGINT"));
+}
+
+TEST_CASE("unary +/-: a known-integral operand stays integral", "[sparql2sql]") {
+	// Mirrors the binary arithmetic() integral-preservation tests: without it,
+	// -?a over an xsd:integer column renders "-10.0" instead of "-10".
+	const std::string sql = translate("SELECT ?s ?t WHERE { ?m ex:amount ?a . BIND(-?a AS ?s) BIND(+?a AS ?t) }");
+	CHECK(contains(sql, "AS BIGINT"));
+	CHECK_FALSE(contains(sql, "AS DOUBLE"));
+}
+
+TEST_CASE("unary +/-: an unknown-datatype operand goes through DOUBLE", "[sparql2sql]") {
+	const std::string sql = translate("SELECT ?s ?t WHERE { ?m ex:plain ?p . BIND(-?p AS ?s) BIND(+?p AS ?t) }");
 	CHECK(contains(sql, "AS DOUBLE"));
 	CHECK_FALSE(contains(sql, "AS BIGINT"));
 }

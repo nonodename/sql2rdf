@@ -210,6 +210,53 @@ TEST_CASE("translateTriplePattern: a pattern matching zero candidates is a valid
 	CHECK(result.sql.find("WHERE FALSE") != std::string::npos);
 }
 
+TEST_CASE("translateTriplePattern: a pure rr:column subject map takes the native-key merge-signature path") {
+	// parser_full_forms.ttl's TriplesMapFull uses rr:subjectMap [ rr:column
+	// "EMPNO"; rr:class ex:Employee ] -- i.e. a *plain column* subject map
+	// (Provenance::PureColumn), not rr:template. Matching its synthetic
+	// rr:class candidate (mergeableSubject=true, subject is a variable) drives
+	// tryAddCandidate's subjectKeySig computation through the "col:<column>"
+	// branch, the sibling of the already-covered "tmpl:<template>" branch.
+	Parser parser;
+	auto q = parser.parseString("PREFIX ex: <http://example.com/ns#>\n"
+	                            "SELECT * WHERE { ?s a ex:Employee }");
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "parser_full_forms.ttl");
+	REQUIRE(mapping.isValid());
+
+	DuckDbDialect dialect;
+	TranslationContext ctx(mapping, dialect);
+	TranslatedPattern result = translated(nthTriple(*q, 0), ctx);
+
+	CHECK(result.boundVars.count("s") == 1);
+	CHECK(result.sql.find("\"EMP\"") != std::string::npos);
+	CHECK(result.sql.find("\"EMPNO\"") != std::string::npos);
+}
+
+TEST_CASE("translateTriplePattern: a composite (multi-column) join condition renders AND-joined ON clauses") {
+	// sparql2sql_composite_join.ttl's ReferencingObjectMap has TWO
+	// rr:joinCondition entries (ORDERID and REGION), exercising the loop in
+	// translateAtomicPattern that joins each ON-clause equality with " AND "
+	// (only the first of two conditions was previously covered).
+	Parser parser;
+	auto q = parser.parseString("PREFIX ex: <http://example.com/ns#>\n"
+	                            "SELECT * WHERE { ?l ex:order ?o }");
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_composite_join.ttl");
+	REQUIRE(mapping.isValid());
+
+	DuckDbDialect dialect;
+	TranslationContext ctx(mapping, dialect);
+	TranslatedPattern result = translated(nthTriple(*q, 0), ctx);
+
+	CHECK(result.boundVars.count("l") == 1);
+	CHECK(result.boundVars.count("o") == 1);
+	CHECK(result.sql.find("JOIN") != std::string::npos);
+	CHECK(result.sql.find("\"ORDERID\"") != std::string::npos);
+	CHECK(result.sql.find("\"REGION\"") != std::string::npos);
+	CHECK(result.sql.find(" AND ") != std::string::npos);
+}
+
 // Every path operator, including the two recursive ones, desugars into an IR
 // relation rather than reaching a translation error; see
 // test_sparql2sql_paths.cpp for the property-path-specific structural

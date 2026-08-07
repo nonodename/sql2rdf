@@ -4,11 +4,17 @@
 #include <utility>
 #include <vector>
 
+#include "r2rml/R2RMLMapping.h"
+#include "sparql2sql/DuckDbDialect.h"
+#include "sparql2sql/TranslatedPattern.h"
 #include "sparql2sql/TypeCatalog.h"
 #include "sparql2sql/ir/Optimizer.h"
 #include "sparql2sql/ir/RelNode.h"
+#include "sparql2sql/ir/SqlRenderer.h"
 
+using r2rml::R2RMLMapping;
 using sparql2sql::ColumnInfo;
+using sparql2sql::DuckDbDialect;
 using sparql2sql::EquiKey;
 using sparql2sql::JoinKind;
 using sparql2sql::JoinNode;
@@ -17,8 +23,11 @@ using sparql2sql::OptimizerOptions;
 using sparql2sql::Provenance;
 using sparql2sql::RelKind;
 using sparql2sql::RelNodePtr;
+using sparql2sql::renderRelation;
 using sparql2sql::SpjRelation;
 using sparql2sql::SpjSource;
+using sparql2sql::TranslatedPattern;
+using sparql2sql::TranslationContext;
 using sparql2sql::TypeCatalog;
 
 namespace {
@@ -374,4 +383,107 @@ TEST_CASE("optimize: self-join elimination collapses same-table same-subject sca
 	for (const auto &c : spj.whereConds) {
 		CHECK(c.find(" = ") == std::string::npos);
 	}
+}
+
+// --- SqlRenderer: renderSpj / renderChild native-key hidden projection ---
+//
+// planNativeKeys only ever populates a non-empty `extra` (the hidden
+// hidden-key-column projections renderChild needs to append across a
+// derived-table boundary) when both join sides are directly an SpjRelation
+// and the key is non-null-safe with catalog-comparable native columns; it is
+// only ever called by renderJoin/renderAntiJoin on an unflattened JoinNode
+// (LeftOuter is a flattening boundary, and these tests never call optimize()
+// at all), so renderRelation on a hand-built JoinNode is what actually drives
+// the native-key path end to end.
+
+TEST_CASE("renderSpj: a native-key hidden projection is appended alongside existing schema columns",
+          "[sparql2sql][ir]") {
+	// Both join sides keep their own projected columns (schema non-empty) while
+	// also picking up the hidden native-key column - the common real shape,
+	// and previously untested: every existing renderSpj call rendered with
+	// `extra == nullptr` (see NativeKey-free tests above), never a non-null,
+	// non-empty one alongside a populated schema.
+	std::vector<ColumnInfo> leftCols = {pureCol("k", "t1", "capIQCompanyID", "company", true),
+	                                    pureCol("a", "t1", "A", "company", true)};
+	std::vector<ColumnInfo> rightCols = {pureCol("k", "t2", "parent", "relations", true),
+	                                     pureCol("b", "t2", "B", "relations", true)};
+	RelNodePtr join = makeJoin(JoinKind::LeftOuter, makeSpj("t1", "company", leftCols, false),
+	                           makeSpj("t2", "relations", rightCols, false), "k", /*nullSafe=*/false);
+
+	TypeCatalog cat;
+	cat.columnTypes["company"]["capIQCompanyID"] = "BIGINT";
+	cat.columnTypes["relations"]["parent"] = "BIGINT";
+	R2RMLMapping mapping;
+	DuckDbDialect dialect;
+	TranslationContext ctx(mapping, dialect, &cat);
+
+	// Rendered directly (no optimize()): a LeftOuter JoinNode is never
+	// flattened, so renderJoin -> planNativeKeys -> renderChild -> renderSpj
+	// run exactly as they would for a real OPTIONAL query.
+	TranslatedPattern result = renderRelation(*join, ctx);
+
+	// The hidden "k_0" native-key column is projected by both sides (each via
+	// renderChild's extra-carrying renderSpj call) and used for the join
+	// condition instead of the term-text comparison.
+	CHECK(result.sql.find("\"k_0\"") != std::string::npos);
+	CHECK(result.sql.find("t1.\"capIQCompanyID\"") != std::string::npos);
+	CHECK(result.sql.find("t2.\"parent\"") != std::string::npos);
+}
+
+TEST_CASE("renderSpj: a schema-less join side still surfaces its native-key hidden projection", "[sparql2sql][ir]") {
+	// A degenerate but legal IR shape: the left join side contributes no
+	// columns of its own to the output (its schema is empty), but the
+	// EquiKey's leftCol/rightCol - independent of what is or isn't in that
+	// side's own schema - still make it native-key-eligible. This targets
+	// renderSpj's `rel.schema().empty() && (extra == nullptr || extra->empty())`
+	// condition: schema *is* empty, but extra is non-null and non-empty, so
+	// the overall condition is false and the "1 AS _dummy" placeholder must
+	// NOT be emitted - the hidden key column becomes the entire SELECT list.
+	RelNodePtr left(new SpjRelation());
+	{
+		SpjRelation &spj = static_cast<SpjRelation &>(*left);
+		SpjSource src;
+		src.sql = "\"company\" AS t1";
+		src.alias = "t1";
+		src.tableIdentity = "company";
+		spj.sources.push_back(src);
+		// No schema columns pushed: this side projects nothing of its own.
+	}
+	RelNodePtr right(new SpjRelation());
+	{
+		SpjRelation &spj = static_cast<SpjRelation &>(*right);
+		SpjSource src;
+		src.sql = "\"relations\" AS t2";
+		src.alias = "t2";
+		src.tableIdentity = "relations";
+		spj.sources.push_back(src);
+		spj.schema().push_back(pureCol("b", "t2", "B", "relations", true));
+	}
+
+	RelNodePtr node(new JoinNode());
+	JoinNode &j = static_cast<JoinNode &>(*node);
+	j.joinKind = JoinKind::Inner;
+	EquiKey k;
+	k.var = "k";
+	k.leftCol = pureCol("k", "t1", "capIQCompanyID", "company", true);
+	k.rightCol = pureCol("k", "t2", "parent", "relations", true);
+	k.nullSafe = false;
+	j.keys.push_back(k);
+	j.schema().push_back(pureCol("b", "t2", "B", "relations", true));
+	j.left = std::move(left);
+	j.right = std::move(right);
+
+	TypeCatalog cat;
+	cat.columnTypes["company"]["capIQCompanyID"] = "BIGINT";
+	cat.columnTypes["relations"]["parent"] = "BIGINT";
+	R2RMLMapping mapping;
+	DuckDbDialect dialect;
+	TranslationContext ctx(mapping, dialect, &cat);
+
+	TranslatedPattern result = renderRelation(*node, ctx);
+
+	// The hidden key column is present (the empty-schema side is not reduced
+	// to the dummy placeholder), sourced from the native, uncast column.
+	CHECK(result.sql.find("\"k_0\"") != std::string::npos);
+	CHECK(result.sql.find("t1.\"capIQCompanyID\"") != std::string::npos);
 }

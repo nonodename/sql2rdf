@@ -12,6 +12,7 @@ using sparql::ParseError;
 using sparql::Parser;
 using sparql::ast::AlternativePath;
 using sparql::ast::BasicGraphPattern;
+using sparql::ast::InversePath;
 using sparql::ast::NegatedPropertySet;
 using sparql::ast::OneOrMorePath;
 using sparql::ast::PathKind;
@@ -20,6 +21,7 @@ using sparql::ast::PropertyPathExpr;
 using sparql::ast::Query;
 using sparql::ast::SequencePath;
 using sparql::ast::VariablePath;
+using sparql::ast::ZeroOrMorePath;
 
 namespace {
 const PropertyPathExpr &predicateOf(const Query &q, std::size_t elementIndex = 0, std::size_t tripleIndex = 0) {
@@ -122,4 +124,49 @@ TEST_CASE("Property path spec examples all parse: knows+/name, type/subClassOf*,
 TEST_CASE("An unterminated negated property set is a ParseError") {
 	Parser parser;
 	REQUIRE_THROWS_AS(parser.parseFile(SOURCE_SPARQL_DIR "invalid_incomplete_property_path.rq"), ParseError);
+}
+
+TEST_CASE("Negated property set 'a' shorthand, ungrouped: '!a' means '!(rdf:type)'") {
+	Parser parser;
+	auto q = parser.parseString("SELECT * WHERE { ?s !a ?o }");
+	const auto &n = static_cast<const NegatedPropertySet &>(predicateOf(*q));
+	REQUIRE(n.forward.size() == 1);
+	REQUIRE(n.inverse.empty());
+	REQUIRE(n.forward[0]->value == "http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+}
+
+TEST_CASE("Negated property set 'a' shorthand inside a grouped set, both forward and inverse: '!(a|^a)'") {
+	Parser parser;
+	auto q = parser.parseString("SELECT * WHERE { ?s !(a|^a) ?o }");
+	const auto &n = static_cast<const NegatedPropertySet &>(predicateOf(*q));
+	REQUIRE(n.forward.size() == 1);
+	REQUIRE(n.inverse.size() == 1);
+	REQUIRE(n.forward[0]->value == "http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+	REQUIRE(n.inverse[0]->value == "http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+}
+
+TEST_CASE("Chained compound path mixing sequence, alternative, inverse and repetition: 'a/knows+|^p*/q'") {
+	Parser parser;
+	auto q = parser.parseString("PREFIX ex: <http://ex/>\n"
+	                            "PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n"
+	                            "SELECT * WHERE { ?s a/foaf:knows+|^ex:p*/ex:q ?o }");
+	const auto &alt = static_cast<const AlternativePath &>(predicateOf(*q));
+	REQUIRE(alt.kind() == PathKind::Alternative);
+
+	// Left arm: sequence 'a/foaf:knows+'
+	const auto &leftSeq = static_cast<const SequencePath &>(*alt.left);
+	REQUIRE(leftSeq.left->kind() == PathKind::Predicate);
+	REQUIRE(static_cast<const PredicatePath &>(*leftSeq.left).iri->value ==
+	        "http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+	const auto &leftPlus = static_cast<const OneOrMorePath &>(*leftSeq.right);
+	REQUIRE(leftPlus.child->kind() == PathKind::Predicate);
+	REQUIRE(static_cast<const PredicatePath &>(*leftPlus.child).iri->value == "http://xmlns.com/foaf/0.1/knows");
+
+	// Right arm: sequence '^ex:p*/ex:q'
+	const auto &rightSeq = static_cast<const SequencePath &>(*alt.right);
+	const auto &rightInv = static_cast<const InversePath &>(*rightSeq.left);
+	const auto &rightStar = static_cast<const ZeroOrMorePath &>(*rightInv.child);
+	REQUIRE(static_cast<const PredicatePath &>(*rightStar.child).iri->value == "http://ex/p");
+	REQUIRE(rightSeq.right->kind() == PathKind::Predicate);
+	REQUIRE(static_cast<const PredicatePath &>(*rightSeq.right).iri->value == "http://ex/q");
 }
