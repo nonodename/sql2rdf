@@ -357,9 +357,14 @@ std::string renderTransitiveClosure(const TransitiveClosureNode &tc, Translation
 	const std::string &walkCol = forward ? fromCol : toCol;
 	const std::string &landCol = forward ? toCol : fromCol;
 
+	std::string seedAlias = ctx.nextAlias();
 	std::string s = ctx.nextAlias();
 	std::string r = ctx.nextAlias();
-	std::string seed = "SELECT " + tc.anchorLiteral + " AS " + cteNode;
+	// One hop from the anchor, not the anchor itself: this node's minimum
+	// cardinality is always 1 (see class comment), so seeding with the anchor
+	// verbatim would wrongly include it as a zero-hop "reachable" result.
+	std::string seed = "SELECT " + seedAlias + "." + landCol + " AS " + cteNode + " FROM " + stepCte + " AS " +
+	                   seedAlias + " WHERE " + seedAlias + "." + walkCol + " = " + tc.anchorLiteral;
 	std::string recursive = "SELECT " + s + "." + landCol + " FROM " + closureCte + " AS " + r + " JOIN " + stepCte +
 	                        " AS " + s + " ON " + r + "." + cteNode + " = " + s + "." + walkCol;
 	ctx.addCte(closureCte, seed + " UNION " + recursive);

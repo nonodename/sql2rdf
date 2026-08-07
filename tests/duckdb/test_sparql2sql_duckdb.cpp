@@ -753,6 +753,42 @@ TEST_CASE("sparql2sql_path_terms_star.rq: a zero-or-more path over an acyclic ch
 	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/2"}, {"V_Y", "http://ex.org/node/3"}}));
 }
 
+TEST_CASE("sparql2sql_path_terms_plus_bound_subject.rq: a bound-subject one-or-more path over an acyclic chain "
+          "excludes the starting node itself") {
+	// Regression test: the unary reachable-set seed must start from the
+	// anchor's one-hop successors, not the anchor itself. Node 1's chain
+	// (1 -> 2 -> 3 -> NULL) never loops back, so node 1 must not appear in its
+	// own E+ reachable set even though it's the seed.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_path_terms_plus_bound_subject.rq", "sparql2sql_path_terms.ttl");
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_Y", "http://ex.org/node/2"}}));
+	CHECK(containsRow(rows, {{"V_Y", "http://ex.org/node/3"}}));
+	CHECK_FALSE(containsRow(rows, {{"V_Y", "http://ex.org/node/1"}}));
+}
+
+TEST_CASE("sparql2sql_path_terms_plus_bound_object.rq: a bound-object one-or-more path over an acyclic chain "
+          "excludes the ending node itself") {
+	// Same regression, walked backward: node 3 is the anchor and must not
+	// appear in its own reachable-from set.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_path_terms_plus_bound_object.rq", "sparql2sql_path_terms.ttl");
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/1"}}));
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/2"}}));
+	CHECK_FALSE(containsRow(rows, {{"V_X", "http://ex.org/node/3"}}));
+}
+
+TEST_CASE("sparql2sql_path_terms_plus_bound_both_self.rq: ASK is false for a node reaching itself with no cycle") {
+	// Both endpoints bound to the same node in an acyclic graph: E+ requires
+	// >=1 hop, and node 1 never loops back to itself, so this must be false -
+	// not vacuously true from a zero-hop seed.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_path_terms_plus_bound_both_self.rq", "sparql2sql_path_terms.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(rows[0].at("ASK") == "false");
+}
+
 TEST_CASE("sparql2sql_path_cycle_plus.rq: a one-or-more path over a 3-cycle terminates with the full pairs closure") {
 	// A hang here (rather than a failed assertion) would be the primary
 	// cycle-safety failure mode - the recursive CTE's UNION (not UNION ALL)
