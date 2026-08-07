@@ -31,6 +31,7 @@ cmake --build build --target sql2rdf_sparql2sql # SPARQL-to-SQL translator (no D
 cmake --build build --target test_runner       # tests (no DuckDB needed)
 cmake --build build --target SQL2RDF++         # CLI (requires DuckDB installed, e.g. `brew install duckdb`)
 cmake --build build --target sql2rdf_benchmark # SPARQL-to-SQL performance harness (requires DuckDB)
+cmake --build build --target coverage          # gcovr test coverage
 cmake --build build                            # everything
 ```
 
