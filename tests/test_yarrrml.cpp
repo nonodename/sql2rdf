@@ -456,6 +456,59 @@ TEST_CASE("YARRRML CURIE-prefixed templates - subject and object templates expan
 	REQUIRE(mapping.isValid());
 }
 
+TEST_CASE("YARRRML predicate as a bare column reference produces an rr:column predicateMap") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "predicate_column.yml", true);
+	REQUIRE(mapping.parseErrors.empty());
+
+	TriplesMap *tm = findById(mapping, "employee");
+	REQUIRE(tm != nullptr);
+	REQUIRE(tm->predicateObjectMaps.size() == 1);
+	auto *pred = dynamic_cast<ColumnTermMap *>(tm->predicateObjectMaps[0]->predicateMaps[0].get());
+	REQUIRE(pred != nullptr);
+	REQUIRE(pred->columnName == "REL");
+}
+
+TEST_CASE(
+    "YARRRML predicate mixing a literal IRI prefix with a column reference produces an rr:template predicateMap") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "predicate_template.yml", true);
+	REQUIRE(mapping.parseErrors.empty());
+
+	TriplesMap *tm = findById(mapping, "employee");
+	REQUIRE(tm != nullptr);
+	REQUIRE(tm->predicateObjectMaps.size() == 1);
+	auto *pred = dynamic_cast<TemplateTermMap *>(tm->predicateObjectMaps[0]->predicateMaps[0].get());
+	REQUIRE(pred != nullptr);
+	REQUIRE(pred->templateString == "http://example.com/ns#{REL}");
+}
+
+TEST_CASE("YARRRML subject as a bare column reference produces an rr:column subjectMap value") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "subject_column.yml", true);
+	REQUIRE(mapping.parseErrors.empty());
+
+	TriplesMap *tm = findById(mapping, "employee");
+	REQUIRE(tm != nullptr);
+	REQUIRE(tm->subjectMap != nullptr);
+	auto *col = dynamic_cast<const ColumnTermMap *>(tm->subjectMap->valueTermMap());
+	REQUIRE(col != nullptr);
+	REQUIRE(col->columnName == "EMPNO");
+}
+
+TEST_CASE("YARRRML subject as a plain constant IRI (no column reference) produces an rr:constant subjectMap value") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "subject_constant_iri.yml", true);
+	REQUIRE(mapping.parseErrors.empty());
+
+	TriplesMap *tm = findById(mapping, "employee");
+	REQUIRE(tm != nullptr);
+	REQUIRE(tm->subjectMap != nullptr);
+	auto *cst = dynamic_cast<const ConstantTermMap *>(tm->subjectMap->valueTermMap());
+	REQUIRE(cst != nullptr);
+	REQUIRE(nodeUri(cst->constantValue) == "http://example.com/ns#fixedSubject");
+}
+
 TEST_CASE("YARRRML Example 5 - CASE SQL view with role template object") {
 	YARRRMLParser parser;
 	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "example5.yml");
@@ -782,6 +835,36 @@ TEST_CASE("YARRRML parse - join condition with unrecognised parameters is skippe
 	REQUIRE(hasError(mapping, "join condition parameters not recognised"));
 }
 
+TEST_CASE("YARRRML parse - join condition parameters given as a non-sequence scalar is skipped") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "join_condition_parameters_not_sequence.yml", true);
+	REQUIRE(hasError(mapping, "join condition missing parameters"));
+}
+
+TEST_CASE("YARRRML parse - join condition with no 'parameters' key at all is skipped") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "join_condition_no_parameters_key.yml", true);
+	REQUIRE(hasError(mapping, "join condition missing parameters"));
+}
+
+TEST_CASE("YARRRML parse - a join condition parameter entry that isn't itself a sequence is skipped") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "join_condition_param_entry_not_sequence.yml", true);
+	REQUIRE(hasError(mapping, "join condition parameters not recognised"));
+}
+
+TEST_CASE("YARRRML parse - a join condition parameter entry with fewer than 2 elements is skipped") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "join_condition_param_entry_too_short.yml", true);
+	REQUIRE(hasError(mapping, "join condition parameters not recognised"));
+}
+
+TEST_CASE("YARRRML parse - a join condition parameter entry whose second element isn't scalar is skipped") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "join_condition_param_second_not_scalar.yml", true);
+	REQUIRE(hasError(mapping, "join condition parameters not recognised"));
+}
+
 TEST_CASE("YARRRML parse - multiple subjects produces a non-fatal warning") {
 	YARRRMLParser parser;
 	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "multiple_subjects_warning.yml", true);
@@ -825,6 +908,21 @@ TEST_CASE("YARRRML parse - a map-form object value ({value:,datatype:}) is trans
 	TriplesMap *measurement = findById(mapping, "measurement");
 	REQUIRE(measurement != nullptr);
 	REQUIRE(measurement->predicateObjectMaps.size() == 1);
+}
+
+TEST_CASE("YARRRML parse - a map-form object value with a scalar 'language' tag is translated") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "object_map_language_form.yml", true);
+	REQUIRE(mapping.parseErrors.empty());
+
+	TriplesMap *employee = findById(mapping, "employee");
+	REQUIRE(employee != nullptr);
+	REQUIRE(employee->predicateObjectMaps.size() == 1);
+	auto *col = dynamic_cast<ColumnTermMap *>(employee->predicateObjectMaps[0]->objectMaps[0].get());
+	REQUIRE(col != nullptr);
+	REQUIRE(col->columnName == "ENAME");
+	REQUIRE(col->languageTag != nullptr);
+	REQUIRE(*col->languageTag == "en");
 }
 
 TEST_CASE("YARRRML parse - a malformed object value array is skipped with a warning") {

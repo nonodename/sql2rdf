@@ -1,0 +1,23 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# A pure 3-cycle (1 -> 2 -> 3 -> 1, no dangling end), backing the E+/E*
+# cycle-safety tests: real graph data has cycles, and a recursive CTE that
+# only worked on the acyclic NODES chain (sparql2sql_path_terms.ttl) wouldn't
+# actually prove termination/dedup.
+
+<#CycleNodeMap>
+    rr:logicalTable [ rr:tableName "CYCLE_NODES" ];
+    rr:subjectMap [
+        rr:template "http://ex.org/cycle/{ID}";
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:next;
+        rr:objectMap [
+            rr:parentTriplesMap <#CycleNodeMap>;
+            rr:joinCondition [
+                rr:child "NEXT";
+                rr:parent "ID";
+            ];
+        ];
+    ].

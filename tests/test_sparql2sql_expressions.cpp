@@ -200,6 +200,33 @@ TEST_CASE("FILTER/BIND: RAND()/UUID()/STRUUID() map to per-row DuckDB scalar fun
 	CHECK(struuidSql.find("urn:uuid:") == std::string::npos);
 }
 
+TEST_CASE("FILTER/BIND: CONCAT() with varying argument counts translates via the dialect's concat()") {
+	// No prior test exercised BuiltinFunction::Concat at all. Cover 1, 2, and
+	// 3+ arguments so DuckDbDialect::concat()'s "i > 0 -> emit ' || '" loop
+	// branch is taken zero, one, and two-plus times across the suite, not just
+	// whatever a single fixed arity would give.
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+
+	// The overall query SQL legitimately contains unrelated "||" concatenation
+	// (from the subject IRI template), so isolate the ?c expression itself.
+	std::string oneArg = translate("SELECT ?e ?c WHERE { ?e ex:name ?n . BIND(CONCAT(?n) AS ?c) }", mapping);
+	std::size_t cPos = oneArg.find("AS \"v_c\"");
+	REQUIRE(cPos != std::string::npos);
+	std::size_t exprStart = oneArg.rfind(", ", cPos);
+	REQUIRE(exprStart != std::string::npos);
+	CHECK(oneArg.substr(exprStart, cPos - exprStart).find("||") == std::string::npos);
+
+	std::string twoArgs = translate("SELECT ?e ?c WHERE { ?e ex:name ?n . BIND(CONCAT(?n, \"-x\") AS ?c) }", mapping);
+	CHECK(twoArgs.find(" || ") != std::string::npos);
+
+	std::string threeArgs =
+	    translate("SELECT ?e ?c WHERE { ?e ex:name ?n . BIND(CONCAT(?n, \"-\", ?n) AS ?c) }", mapping);
+	std::size_t first = threeArgs.find(" || ");
+	CHECK(first != std::string::npos);
+	CHECK(threeArgs.find(" || ", first + 1) != std::string::npos);
+}
+
 TEST_CASE("FILTER/BIND: ENCODE_FOR_URI() percent-encodes via the dialect, matching forward R2RML generation") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");

@@ -159,6 +159,32 @@ TEST_CASE("translatePath: an all-inverse negated property set emits only the rev
 	CHECK_FALSE(contains(result.sql, "\"DEPTNO\" = "));
 }
 
+TEST_CASE("translatePath: a negated property set with both forward and inverse IRIs emits both arms, each "
+          "excluding only its own list") {
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	TranslatedPattern result = translateFirstTriple("emp_dept_path_nps_mixed.rq", mapping, dialect);
+
+	// !(ex:name|^ex:department): forwardIris = {ex:name}, inverseIris =
+	// {ex:department}, both non-empty, so translateNegatedPropertySet's guard
+	// (`!forwardIris.empty() || inverseIris.empty()`) takes its true branch via
+	// the first operand *and* the second arm's `!inverseIris.empty()` guard is
+	// also true - both arms get emitted in the same call, unlike the
+	// forward-only and inverse-only fixtures above.
+	CHECK(result.boundVars.count("d") == 1);
+	CHECK(result.boundVars.count("v") == 1);
+	CHECK(contains(result.sql, "UNION"));
+	// The forward arm excludes only ex:name, so ex:department's referencing
+	// object join (fixed-IRI predicate, not in forwardIris) survives forward.
+	CHECK(contains(result.sql, "\"DEPTNO\" = "));
+	CHECK(contains(result.sql, "\"LOC\""));
+	CHECK(contains(result.sql, "\"STAFF\""));
+	// The inverse arm excludes only ex:department (reversed), so ex:name's
+	// candidates (fixed IRI, not in inverseIris) survive in the reverse arm.
+	CHECK(contains(result.sql, "\"DNAME\""));
+	CHECK(contains(result.sql, "\"ENAME\""));
+}
+
 TEST_CASE("translatePath: a zero-or-one path unions the one-step path with the zero-length path") {
 	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
 	DuckDbDialect dialect;
@@ -169,6 +195,50 @@ TEST_CASE("translatePath: a zero-or-one path unions the one-step path with the z
 	CHECK(result.boundVars.count("d") == 1);
 	CHECK(contains(result.sql, "UNION"));
 	CHECK(contains(result.sql, "http://data.example.com/employee/7369"));
+}
+
+TEST_CASE("translatePath: a zero-or-one path with two bound, unequal endpoints degenerates to just the child path") {
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	TranslatedPattern result = translateFirstTriple("emp_dept_path_zero_or_one_bound_both.rq", mapping, dialect);
+
+	// <employee/7369> ex:department? <department/99> - both endpoints bound and
+	// unequal, so zeroLengthPath returns an EmptyNode with no schema: the
+	// `zero->kind() == RelKind::Empty && zero->schema().empty()` short-circuit
+	// in translateZeroOrOne fires and the union collapses to just the one-step
+	// child path, with no zero-length arm and no UNION at all.
+	CHECK(result.boundVars.empty());
+	CHECK_FALSE(contains(result.sql, "UNION"));
+	CHECK(contains(result.sql, "\"DEPTNO\" = "));
+	// Bound IRIs are inverted back to their raw template values for the
+	// filter, not compared against the full IRI string.
+	CHECK(contains(result.sql, "'7369'"));
+	CHECK(contains(result.sql, "'99'"));
+}
+
+TEST_CASE("translatePath: a zero-or-more path with two bound, unequal endpoints degenerates to just the "
+          "one-or-more closure") {
+	// Like the one-or-more/both-bound test below, the recursive CTE's WITH
+	// RECURSIVE prefix is only emitted by translateQuery's top-level call
+	// sites, so this must go through translateWholeQuery rather than
+	// translateFirstTriple/renderRelation.
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	std::string sql = translateWholeQuery("emp_dept_path_zero_or_more_bound_both.rq", mapping, dialect);
+
+	// <employee/7369> ex:knows* <employee/9999> - both endpoints bound and
+	// unequal, so zeroLengthPath's EmptyNode/empty-schema short-circuit fires
+	// in translateZeroOrMore: the result is exactly translateOneOrMore's
+	// BothBound EXISTS closure, with no zero-length arm unioned in and no
+	// UNION at all (unlike the two-unbound-endpoints ZeroOrMore case above,
+	// which always unions the closure with the zero-length arm).
+	// A single UNION remains (the recursive step's own base/step union inside
+	// the CTE), but no outer UNION combines the closure with a zero-length arm.
+	CHECK(sql.find("UNION") == sql.rfind("UNION"));
+	CHECK(contains(sql, "WITH RECURSIVE"));
+	CHECK(contains(sql, "EXISTS"));
+	CHECK(contains(sql, "http://data.example.com/employee/7369"));
+	CHECK(contains(sql, "http://data.example.com/employee/9999"));
 }
 
 TEST_CASE("translatePath: a zero-length path with two unbound endpoints ranges over all graph terms") {
@@ -209,20 +279,84 @@ TEST_CASE("SELECT * never projects a blank-node position") {
 	CHECK_FALSE(contains(projection, "_bnode_"));
 }
 
-TEST_CASE("translatePath: the unsupported one-or-more operator throws and names itself") {
+TEST_CASE("translatePath: a one-or-more path with both endpoints unbound is a full pairs closure") {
+	// unsupported_property_path.rq: ?s ex:knows+ ?o - the pre-recursive-CTE
+	// codebase rejected this; both endpoints are variables, so this is the
+	// expensive full (from, to) pairs closure case. The WITH RECURSIVE prefix
+	// is only emitted by translateQuery's two top-level call sites, so this
+	// (unlike the other translatePath tests in this file) must go through the
+	// whole-query path rather than translateFirstTriple/renderRelation.
 	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
 	DuckDbDialect dialect;
-	Parser parser;
-	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "unsupported_property_path.rq");
-	TranslationContext ctx(mapping, dialect);
-	CHECK_THROWS_AS(translateTriplePattern(firstTriple(*q), ctx), TranslationError);
+	std::string sql = translateWholeQuery("unsupported_property_path.rq", mapping, dialect);
+
+	CHECK(contains(sql, "WITH RECURSIVE"));
+	CHECK(contains(sql, "UNION"));
+	CHECK_FALSE(contains(sql, "UNION ALL"));
+	CHECK(contains(outerSelectList(sql), "\"v_s\""));
+	CHECK(contains(outerSelectList(sql), "\"v_o\""));
 }
 
-TEST_CASE("translatePath: the unsupported zero-or-more operator throws and names itself") {
+TEST_CASE("translatePath: a zero-or-more path unions the one-or-more closure with the zero-length path") {
+	// unsupported_path_star.rq: ?s ex:knows* ?o.
 	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
 	DuckDbDialect dialect;
-	Parser parser;
-	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "unsupported_path_star.rq");
-	TranslationContext ctx(mapping, dialect);
-	CHECK_THROWS_AS(translateTriplePattern(firstTriple(*q), ctx), TranslationError);
+	std::string sql = translateWholeQuery("unsupported_path_star.rq", mapping, dialect);
+
+	CHECK(contains(sql, "WITH RECURSIVE"));
+	// The outer relation unions the E+ closure with the zero-length arm.
+	CHECK(contains(sql, "UNION"));
+	CHECK(contains(outerSelectList(sql), "\"v_s\""));
+	CHECK(contains(outerSelectList(sql), "\"v_o\""));
+}
+
+TEST_CASE("translatePath: a one-or-more path with a bound subject seeds a unary reachable-set forward") {
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	std::string sql = translateWholeQuery("emp_dept_path_plus_bound_subject.rq", mapping, dialect);
+
+	// <employee/7369> ex:knows+ ?m - seeded forward from the bound subject: a
+	// unary "cte_node" reachable-set, not a two-column pairs CTE.
+	CHECK(contains(sql, "WITH RECURSIVE"));
+	CHECK(contains(sql, "\"cte_node\""));
+	CHECK_FALSE(contains(sql, "\"cte_from\""));
+	CHECK(contains(sql, "http://data.example.com/employee/7369"));
+	CHECK(contains(outerSelectList(sql), "\"v_m\""));
+}
+
+TEST_CASE("translatePath: a one-or-more path with a bound object seeds a unary reachable-set backward") {
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	std::string sql = translateWholeQuery("emp_dept_path_plus_bound_object.rq", mapping, dialect);
+
+	// ?m ex:knows+ <employee/7839> - seeded backward from the bound object:
+	// still a unary reachable-set, walked in reverse.
+	CHECK(contains(sql, "WITH RECURSIVE"));
+	CHECK(contains(sql, "\"cte_node\""));
+	CHECK_FALSE(contains(sql, "\"cte_from\""));
+	CHECK(contains(sql, "http://data.example.com/employee/7839"));
+	CHECK(contains(outerSelectList(sql), "\"v_m\""));
+}
+
+TEST_CASE("translatePath: a one-or-more path with both endpoints bound is an EXISTS membership test") {
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	TranslatedPattern result = translateFirstTriple("emp_dept_path_plus_bound_both.rq", mapping, dialect);
+
+	// Both bound and unequal: no columns to project, just closure membership.
+	CHECK(result.boundVars.empty());
+	CHECK(contains(result.sql, "EXISTS"));
+	CHECK_FALSE(contains(result.sql, "\"cte_from\""));
+}
+
+TEST_CASE("translatePath: a one-or-more path with the same variable on both ends filters the closure diagonal") {
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	std::string sql = translateWholeQuery("emp_dept_path_plus_same_var.rq", mapping, dialect);
+
+	// ?m ex:knows+ ?m - only the diagonal of the pairs closure satisfies the
+	// pattern, so exactly one variable is projected.
+	CHECK(contains(sql, "WITH RECURSIVE"));
+	CHECK(contains(sql, "\"cte_from\" = "));
+	CHECK(contains(outerSelectList(sql), "\"v_m\""));
 }

@@ -1,0 +1,22 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Toy fixture for a ReferencingObjectMap whose join key is COMPOSITE (two
+# rr:joinCondition blocks), exercising the JoinCondition-rendering loop's
+# " AND " separator between multiple ON-clause equalities.
+
+<#OrderLinesTriplesMap>
+    rr:logicalTable [ rr:tableName "ORDERLINES" ];
+    rr:subjectMap [ rr:template "http://ex.org/orderline/{LINEID}" ];
+    rr:predicateObjectMap [
+        rr:predicate ex:order;
+        rr:objectMap [
+            rr:parentTriplesMap <#OrdersTriplesMap>;
+            rr:joinCondition [ rr:child "ORDERID"; rr:parent "ORDERID" ];
+            rr:joinCondition [ rr:child "REGION"; rr:parent "REGION" ];
+        ];
+    ].
+
+<#OrdersTriplesMap>
+    rr:logicalTable [ rr:tableName "ORDERS" ];
+    rr:subjectMap [ rr:template "http://ex.org/order/{ORDERID}-{REGION}" ].

@@ -93,6 +93,109 @@ RelNodePtr translateZeroOrOne(const sparql::ast::ZeroOrOnePath &path, const Term
 	return unionAll(std::move(arms), ctx, /*dedup=*/true);
 }
 
+// The one-hop "step" relation shared by every directional case of E+: two
+// fresh internal endpoint variables, translated exactly like Sequence's own
+// intermediate node (PathKind::Sequence above). Kept as a live RelNodePtr
+// (not pre-rendered SQL) so it still gets flatten/selfJoinWalk'd by the
+// OUTER tree's optimize() before TransitiveClosureNode's own renderer ever
+// sees it - typically a UnionByName of several Spj candidate arms.
+struct StepRelation {
+	RelNodePtr step;
+	std::string fromVar;
+	std::string toVar;
+};
+
+StepRelation buildStep(const sparql::ast::PropertyPathExpr &child, TranslationContext &ctx) {
+	StepRelation sr;
+	sr.fromVar = ctx.nextInternalVar();
+	sr.toVar = ctx.nextInternalVar();
+	sr.step = translatePath(child, varTermSpec(sr.fromVar), varTermSpec(sr.toVar), ctx);
+	return sr;
+}
+
+// E+: dispatch on which of subject/object are bound to pick the cheapest
+// correct closure shape - directional seeding from a bound endpoint needs
+// only a unary reachable-node CTE, while two unbound endpoints need the full
+// (from, to) pairs closure (see TransitiveClosureNode/renderTransitiveClosure).
+RelNodePtr translateOneOrMore(const sparql::ast::PropertyPathExpr &child, const TermSpec &subject,
+                              const TermSpec &object, TranslationContext &ctx) {
+	StepRelation sr = buildStep(child, ctx);
+	RelNodePtr node(new TransitiveClosureNode());
+	TransitiveClosureNode &tc = static_cast<TransitiveClosureNode &>(*node);
+	const ColumnInfo *fromCol = sr.step->column(sr.fromVar);
+	const ColumnInfo *toCol = sr.step->column(sr.toVar);
+	tc.fromVar = sr.fromVar;
+	tc.toVar = sr.toVar;
+
+	const SqlDialect &dialect = ctx.dialect();
+
+	if (!subject.isVar && !object.isVar) {
+		tc.mode = TransitiveClosureNode::Mode::BothBound;
+		tc.anchorLiteral = dialect.stringLiteral(termLexicalForm(*subject.boundTerm));
+		tc.targetLiteral = dialect.stringLiteral(termLexicalForm(*object.boundTerm));
+		// No schema columns: this is a pure existence check, mirroring
+		// zeroLengthPath's both-bound cases (identityRelation/EmptyNode).
+	} else if (!subject.isVar) {
+		tc.mode = TransitiveClosureNode::Mode::ForwardFromSubject;
+		tc.anchorLiteral = dialect.stringLiteral(termLexicalForm(*subject.boundTerm));
+		ColumnInfo col;
+		col.var = object.varName;
+		col.nonNull = true;
+		col.term = toCol != nullptr ? toCol->term : TermInfo();
+		tc.schema().push_back(col);
+	} else if (!object.isVar) {
+		tc.mode = TransitiveClosureNode::Mode::BackwardFromObject;
+		tc.anchorLiteral = dialect.stringLiteral(termLexicalForm(*object.boundTerm));
+		ColumnInfo col;
+		col.var = subject.varName;
+		col.nonNull = true;
+		col.term = fromCol != nullptr ? fromCol->term : TermInfo();
+		tc.schema().push_back(col);
+	} else {
+		tc.mode = TransitiveClosureNode::Mode::BothVars;
+		ColumnInfo s;
+		s.var = subject.varName;
+		s.nonNull = true;
+		s.term = fromCol != nullptr ? fromCol->term : TermInfo();
+		tc.schema().push_back(s);
+		if (object.varName != subject.varName) {
+			ColumnInfo o;
+			o.var = object.varName;
+			o.nonNull = true;
+			o.term = toCol != nullptr ? toCol->term : TermInfo();
+			tc.schema().push_back(o);
+		}
+	}
+
+	tc.step = std::move(sr.step);
+	return node;
+}
+
+// E*: the E+ closure unioned with the zero-length path, mirroring
+// translateZeroOrOne exactly (including its two both-bound short-circuits) -
+// zeroLengthPath already fully implements SPARQL's ZeroLengthPath semantics,
+// so this reuses it rather than reimplementing zero-length handling inside
+// TransitiveClosureNode itself.
+RelNodePtr translateZeroOrMore(const sparql::ast::ZeroOrMorePath &path, const TermSpec &subject, const TermSpec &object,
+                               TranslationContext &ctx) {
+	RelNodePtr zero = zeroLengthPath(subject, object, ctx);
+
+	if (zero->kind() == RelKind::SingleRow) {
+		return zero;
+	}
+
+	RelNodePtr some = translateOneOrMore(*path.child, subject, object, ctx);
+
+	if (zero->kind() == RelKind::Empty && zero->schema().empty()) {
+		return some;
+	}
+
+	std::vector<RelNodePtr> arms;
+	arms.push_back(std::move(some));
+	arms.push_back(std::move(zero));
+	return unionAll(std::move(arms), ctx, /*dedup=*/true);
+}
+
 } // namespace
 
 RelNodePtr zeroLengthPath(const TermSpec &subject, const TermSpec &object, TranslationContext &ctx) {
@@ -129,10 +232,12 @@ RelNodePtr translatePath(const sparql::ast::PropertyPathExpr &path, const TermSp
 	using sparql::ast::AlternativePath;
 	using sparql::ast::InversePath;
 	using sparql::ast::NegatedPropertySet;
+	using sparql::ast::OneOrMorePath;
 	using sparql::ast::PathKind;
 	using sparql::ast::PredicatePath;
 	using sparql::ast::SequencePath;
 	using sparql::ast::VariablePath;
+	using sparql::ast::ZeroOrMorePath;
 	using sparql::ast::ZeroOrOnePath;
 
 	switch (path.kind()) {
@@ -177,14 +282,10 @@ RelNodePtr translatePath(const sparql::ast::PropertyPathExpr &path, const TermSp
 		return translateNegatedPropertySet(static_cast<const NegatedPropertySet &>(path), subject, object, ctx);
 
 	case PathKind::ZeroOrMore:
-		throw TranslationError("unsupported: the zero-or-more property path operator (`*`) is not supported - unlike "
-		                       "the other path operators it is not expressible as a fixed relational algebra "
-		                       "expression, needing recursive SQL");
+		return translateZeroOrMore(static_cast<const ZeroOrMorePath &>(path), subject, object, ctx);
 
 	case PathKind::OneOrMore:
-		throw TranslationError("unsupported: the one-or-more property path operator (`+`) is not supported - unlike "
-		                       "the other path operators it is not expressible as a fixed relational algebra "
-		                       "expression, needing recursive SQL");
+		return translateOneOrMore(*static_cast<const OneOrMorePath &>(path).child, subject, object, ctx);
 	}
 
 	throw TranslationError("unsupported: unrecognized property path operator in predicate position");

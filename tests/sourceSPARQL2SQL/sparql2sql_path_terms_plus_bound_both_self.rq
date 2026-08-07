@@ -1,0 +1,4 @@
+PREFIX ex: <http://example.com/ns#>
+ASK {
+  <http://ex.org/node/1> ex:next+ <http://ex.org/node/1> .
+}

@@ -7,6 +7,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "sparql2sql/TermInfo.h"
 
@@ -18,6 +19,12 @@ namespace sparql2sql {
 
 class SqlDialect;
 struct TypeCatalog;
+
+/// One entry of a top-level WITH [RECURSIVE] clause: `name AS (bodySql)`.
+struct CteDef {
+	std::string name;
+	std::string bodySql;
+};
 
 /// The intermediate representation threaded through translation: a SQL
 /// relation (as a full "SELECT ..." statement, valid to wrap as
@@ -115,6 +122,28 @@ public:
 		return internalVars_.count(varName) != 0;
 	}
 
+	/// Mint a fresh CTE name ("cte1", "cte2", ...) - a distinct prefix and a
+	/// separate counter from nextAlias()'s "t"+N sequence, so the two can
+	/// never collide even though both are monotonic per-context counters.
+	std::string nextCteName() {
+		return "cte" + std::to_string(++cteCounter_);
+	}
+
+	/// Register one WITH-clause entry (name already minted via
+	/// nextCteName()). Shared across the whole translation of one query,
+	/// including reentrant nested-subquery translation (SubSelectElement
+	/// folding calls translateQueryPattern with this same ctx and splices the
+	/// result as literal text into the outer tree), so a CTE registered while
+	/// rendering a nested query is still valid at the single top-level WITH
+	/// clause the outermost caller emits.
+	void addCte(const std::string &name, const std::string &bodySql) {
+		pendingCtes_.push_back(CteDef {name, bodySql});
+	}
+
+	const std::vector<CteDef> &pendingCtes() const {
+		return pendingCtes_;
+	}
+
 	/// SPARQL 1.1 §17.4.1.7 requires NOW() to return the same value for every
 	/// call within a single query evaluation. Stamp the current UTC time into
 	/// a lexical xsd:dateTime string the first time NOW() is translated, then
@@ -146,6 +175,8 @@ private:
 	std::size_t internalVarCounter_ = 0;
 	std::set<std::string> internalVars_;
 	std::string nowLiteral_;
+	std::size_t cteCounter_ = 0;
+	std::vector<CteDef> pendingCtes_;
 };
 
 /// Mangle a SPARQL variable name into its projected SQL column name

@@ -1,0 +1,5 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT *
+WHERE {
+  <http://data.example.com/employee/7369> ex:knows* <http://data.example.com/employee/9999> .
+}

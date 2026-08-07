@@ -90,6 +90,13 @@ std::unique_ptr<DuckDBConnection> makeSeededDatabase() {
 	conn->execute("CREATE TABLE NODES (ID INTEGER, NEXT INTEGER)");
 	conn->execute("INSERT INTO NODES VALUES (1, 2), (2, 3), (3, NULL)");
 
+	// A pure 3-cycle (1 -> 2 -> 3 -> 1, no dangling end) backing
+	// sparql2sql_path_cycle.ttl - the E+/E* cycle-safety tests. Real graph
+	// data has cycles, and a recursive CTE that only worked on the acyclic
+	// NODES chain above wouldn't actually prove termination/dedup.
+	conn->execute("CREATE TABLE CYCLE_NODES (ID INTEGER, NEXT INTEGER)");
+	conn->execute("INSERT INTO CYCLE_NODES VALUES (1, 2), (2, 3), (3, 1)");
+
 	// Typed-literal fixture backing sparql2sql_terms.ttl. AMOUNT's two values
 	// are chosen so lexicographic and numeric ordering DISAGREE ('100' < '9' as
 	// text, 9 < 100 as numbers) - without that, every typed comparison /
@@ -726,6 +733,126 @@ TEST_CASE("sparql2sql_path_terms.rq: a zero-length path with two unbound endpoin
 	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/3"}, {"V_Y", "http://ex.org/node/3"}}));
 	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/1"}, {"V_Y", "http://ex.org/node/2"}}));
 	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/2"}, {"V_Y", "http://ex.org/node/3"}}));
+}
+
+TEST_CASE("sparql2sql_path_terms_star.rq: a zero-or-more path over an acyclic chain adds genuinely new reflexive "
+          "pairs") {
+	// NODES is the acyclic 1 -> 2 -> 3 -> NULL chain (unlike the 3-cycle
+	// below), so E+ alone never contains a reflexive pair here - this is the
+	// test that actually demonstrates "E* includes zero-length" contributing
+	// pairs the E+ closure doesn't already have. E+ over the chain gives
+	// (1,2), (1,3), (2,3); the zero-length arm adds the three reflexive pairs.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_path_terms_star.rq", "sparql2sql_path_terms.ttl");
+	REQUIRE(rows.size() == 6);
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/1"}, {"V_Y", "http://ex.org/node/1"}}));
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/2"}, {"V_Y", "http://ex.org/node/2"}}));
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/3"}, {"V_Y", "http://ex.org/node/3"}}));
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/1"}, {"V_Y", "http://ex.org/node/2"}}));
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/1"}, {"V_Y", "http://ex.org/node/3"}}));
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/2"}, {"V_Y", "http://ex.org/node/3"}}));
+}
+
+TEST_CASE("sparql2sql_path_terms_plus_bound_subject.rq: a bound-subject one-or-more path over an acyclic chain "
+          "excludes the starting node itself") {
+	// Regression test: the unary reachable-set seed must start from the
+	// anchor's one-hop successors, not the anchor itself. Node 1's chain
+	// (1 -> 2 -> 3 -> NULL) never loops back, so node 1 must not appear in its
+	// own E+ reachable set even though it's the seed.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_path_terms_plus_bound_subject.rq", "sparql2sql_path_terms.ttl");
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_Y", "http://ex.org/node/2"}}));
+	CHECK(containsRow(rows, {{"V_Y", "http://ex.org/node/3"}}));
+	CHECK_FALSE(containsRow(rows, {{"V_Y", "http://ex.org/node/1"}}));
+}
+
+TEST_CASE("sparql2sql_path_terms_plus_bound_object.rq: a bound-object one-or-more path over an acyclic chain "
+          "excludes the ending node itself") {
+	// Same regression, walked backward: node 3 is the anchor and must not
+	// appear in its own reachable-from set.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_path_terms_plus_bound_object.rq", "sparql2sql_path_terms.ttl");
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/1"}}));
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/node/2"}}));
+	CHECK_FALSE(containsRow(rows, {{"V_X", "http://ex.org/node/3"}}));
+}
+
+TEST_CASE("sparql2sql_path_terms_plus_bound_both_self.rq: ASK is false for a node reaching itself with no cycle") {
+	// Both endpoints bound to the same node in an acyclic graph: E+ requires
+	// >=1 hop, and node 1 never loops back to itself, so this must be false -
+	// not vacuously true from a zero-hop seed.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_path_terms_plus_bound_both_self.rq", "sparql2sql_path_terms.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(rows[0].at("ASK") == "false");
+}
+
+TEST_CASE("sparql2sql_path_cycle_plus.rq: a one-or-more path over a 3-cycle terminates with the full pairs closure") {
+	// A hang here (rather than a failed assertion) would be the primary
+	// cycle-safety failure mode - the recursive CTE's UNION (not UNION ALL)
+	// must both terminate and dedup. Every node reaches every node in a
+	// 3-cycle via >=1 hop, so the closure is the complete 3x3 = 9 pairs.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_path_cycle_plus.rq", "sparql2sql_path_cycle.ttl");
+	REQUIRE(rows.size() == 9);
+	for (int i = 1; i <= 3; ++i) {
+		for (int j = 1; j <= 3; ++j) {
+			CHECK(containsRow(rows, {{"V_X", "http://ex.org/cycle/" + std::to_string(i)},
+			                         {"V_Y", "http://ex.org/cycle/" + std::to_string(j)}}));
+		}
+	}
+}
+
+TEST_CASE("sparql2sql_path_cycle_star.rq: a zero-or-more path over a 3-cycle dedups against the already-reflexive "
+          "E+ closure") {
+	// E* = E+ union zero-length, but in a full cycle E+ already contains every
+	// reflexive (x, x) pair (each node reaches itself by going all the way
+	// around), so the union with the zero-length arm's own reflexive pairs
+	// contributes nothing new: still exactly the same 9 pairs as the plain E+
+	// case, proving the union's dedup (not the recursive term's) removes the
+	// overlap correctly rather than double-counting it.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_path_cycle_star.rq", "sparql2sql_path_cycle.ttl");
+	REQUIRE(rows.size() == 9);
+	for (int i = 1; i <= 3; ++i) {
+		CHECK(containsRow(rows, {{"V_X", "http://ex.org/cycle/" + std::to_string(i)},
+		                         {"V_Y", "http://ex.org/cycle/" + std::to_string(i)}}));
+	}
+}
+
+TEST_CASE("sparql2sql_path_cycle_plus_forward.rq: a bound-subject one-or-more path over a 3-cycle reaches every "
+          "node") {
+	// Directional seeding from the bound subject: a unary reachable-set, not
+	// a pairs closure. All three nodes are reachable from node 1 in a 3-cycle.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_path_cycle_plus_forward.rq", "sparql2sql_path_cycle.ttl");
+	REQUIRE(rows.size() == 3);
+	CHECK(containsRow(rows, {{"V_Y", "http://ex.org/cycle/1"}}));
+	CHECK(containsRow(rows, {{"V_Y", "http://ex.org/cycle/2"}}));
+	CHECK(containsRow(rows, {{"V_Y", "http://ex.org/cycle/3"}}));
+}
+
+TEST_CASE("sparql2sql_path_cycle_plus_backward.rq: a bound-object one-or-more path over a 3-cycle is reached from "
+          "every node") {
+	// Directional seeding from the bound object, walking the edge relation
+	// backward - still a unary reachable-set.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_path_cycle_plus_backward.rq", "sparql2sql_path_cycle.ttl");
+	REQUIRE(rows.size() == 3);
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/cycle/1"}}));
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/cycle/2"}}));
+	CHECK(containsRow(rows, {{"V_X", "http://ex.org/cycle/3"}}));
+}
+
+TEST_CASE("sparql2sql_path_cycle_plus_bound_both.rq: ASK is true for a node reaching itself around a cycle") {
+	// Both endpoints bound to the same node: E+ requires >=1 hop, and node 1
+	// does reach itself after going all the way around the 3-cycle.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_path_cycle_plus_bound_both.rq", "sparql2sql_path_cycle.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(rows[0].at("ASK") == "true");
 }
 
 TEST_CASE("emp_dept_path_star_select.rq: SELECT * over a sequence path omits the intermediate variable") {

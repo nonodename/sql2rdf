@@ -1,0 +1,5 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?x
+WHERE {
+  ?x ex:next+ <http://ex.org/cycle/1> .
+}

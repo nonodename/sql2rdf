@@ -22,10 +22,10 @@ namespace sparql2sql {
 ///   E?          -> set union of E with the zero-length path
 ///   !(a|^b)     -> union of a forward and an inverse "predicate not in {...}"
 ///                  atomic pattern
-///
-/// `E*` and `E+` are not supported and throw TranslationError naming the
-/// operator: unlike the above they are not syntactic sugar over the algebra,
-/// needing a recursive-CTE IR node and a matching SqlDialect seam.
+///   E+          -> transitive closure of E over a fresh internal step
+///                  relation (TransitiveClosureNode -> WITH RECURSIVE),
+///                  seeded directionally from whichever endpoint is bound
+///   E*          -> E+ unioned with the zero-length path
 RelNodePtr translatePath(const sparql::ast::PropertyPathExpr &path, const TermSpec &subject, const TermSpec &object,
                          TranslationContext &ctx);
 
