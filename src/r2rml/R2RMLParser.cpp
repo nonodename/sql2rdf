@@ -550,6 +550,19 @@ public:
 			sm->valueMap = makeConstantUri(constant);
 		}
 
+		// R2RML 7.4: a subject map's term type may only be rr:IRI (the default,
+		// already set by TermMap's initializer) or rr:BlankNode - a subject is
+		// never a literal. Read it here rather than relying on buildTermMap,
+		// which this branch deliberately does not go through.
+		if (sm->valueMap) {
+			applyExplicitTermType(smKey, *sm->valueMap);
+			if (sm->valueMap->termType == TermType::Literal) {
+				errors.push_back("R2RML parser: rr:termType rr:Literal is not allowed on a subject map <" + smKey +
+				                 ">; using rr:IRI");
+				sm->valueMap->termType = TermType::IRI;
+			}
+		}
+
 		// rr:class assertions
 		const auto *classObjs = getObjects(ts, smKey, RR_CLASS);
 		if (classObjs) {

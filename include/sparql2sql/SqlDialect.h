@@ -31,6 +31,14 @@ public:
 	/// string-valued expression.
 	virtual std::string concat(const std::vector<std::string> &parts) const = 0;
 
+	/// Wrap a SQL scalar expression so it evaluates, at query time, to the
+	/// RFC3986 percent-encoding of its value (unreserved: A-Z a-z 0-9 - _ . ~,
+	/// everything else as an uppercase %XX escape). Must match
+	/// r2rml::AbstractMap::percentEncode's behavior exactly, since this is
+	/// used to reconstruct rr:template-generated terms so they agree with
+	/// forward R2RML generation.
+	virtual std::string percentEncode(const std::string &expr) const = 0;
+
 	/// Render a "LIMIT n OFFSET m" style clause (leading space included,
 	/// empty string if neither is set).
 	virtual std::string limitOffsetClause(bool hasLimit, int64_t limit, bool hasOffset, int64_t offset) const = 0;
@@ -43,6 +51,28 @@ public:
 	/// Attempt a numeric cast that yields SQL NULL (rather than an error) for
 	/// non-numeric input.
 	virtual std::string tryCastToDouble(const std::string &expr) const = 0;
+
+	/// Attempt a cast to a 64-bit integer type that yields SQL NULL (rather
+	/// than an error) for non-integral input. Used to keep arithmetic over
+	/// statically integral operands integral, so `?a + 1` renders "10" rather
+	/// than the "10.0" a DOUBLE round-trip would give.
+	virtual std::string tryCastToBigInt(const std::string &expr) const = 0;
+
+	/// Attempt a cast to a timestamp type that yields SQL NULL (rather than
+	/// an error) for non-timestamp-parseable input.
+	virtual std::string tryCastToTimestamp(const std::string &expr) const = 0;
+
+	/// Attempt a cast to a boolean type that yields SQL NULL (rather than an
+	/// error) for non-boolean-parseable input.
+	virtual std::string tryCastToBoolean(const std::string &expr) const = 0;
+
+	/// Attempt a cast to a date type that yields SQL NULL (rather than an
+	/// error) for non-date-parseable input.
+	virtual std::string tryCastToDate(const std::string &expr) const = 0;
+
+	/// Attempt a cast to a fixed-point decimal type that yields SQL NULL
+	/// (rather than an error) for non-numeric input.
+	virtual std::string tryCastToDecimal(const std::string &expr) const = 0;
 
 	/// Render a (possibly negated) regular-expression match test.
 	virtual std::string regexMatch(const std::string &text, const std::string &pattern, const std::string &flags,

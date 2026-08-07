@@ -1,0 +1,10 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?e ?n1 ?n2 ?r ?u ?su
+WHERE {
+  ?e ex:name "SMITH" .
+  BIND(NOW() AS ?n1)
+  BIND(NOW() AS ?n2)
+  BIND(RAND() AS ?r)
+  BIND(UUID() AS ?u)
+  BIND(STRUUID() AS ?su)
+}

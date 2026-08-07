@@ -47,6 +47,14 @@ std::string DuckDbDialect::concat(const std::vector<std::string> &parts) const {
 	return out;
 }
 
+std::string DuckDbDialect::percentEncode(const std::string &expr) const {
+	// DuckDB's built-in url_encode() leaves A-Za-z0-9-_.~ untouched and
+	// percent-encodes everything else (including '/') as an uppercase %XX
+	// escape, which is byte-for-byte what r2rml::AbstractMap::percentEncode
+	// does for forward R2RML generation.
+	return "url_encode(" + expr + ")";
+}
+
 std::string DuckDbDialect::limitOffsetClause(bool hasLimit, int64_t limit, bool hasOffset, int64_t offset) const {
 	std::string out;
 	if (hasLimit) {
@@ -71,6 +79,31 @@ std::string DuckDbDialect::existsClause(bool negated, const std::string &subquer
 
 std::string DuckDbDialect::tryCastToDouble(const std::string &expr) const {
 	return "TRY_CAST(" + expr + " AS DOUBLE)";
+}
+
+std::string DuckDbDialect::tryCastToBigInt(const std::string &expr) const {
+	return "TRY_CAST(" + expr + " AS BIGINT)";
+}
+
+std::string DuckDbDialect::tryCastToTimestamp(const std::string &expr) const {
+	return "TRY_CAST(" + expr + " AS TIMESTAMP)";
+}
+
+std::string DuckDbDialect::tryCastToBoolean(const std::string &expr) const {
+	return "TRY_CAST(" + expr + " AS BOOLEAN)";
+}
+
+std::string DuckDbDialect::tryCastToDate(const std::string &expr) const {
+	return "TRY_CAST(" + expr + " AS DATE)";
+}
+
+std::string DuckDbDialect::tryCastToDecimal(const std::string &expr) const {
+	// DECIMAL(38,18): DuckDB's maximum total precision, with 18 fractional
+	// digits - a fixed-point round trip for xsd:decimal instead of the
+	// lossy DOUBLE one used for xsd:double/xsd:float. XSD decimal is
+	// technically arbitrary-precision; this is a documented fidelity limit
+	// (see doc/api.md), not a full XPath-conformant decimal implementation.
+	return "TRY_CAST(" + expr + " AS DECIMAL(38,18))";
 }
 
 std::string DuckDbDialect::regexMatch(const std::string &text, const std::string &pattern, const std::string &flags,

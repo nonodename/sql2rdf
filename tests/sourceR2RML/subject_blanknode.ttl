@@ -1,0 +1,47 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Subject maps with an explicit rr:termType (R2RML 7.4). A subject is never a
+# literal, so only rr:IRI (the default) and rr:BlankNode are permitted.
+#
+# <#BlankSubject> is the case that matters: rr:termType rr:BlankNode on a
+# templated subject map, which must produce a blank node rather than an IRI.
+# <#LiteralSubject> is the rejected case - rr:Literal is invalid here and must
+# be reported as a parse error and fall back to rr:IRI rather than silently
+# emitting a literal in the subject position.
+
+<#BlankSubject>
+    rr:logicalTable [ rr:tableName "NOTES" ];
+    rr:subjectMap [
+        rr:template "note{NID}";
+        rr:termType rr:BlankNode;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:body;
+        rr:objectMap [ rr:column "BODY" ];
+    ].
+
+<#BlankColumnSubject>
+    rr:logicalTable [ rr:tableName "LABELS" ];
+    rr:subjectMap [
+        rr:column "LABEL";
+        rr:termType rr:BlankNode;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:body;
+        rr:objectMap [ rr:column "BODY" ];
+    ].
+
+# The template is absolute so that the coerced-to-IRI subject is a *valid* IRI
+# and the writer can serialise it - the point of this map is the coercion, not
+# an unrelated IRI-syntax failure.
+<#LiteralSubject>
+    rr:logicalTable [ rr:tableName "NOTES" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/note/{NID}";
+        rr:termType rr:Literal;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:body;
+        rr:objectMap [ rr:column "BODY" ];
+    ].

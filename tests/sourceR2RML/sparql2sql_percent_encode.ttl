@@ -1,0 +1,16 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Toy fixture for percent-encoding round-trip: LABEL holds RFC3986 reserved
+# characters (space, '/', '?', '#') that the subject template must
+# percent-encode on projection and percent-decode on inversion.
+<#TagTriplesMap>
+    rr:logicalTable [ rr:tableName "TAGS" ];
+    rr:subjectMap [
+        rr:template "http://ex.org/tag/{LABEL}";
+        rr:class ex:Tag;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:label;
+        rr:objectMap [ rr:column "LABEL" ];
+    ].

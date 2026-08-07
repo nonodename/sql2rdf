@@ -16,18 +16,12 @@ namespace {
 
 std::string renderNode(const RelNode &node, TranslationContext &ctx);
 
-// A TranslatedPattern carrying only the bound/optional variable sets of a
-// node's schema - enough for translateExpression's in-scope/optionality
-// checks (it never reads scope.sql).
+// A TranslatedPattern carrying a node's schema *description* but no SQL -
+// enough for translateExpression's in-scope/optionality checks and its static
+// term-dimension lookups (it never reads scope.sql).
 TranslatedPattern scopeOf(const RelNode &node) {
 	TranslatedPattern tp;
-	for (const auto &c : node.schema()) {
-		if (c.nonNull) {
-			tp.boundVars.insert(c.var);
-		} else {
-			tp.optionalVars.insert(c.var);
-		}
-	}
+	fillScopeFromSchema(tp, node.schema());
 	return tp;
 }
 
@@ -342,16 +336,26 @@ std::string renderNode(const RelNode &node, TranslationContext &ctx) {
 
 } // namespace
 
+void fillScopeFromSchema(TranslatedPattern &out, const std::vector<ColumnInfo> &schema) {
+	for (const auto &c : schema) {
+		if (c.nonNull) {
+			out.boundVars.insert(c.var);
+		} else {
+			out.optionalVars.insert(c.var);
+		}
+		if (c.term.kindKnown()) {
+			// Only record what is actually known: an absent entry already reads
+			// back as Unknown, so storing one saves nothing and invites a
+			// consumer to distinguish "absent" from "present but Unknown".
+			out.termInfo[c.var] = c.term;
+		}
+	}
+}
+
 TranslatedPattern renderRelation(const RelNode &node, TranslationContext &ctx) {
 	TranslatedPattern tp;
 	tp.sql = renderNode(node, ctx);
-	for (const auto &c : node.schema()) {
-		if (c.nonNull) {
-			tp.boundVars.insert(c.var);
-		} else {
-			tp.optionalVars.insert(c.var);
-		}
-	}
+	fillScopeFromSchema(tp, node.schema());
 	tp.isIdentity = (node.kind() == RelKind::SingleRow);
 	return tp;
 }

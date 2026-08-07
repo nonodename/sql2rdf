@@ -71,6 +71,12 @@ std::unique_ptr<DuckDBConnection> makeSeededDatabase() {
 	conn->execute("CREATE TABLE WIDGETS (ID INTEGER, NAME VARCHAR)");
 	conn->execute("INSERT INTO WIDGETS VALUES (1, 'GADGET')");
 
+	// LABEL holds RFC3986 reserved characters (space, '/', '?', '#') to
+	// exercise percent-encode-on-projection / percent-decode-on-inversion for
+	// rr:template.
+	conn->execute("CREATE TABLE TAGS (ID INTEGER, LABEL VARCHAR)");
+	conn->execute("INSERT INTO TAGS VALUES (1, 'a b/c?d#e')");
+
 	// Cross-table integer join fixture (no declared R2RML FK): COMPANY.CAPIQ
 	// and RELATIONS.PARENT are both BIGINT, unified by a shared SPARQL var.
 	conn->execute("CREATE TABLE COMPANY (ID INTEGER, CAPIQ BIGINT, LEGALNAME VARCHAR)");
@@ -83,6 +89,28 @@ std::unique_ptr<DuckDBConnection> makeSeededDatabase() {
 	// term universe small enough to assert row-exactly.
 	conn->execute("CREATE TABLE NODES (ID INTEGER, NEXT INTEGER)");
 	conn->execute("INSERT INTO NODES VALUES (1, 2), (2, 3), (3, NULL)");
+
+	// Typed-literal fixture backing sparql2sql_terms.ttl. AMOUNT's two values
+	// are chosen so lexicographic and numeric ordering DISAGREE ('100' < '9' as
+	// text, 9 < 100 as numbers) - without that, every typed comparison /
+	// ORDER BY / MIN / MAX assertion below would pass vacuously. TITLE is a
+	// VARCHAR that ex:badtyped deliberately mis-declares as xsd:integer.
+	conn->execute("CREATE TABLE MEASURES (ID INTEGER, AMOUNT INTEGER, PRICE DOUBLE, WHEN_DT VARCHAR, "
+	              "TITLE VARCHAR, HOMEPAGE VARCHAR, REF INTEGER)");
+	conn->execute("INSERT INTO MEASURES VALUES "
+	              "(1, 9,   2.50,  '2019-12-31T23:59:59', 'alpha', 'http://ex.org/a', 2), "
+	              "(2, 100, 10.00, '2020-06-01T12:00:00', 'beta',  'http://ex.org/b', 1)");
+
+	// Blank-node-subject fixture, and the literal-valued arm of ex:mixed.
+	conn->execute("CREATE TABLE NOTES (NID INTEGER, BODY VARCHAR)");
+	conn->execute("INSERT INTO NOTES VALUES (1, 'note one')");
+
+	// 11 'a' rows and 2 'b' rows: the group counts (11, 2) sort the wrong way
+	// round lexicographically, which is what pins the ORDER-BY-over-a-COUNT
+	// -alias fix.
+	conn->execute("CREATE TABLE COUNTS (RID INTEGER, G VARCHAR)");
+	conn->execute("INSERT INTO COUNTS VALUES (1,'a'),(2,'a'),(3,'a'),(4,'a'),(5,'a'),(6,'a'),(7,'a'),(8,'a'),"
+	              "(9,'a'),(10,'a'),(11,'a'),(12,'b'),(13,'b')");
 
 	return conn;
 }
@@ -168,6 +196,18 @@ bool containsRow(const std::vector<Row> &rows, const Row &expected) {
 	return std::find(rows.begin(), rows.end(), expected) != rows.end();
 }
 
+// One column's values in result order. containsRow() is order-insensitive by
+// design, but the ORDER BY cases are *about* the order, so they need this.
+std::vector<std::string> columnSeq(const std::vector<Row> &rows, const std::string &name) {
+	std::vector<std::string> out;
+	out.reserve(rows.size());
+	for (const auto &r : rows) {
+		std::map<std::string, std::string>::const_iterator it = r.find(name);
+		out.push_back(it == r.end() ? std::string() : it->second);
+	}
+	return out;
+}
+
 } // namespace
 
 TEST_CASE("emp_dept_join.rq: only the employee with a non-null department joins") {
@@ -205,6 +245,57 @@ TEST_CASE("emp_dept_xsd_cast.rq: xsd:integer() cast filters on the numeric STAFF
 	auto rows = translateAndRun(*conn, "emp_dept_xsd_cast.rq", "example_emp_dept.ttl");
 	REQUIRE(rows.size() == 1);
 	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_STAFF", "1"}}));
+}
+
+TEST_CASE("emp_dept_xsd_cast_extra.rq: xsd:boolean/dateTime/date/decimal/long casts on literals") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_xsd_cast_extra.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"},
+	                         {"V_B", "true"},
+	                         {"V_DT", "2020-05-15T10:30:45"},
+	                         {"V_D", "2020-05-15"},
+	                         {"V_DEC", "123456789012345678.123456789012345678"},
+	                         {"V_I", "42"}}));
+}
+
+TEST_CASE("emp_dept_datetime_accessors.rq: YEAR/MONTH/DAY/HOURS/MINUTES/SECONDS extract from a literal timestamp") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_datetime_accessors.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"},
+	                         {"V_Y", "2020"},
+	                         {"V_MO", "5"},
+	                         {"V_D", "15"},
+	                         {"V_H", "10"},
+	                         {"V_MI", "30"},
+	                         {"V_S", "45"}}));
+}
+
+TEST_CASE("emp_dept_nondeterministic_functions.rq: NOW() is stable while RAND()/UUID()/STRUUID() vary per row") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_nondeterministic_functions.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	const Row &row = rows.front();
+
+	// NOW() must be the exact same value for both calls within this query.
+	REQUIRE(row.count("V_N1") == 1);
+	REQUIRE(row.count("V_N2") == 1);
+	CHECK(row.at("V_N1") == row.at("V_N2"));
+	CHECK(row.at("V_N1") != kNull);
+
+	// RAND() must produce a value parseable as a double in [0, 1).
+	REQUIRE(row.count("V_R") == 1);
+	double r = std::stod(row.at("V_R"));
+	CHECK(r >= 0.0);
+	CHECK(r < 1.0);
+
+	// UUID() must produce a fresh urn:uuid: IRI; STRUUID() the bare UUID string.
+	REQUIRE(row.count("V_U") == 1);
+	REQUIRE(row.count("V_SU") == 1);
+	CHECK(row.at("V_U").substr(0, 9) == "urn:uuid:");
+	CHECK(row.at("V_SU").substr(0, 9) != "urn:uuid:");
+	CHECK(row.at("V_U") != "urn:uuid:" + row.at("V_SU"));
 }
 
 TEST_CASE("emp_dept_union.rq: bag union of ex:name and ex:location results") {
@@ -265,6 +356,30 @@ TEST_CASE("emp_dept_aggregate.rq: COUNT per department") {
 	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_CNT", "1"}}));
 }
 
+TEST_CASE("emp_dept_name_count.rq: COUNT(*) over a multi-candidate predicate doesn't double-count the "
+          "candidate union's own dedup") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_name_count.rq", "example_emp_dept.ttl");
+	// Same 4 rows as emp_dept_simple_select.rq (2 employees + 2 departments):
+	// each candidate SpjRelation's own DISTINCT and the candidate UNION's
+	// dedup (UNION BY NAME, not ALL) must survive under an aggregate query,
+	// since queryHasAggregate() suppresses the stripDistinct/UNION-ALL
+	// optimization that only applies when the outer SELECT DISTINCT/ASK
+	// already subsumes per-candidate dedup.
+	REQUIRE(rows.size() == 1);
+	CHECK(rows[0].at("V_CNT") == "4");
+}
+
+TEST_CASE("emp_dept_union_count.rq: COUNT(*) over an explicit bag UNION preserves duplicate solutions") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "emp_dept_union_count.rq", "example_emp_dept.ttl");
+	// Same 6 rows as emp_dept_union.rq: SPARQL UNION is bag-preserving (UNION
+	// ALL BY NAME), so the two branches' rows are not deduped against each
+	// other even though each branch's own SpjRelation is still DISTINCT.
+	REQUIRE(rows.size() == 1);
+	CHECK(rows[0].at("V_CNT") == "6");
+}
+
 TEST_CASE("emp_dept_ask.rq: ASK is true when the pattern matches at least once") {
 	auto conn = makeSeededDatabase();
 	auto rows = translateAndRun(*conn, "emp_dept_ask.rq", "example_emp_dept.ttl");
@@ -300,6 +415,22 @@ TEST_CASE("sparql2sql_multi_placeholder.rq: multi-placeholder template inversion
 	auto rows = translateAndRun(*conn, "sparql2sql_multi_placeholder.rq", "sparql2sql_multi_placeholder.ttl");
 	REQUIRE(rows.size() == 1);
 	CHECK(containsRow(rows, {{"V_O", "http://ex.org/order/42/99"}}));
+}
+
+TEST_CASE("sparql2sql_percent_encode.rq: subject template projection percent-encodes reserved characters") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_percent_encode.rq", "sparql2sql_percent_encode.ttl");
+	REQUIRE(rows.size() == 1);
+	// LABEL = "a b/c?d#e": space/'/'/? '#' must each be percent-encoded in the
+	// constructed subject IRI, while the plain rr:column object stays raw.
+	CHECK(containsRow(rows, {{"V_T", "http://ex.org/tag/a%20b%2Fc%3Fd%23e"}, {"V_L", "a b/c?d#e"}}));
+}
+
+TEST_CASE("sparql2sql_percent_encode_filter.rq: a percent-encoded bound IRI inverts back to the raw column value") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_percent_encode_filter.rq", "sparql2sql_percent_encode.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_L", "a b/c?d#e"}}));
 }
 
 TEST_CASE("sparql2sql_native_join.rq: a type catalog enables a native integer join, same rows") {
@@ -614,4 +745,126 @@ TEST_CASE("emp_dept_bnode_select_star.rq: SELECT * omits a blank-node position")
 	REQUIRE(rows[0].size() == 1);
 	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}}));
 	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/department/10"}}));
+}
+
+// --- Static RDF term dimension: term-kind builtins and typed operators ---
+//
+// A lattice error produces *plausible* SQL, so this is the only place it can be
+// caught. Every folded builtin and every typed operator therefore gets a row
+// assertion, not just the interesting ones. The MEASURES data is chosen so
+// lexicographic and numeric answers differ, which is what stops these passing
+// vacuously if the typing silently stops working.
+
+TEST_CASE("sparql2sql_term_kinds.rq: term-kind builtins fold to per-term-map constants") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_term_kinds.rq", "sparql2sql_terms.ttl");
+	REQUIRE(rows.size() == 2);
+	// ?m is a template IRI and ?t an rr:language literal, in every candidate.
+	CHECK(containsRow(rows, {{"V_M", "http://ex.org/m/1"}, {"V_II", "true"}, {"V_IB", "false"}, {"V_IL", "true"}}));
+	CHECK(containsRow(rows, {{"V_M", "http://ex.org/m/2"}, {"V_II", "true"}, {"V_IB", "false"}, {"V_IL", "true"}}));
+}
+
+TEST_CASE("sparql2sql_bnode_kind.rq: an rr:BlankNode subject satisfies isBLANK") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_bnode_kind.rq", "sparql2sql_terms.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_B", "note one"}}));
+}
+
+TEST_CASE("sparql2sql_term_lang.rq: langMatches against a static rr:language tag") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_term_lang.rq", "sparql2sql_terms.ttl");
+	// Both titles are tagged @en by the mapping, so both survive.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_T", "alpha"}}));
+	CHECK(containsRow(rows, {{"V_T", "beta"}}));
+}
+
+TEST_CASE("sparql2sql_term_datatype.rq: DATATYPE folds to the declared rr:datatype IRI") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_term_datatype.rq", "sparql2sql_terms.ttl");
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_M", "http://ex.org/m/1"}, {"V_DT", "http://www.w3.org/2001/XMLSchema#integer"}}));
+	CHECK(containsRow(rows, {{"V_M", "http://ex.org/m/2"}, {"V_DT", "http://www.w3.org/2001/XMLSchema#integer"}}));
+}
+
+TEST_CASE("sparql2sql_typed_filter.rq: a declared xsd:integer filters numerically, not lexicographically") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_typed_filter.rq", "sparql2sql_terms.ttl");
+	// ?a > 50 over {9, 100}: numerically only 100 qualifies. Lexicographically
+	// '9' > '50' and '100' < '50', so an untyped comparison would return the
+	// other row entirely - this assertion fails loudly if the typing regresses.
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_M", "http://ex.org/m/2"}}));
+}
+
+TEST_CASE("sparql2sql_typed_order.rq: ORDER BY on a declared xsd:integer sorts numerically") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_typed_order.rq", "sparql2sql_terms.ttl");
+	REQUIRE(rows.size() == 2);
+	// Lexicographically this would be {"100", "9"}.
+	CHECK(columnSeq(rows, "V_A") == std::vector<std::string>({"9", "100"}));
+}
+
+TEST_CASE("sparql2sql_typed_minmax.rq: MIN/MAX on a declared xsd:integer aggregate numerically") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_typed_minmax.rq", "sparql2sql_terms.ttl");
+	REQUIRE(rows.size() == 1);
+	// Lexicographically MIN would be "100" and MAX "9".
+	CHECK(containsRow(rows, {{"V_MN", "9"}, {"V_MX", "100"}}));
+}
+
+TEST_CASE("sparql2sql_typed_arith.rq: integral arithmetic keeps an integral lexical form") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_typed_arith.rq", "sparql2sql_terms.ttl");
+	REQUIRE(rows.size() == 2);
+	// Not "10.0"/"101.0", which is what the DOUBLE round-trip used to produce.
+	CHECK(containsRow(rows, {{"V_S", "10"}}));
+	CHECK(containsRow(rows, {{"V_S", "101"}}));
+}
+
+TEST_CASE("sparql2sql_typed_datetime.rq: a declared xsd:dateTime compares as a timestamp") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_typed_datetime.rq", "sparql2sql_terms.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_M", "http://ex.org/m/1"}}));
+}
+
+TEST_CASE("sparql2sql_strdt.rq: STRDT types an otherwise-untyped column for comparison") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_strdt.rq", "sparql2sql_terms.ttl");
+	// ex:rawamount declares no rr:datatype, so STRDT is the only thing making
+	// this numeric. Same {9, 100} vs 50 discrimination as the typed filter.
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_M", "http://ex.org/m/2"}}));
+}
+
+TEST_CASE("sparql2sql_term_disagree.rq: a term-kind filter over disagreeing arms resolves per arm") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_term_disagree.rq", "sparql2sql_terms.ttl");
+	// ex:mixed is an IRI from <#Measure> and a literal from <#Note>. Pushdown
+	// folds the IRI arm away entirely, leaving only the NOTES row.
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_X", "note one"}}));
+}
+
+TEST_CASE("sparql2sql_badtyped.rq: a mis-declared rr:datatype drops rows rather than raising") {
+	auto conn = makeSeededDatabase();
+	// ex:badtyped declares xsd:integer over the VARCHAR TITLE column ('alpha',
+	// 'beta'). This pins the decision to keep TRY_CAST rather than CAST in every
+	// typed branch: a declared datatype the data contradicts must bound the
+	// damage to "fewer rows", never "the whole query errors out".
+	CHECK_NOTHROW(translateAndRun(*conn, "sparql2sql_badtyped.rq", "sparql2sql_terms.ttl"));
+	auto rows = translateAndRun(*conn, "sparql2sql_badtyped.rq", "sparql2sql_terms.ttl");
+	CHECK(rows.empty());
+}
+
+TEST_CASE("sparql2sql_count_order.rq: ORDER BY over a COUNT alias sorts numerically") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_count_order.rq", "sparql2sql_count_order.ttl");
+	REQUIRE(rows.size() == 2);
+	// 11 'a' rows vs 2 'b' rows, ordered DESC by count. Lexicographically "11"
+	// sorts below "2", so the pre-fix bare-alias ORDER BY inverted this.
+	CHECK(columnSeq(rows, "V_G") == std::vector<std::string>({"a", "b"}));
+	CHECK(columnSeq(rows, "V_C") == std::vector<std::string>({"11", "2"}));
 }

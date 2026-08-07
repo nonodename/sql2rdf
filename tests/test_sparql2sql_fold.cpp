@@ -364,3 +364,14 @@ TEST_CASE("translateQuery: CONSTRUCT is rejected with a clear TranslationError")
 	DuckDbDialect dialect;
 	CHECK_THROWS_AS(translateQuery(*q, mapping, dialect), TranslationError);
 }
+
+TEST_CASE("translateQuery: FROM / FROM NAMED dataset clauses are rejected with a clear TranslationError") {
+	Parser parser;
+	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "unsupported_dataset.rq");
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	REQUIRE(mapping.isValid());
+
+	DuckDbDialect dialect;
+	CHECK_THROWS_AS(translateQuery(*q, mapping, dialect), TranslationError);
+}

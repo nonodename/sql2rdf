@@ -13,6 +13,7 @@
 #include "sparql2sql/TypeCatalog.h"
 #include "sparql2sql/ir/NativeKey.h"
 #include "sparql2sql/ir/RelNode.h"
+#include "sparql2sql/ir/SqlRenderer.h"
 
 namespace sparql2sql {
 
@@ -91,6 +92,11 @@ RelNodePtr mergeInner(JoinNode &join, const TypeCatalog *catalog) {
 			col.renderedExpr = "COALESCE(" + lc->renderedExpr + ", " + rc->renderedExpr + ")";
 			col.prov = Provenance::Coalesced;
 			col.nonNull = jc != nullptr ? jc->nonNull : false;
+			// The COALESCE really can return either operand, so the column can
+			// only claim what both sides agree on. (The non-COALESCE branches
+			// below copy one side wholesale, which carries its annotation with
+			// it - only that side's value ever reaches the output.)
+			col.term = meetColumns({lc, rc});
 		} else if (lc != nullptr) {
 			col = *lc;
 			col.nonNull = jc != nullptr ? jc->nonNull : lc->nonNull;
@@ -420,14 +426,12 @@ bool intersects(const std::set<std::string> &a, const std::set<std::string> &b) 
 // predicate reads only projected columns, so it cannot distinguish two rows that
 // DISTINCT would collapse.
 bool foldConjunctIntoSpj(SpjRelation &spj, const sparql::ast::Expression &pred, TranslationContext &ctx) {
+	// Share the renderer's scope builder rather than rebuilding it here: a
+	// folded predicate must see exactly the same variable scope *and* the same
+	// static term annotations as an un-folded one, or whether a filter was
+	// pushed down would change the SQL it translates to.
 	TranslatedPattern scope;
-	for (const auto &c : spj.schema()) {
-		if (c.nonNull) {
-			scope.boundVars.insert(c.var);
-		} else {
-			scope.optionalVars.insert(c.var);
-		}
-	}
+	fillScopeFromSchema(scope, spj.schema());
 
 	std::string sentinel = ctx.nextAlias();
 	std::string sql = translateExpression(pred, scope, sentinel, ctx);

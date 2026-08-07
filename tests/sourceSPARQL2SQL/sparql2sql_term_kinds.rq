@@ -1,0 +1,9 @@
+PREFIX ex: <http://example.com/ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?m ?ii ?ib ?il
+WHERE {
+  ?m ex:title ?t .
+  BIND(isIRI(?m) AS ?ii)
+  BIND(isBLANK(?m) AS ?ib)
+  BIND(isLITERAL(?t) AS ?il)
+}

@@ -1,0 +1,16 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Backs the ORDER-BY-over-a-COUNT-alias fix. An ORDER BY key that exists only
+# as a SELECT-list output alias used to be emitted bare, so it sorted the
+# stringified count lexicographically. The seeded COUNTS table has 11 'a' rows
+# and 2 'b' rows precisely so the two orderings disagree: "11" < "2" as text,
+# 11 > 2 as numbers.
+
+<#Counts>
+    rr:logicalTable [ rr:tableName "COUNTS" ];
+    rr:subjectMap [ rr:template "http://ex.org/c/{RID}" ];
+    rr:predicateObjectMap [
+        rr:predicate ex:group;
+        rr:objectMap [ rr:column "G" ];
+    ].

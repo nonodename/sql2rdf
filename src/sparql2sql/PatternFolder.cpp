@@ -9,11 +9,13 @@
 #include "sparql2sql/ExprAnalysis.h"
 #include "sparql2sql/ExpressionTranslator.h"
 #include "sparql2sql/SqlDialect.h"
+#include "sparql2sql/TermInference.h"
 #include "sparql2sql/TermMapSql.h"
 #include "sparql2sql/TranslationError.h"
 #include "sparql2sql/Translator.h"
 #include "sparql2sql/TriplePatternTranslator.h"
 #include "sparql2sql/ir/RelNode.h"
+#include "sparql2sql/ir/SqlRenderer.h"
 
 namespace sparql2sql {
 
@@ -77,6 +79,12 @@ RelNodePtr translateInlineData(const sparql::ast::InlineData &values, Translatio
 
 	std::set<std::string> undefVars;
 	std::vector<std::string> rowSqls;
+	// A VALUES column's terms live per *cell*, so its annotation is the meet
+	// down the column: one row may give an IRI and another a literal. An UNDEF
+	// cell contributes nothing at all (it is not a term), so it is skipped
+	// rather than met in as Unknown - which would wipe out every other row.
+	std::vector<TermInfo> columnTerms(varNames.size());
+	std::vector<bool> columnSeeded(varNames.size(), false);
 	for (const auto &row : values.rows) {
 		std::string sql = "SELECT ";
 		for (std::size_t i = 0; i < row.size(); ++i) {
@@ -88,6 +96,9 @@ RelNodePtr translateInlineData(const sparql::ast::InlineData &values, Translatio
 				undefVars.insert(varNames[i]);
 			} else {
 				sql += dialect.stringLiteral(termLexicalForm(*row[i])) + " AS " + mangleVar(varNames[i], dialect);
+				TermInfo cell = termInfoOfTerm(*row[i]);
+				columnTerms[i] = columnSeeded[i] ? meet(columnTerms[i], cell) : cell;
+				columnSeeded[i] = true;
 			}
 		}
 		rowSqls.push_back(sql);
@@ -111,10 +122,11 @@ RelNodePtr translateInlineData(const sparql::ast::InlineData &values, Translatio
 	} else {
 		raw.sql = dialect.combineByName(/*all=*/true, rowSqls);
 	}
-	for (const auto &v : varNames) {
+	for (std::size_t i = 0; i < varNames.size(); ++i) {
 		ColumnInfo col;
-		col.var = v;
-		col.nonNull = undefVars.count(v) == 0;
+		col.var = varNames[i];
+		col.nonNull = undefVars.count(varNames[i]) == 0;
+		col.term = columnTerms[i];
 		raw.schema().push_back(col);
 	}
 	return node;
@@ -140,10 +152,14 @@ RelNodePtr innerJoin(RelNodePtr left, RelNodePtr right, TranslationContext &ctx)
 	JoinNode &join = static_cast<JoinNode &>(*node);
 	join.joinKind = JoinKind::Inner;
 	join.keys = buildKeys(*left, *right);
+	// Meet before the children are moved below - after the move, left->column()
+	// would dereference a null unique_ptr. A side that doesn't bind the variable
+	// yields nullptr, which meetColumns skips rather than treating as Unknown.
 	for (const auto &v : allV) {
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = boundV.count(v) != 0;
+		col.term = meetColumns({left->column(v), right->column(v)});
 		join.schema().push_back(col);
 	}
 	join.left = std::move(left);
@@ -169,10 +185,14 @@ RelNodePtr leftOuterJoin(RelNodePtr left, RelNodePtr right, TranslationContext &
 	JoinNode &join = static_cast<JoinNode &>(*node);
 	join.joinKind = JoinKind::LeftOuter;
 	join.keys = buildKeys(*left, *right);
+	// Meet both sides, as for an inner join, and for the same reason: a shared
+	// variable is either equal on both sides (matched rows) or NULL on the right
+	// (unmatched), and NULL denotes no term. Must run before the moves below.
 	for (const auto &v : allV) {
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = boundV.count(v) != 0;
+		col.term = meetColumns({left->column(v), right->column(v)});
 		join.schema().push_back(col);
 	}
 	join.left = std::move(left);
@@ -195,7 +215,9 @@ RelNodePtr antiJoin(RelNodePtr left, RelNodePtr right, TranslationContext &ctx) 
 	// which is exactly what MINUS needs: null tolerance only ever matters for a
 	// key that can actually be NULL (see AntiJoinNode::keys).
 	anti.keys = buildKeys(*left, *right);
-	anti.schema() = left->schema(); // MINUS preserves left's schema exactly.
+	// MINUS preserves left's schema exactly - including its term annotations,
+	// since no value from the right side ever reaches the output.
+	anti.schema() = left->schema();
 	anti.left = std::move(left);
 	anti.right = std::move(right);
 	return node;
@@ -222,10 +244,12 @@ RelNodePtr unionAll(std::vector<RelNodePtr> branches, TranslationContext &ctx, b
 	RelNodePtr node(new UnionByNameNode());
 	UnionByNameNode &un = static_cast<UnionByNameNode &>(*node);
 	un.all = !dedup; // UNION algebra is bag-preserving unless a caller asks otherwise.
+	// Meet each variable across the arms before they are moved below.
 	for (const auto &v : allV) {
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = boundV.count(v) != 0;
+		col.term = meetAcrossArms(v, branches);
 		un.schema().push_back(col);
 	}
 	un.arms = std::move(branches);
@@ -300,6 +324,13 @@ RelNodePtr fold(const sparql::ast::GroupGraphPattern &pattern, TranslationContex
 			ColumnInfo col;
 			col.var = b.var->name;
 			col.nonNull = !optional;
+			// Infer from the expression while `acc` is still alive - it supplies
+			// the annotations of the variables the expression reads.
+			{
+				TranslatedPattern bindScope;
+				fillScopeFromSchema(bindScope, acc->schema());
+				col.term = inferExprTermInfo(*b.expr, bindScope);
+			}
 			bn.schema().push_back(col);
 			bn.outVar = b.var->name;
 			bn.expr = b.expr.get();
@@ -325,6 +356,10 @@ RelNodePtr fold(const sparql::ast::GroupGraphPattern &pattern, TranslationContex
 				ColumnInfo col;
 				col.var = v;
 				col.nonNull = false;
+				// Optionality is deliberately over-approximated here (see above),
+				// but the term annotation is not: a subquery projects the same
+				// terms its own pattern produced, so it carries through exactly.
+				col.term = nested.termInfoOf(v);
 				raw.schema().push_back(col);
 			}
 			acc = innerJoin(std::move(acc), std::move(node), ctx);

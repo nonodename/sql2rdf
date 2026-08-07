@@ -82,21 +82,43 @@ TEST_CASE("referencedColumns returns distinct placeholder names in first-occurre
 TEST_CASE("buildProjectionSql reconstructs the template as a concatenation expression") {
 	DuckDbDialect dialect;
 	auto segs = parseTemplate("http://ex.org/e/{ID}");
-	std::string sql = buildProjectionSql(segs, "t1", dialect);
+	std::string sql = buildProjectionSql(segs, "t1", dialect, /*percentEncodeValues=*/true);
 	CHECK(sql.find("t1") != std::string::npos);
 	CHECK(sql.find("\"ID\"") != std::string::npos);
 	CHECK(sql.find("'http://ex.org/e/'") != std::string::npos);
 }
 
+TEST_CASE("buildProjectionSql percent-encodes substituted placeholder columns but not literal text") {
+	DuckDbDialect dialect;
+	auto segs = parseTemplate("http://ex.org/e/{ID}");
+	std::string sql = buildProjectionSql(segs, "t1", dialect, /*percentEncodeValues=*/true);
+	// The placeholder's column expression is wrapped so it percent-encodes at
+	// query time, matching forward R2RML generation (AbstractMap::percentEncode).
+	CHECK(sql.find("url_encode(CAST(t1.\"ID\" AS VARCHAR))") != std::string::npos);
+	// Literal template text is never encoded - only substituted values.
+	CHECK(sql.find("'http://ex.org/e/'") != std::string::npos);
+}
+
+TEST_CASE("buildProjectionSql does not percent-encode placeholder columns for BlankNode/Literal templates") {
+	DuckDbDialect dialect;
+	auto segs = parseTemplate("note{NID}");
+	std::string sql = buildProjectionSql(segs, "t1", dialect, /*percentEncodeValues=*/false);
+	// No url_encode wrapper: rr:BlankNode/rr:Literal templates must not
+	// percent-encode substituted values (R2RML 7.3 only prescribes this for
+	// rr:IRI), matching the forward-generation fix in TemplateTermMap.cpp.
+	CHECK(sql.find("url_encode") == std::string::npos);
+	CHECK(sql.find("CAST(t1.\"NID\" AS VARCHAR)") != std::string::npos);
+}
+
 TEST_CASE("invertTemplate: NeverMatches when the literal prefix doesn't fit") {
 	auto segs = parseTemplate("http://ex.org/e/{ID}");
-	auto outcome = invertTemplate(segs, "http://other.org/e/7");
+	auto outcome = invertTemplate(segs, "http://other.org/e/7", /*percentDecodeValues=*/true);
 	CHECK(outcome.kind == InversionKind::NeverMatches);
 }
 
 TEST_CASE("invertTemplate: PerColumnMatch for a single unambiguous placeholder") {
 	auto segs = parseTemplate("http://ex.org/e/{ID}");
-	auto outcome = invertTemplate(segs, "http://ex.org/e/7369");
+	auto outcome = invertTemplate(segs, "http://ex.org/e/7369", /*percentDecodeValues=*/true);
 	REQUIRE(outcome.kind == InversionKind::PerColumnMatch);
 	REQUIRE(outcome.columnValues.size() == 1);
 	CHECK(outcome.columnValues[0].first == "ID");
@@ -105,7 +127,7 @@ TEST_CASE("invertTemplate: PerColumnMatch for a single unambiguous placeholder")
 
 TEST_CASE("invertTemplate: PerColumnMatch splits multiple delimited placeholders") {
 	auto segs = parseTemplate("http://ex.org/order/{CUSTID}/{ORDERID}");
-	auto outcome = invertTemplate(segs, "http://ex.org/order/42/99");
+	auto outcome = invertTemplate(segs, "http://ex.org/order/42/99", /*percentDecodeValues=*/true);
 	REQUIRE(outcome.kind == InversionKind::PerColumnMatch);
 	REQUIRE(outcome.columnValues.size() == 2);
 	CHECK(outcome.columnValues[0].first == "CUSTID");
@@ -116,14 +138,14 @@ TEST_CASE("invertTemplate: PerColumnMatch splits multiple delimited placeholders
 
 TEST_CASE("invertTemplate: WholeTemplateMatch for adjacent placeholders with no delimiter") {
 	auto segs = parseTemplate("{CUSTID}{ORDERID}");
-	auto outcome = invertTemplate(segs, "4299");
+	auto outcome = invertTemplate(segs, "4299", /*percentDecodeValues=*/true);
 	CHECK(outcome.kind == InversionKind::WholeTemplateMatch);
 	CHECK(outcome.columnValues.empty());
 }
 
 TEST_CASE("invertTemplate: adjacent-placeholder template still prunes on a bad literal anchor") {
 	auto segs = parseTemplate("pre-{A}{B}-post");
-	auto outcome = invertTemplate(segs, "WRONG-4299-post");
+	auto outcome = invertTemplate(segs, "WRONG-4299-post", /*percentDecodeValues=*/true);
 	CHECK(outcome.kind == InversionKind::NeverMatches);
 }
 
@@ -131,7 +153,7 @@ TEST_CASE("invertTemplate: a placeholder that is the final segment absorbs the w
 	// No trailing literal to delimit {ID}, so it legitimately captures
 	// everything left, including what looks like "extra" path segments.
 	auto segs = parseTemplate("http://ex.org/e/{ID}");
-	auto outcome = invertTemplate(segs, "http://ex.org/e/7369/extra");
+	auto outcome = invertTemplate(segs, "http://ex.org/e/7369/extra", /*percentDecodeValues=*/true);
 	REQUIRE(outcome.kind == InversionKind::PerColumnMatch);
 	REQUIRE(outcome.columnValues.size() == 1);
 	CHECK(outcome.columnValues[0].second == "7369/extra");
@@ -139,8 +161,20 @@ TEST_CASE("invertTemplate: a placeholder that is the final segment absorbs the w
 
 TEST_CASE("invertTemplate: trailing literal segment that isn't fully consumed is NeverMatches") {
 	auto segs = parseTemplate("abc{X}def");
-	auto outcome = invertTemplate(segs, "abcVALUEdefEXTRA");
+	auto outcome = invertTemplate(segs, "abcVALUEdefEXTRA", /*percentDecodeValues=*/true);
 	CHECK(outcome.kind == InversionKind::NeverMatches);
+}
+
+TEST_CASE("invertTemplate: percentDecodeValues=false leaves extracted spans undecoded for BlankNode/Literal") {
+	// A templated blank-node/literal object never percent-encodes its column
+	// values on the way out (see buildProjectionSql above), so inversion must
+	// not percent-decode them on the way back in - a literal that happens to
+	// contain '%' would otherwise be corrupted.
+	auto segs = parseTemplate("note{NID}");
+	auto outcome = invertTemplate(segs, "note100%off", /*percentDecodeValues=*/false);
+	REQUIRE(outcome.kind == InversionKind::PerColumnMatch);
+	REQUIRE(outcome.columnValues.size() == 1);
+	CHECK(outcome.columnValues[0].second == "100%off");
 }
 
 TEST_CASE("percentDecode is the inverse of RFC3986 percent-encoding") {

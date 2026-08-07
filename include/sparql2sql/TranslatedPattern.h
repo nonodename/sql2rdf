@@ -1,8 +1,14 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
+#include <cstdio>
+#include <ctime>
+#include <map>
 #include <set>
 #include <string>
+
+#include "sparql2sql/TermInfo.h"
 
 namespace r2rml {
 class R2RMLMapping;
@@ -23,6 +29,19 @@ struct TranslatedPattern {
 	std::set<std::string> optionalVars; // may be NULL in some rows
 	bool isIdentity = false;            // true only for the fold's starting relation
 
+	/// Per-variable static RDF term dimension, as far as the R2RML mapping
+	/// determines it. A variable ABSENT from this map is Unknown, so the map is
+	/// always safe to under-populate but never to over-populate: every consumer
+	/// falls back to the pre-term-tracking behaviour on Unknown. Always read it
+	/// through termInfoOf(), never with operator[] or a raw find().
+	///
+	/// Deliberately kept alongside boundVars/optionalVars rather than folded
+	/// into one map-of-everything: nullability already has two well-tested
+	/// homes across dozens of assertion sites, and a second copy of that fact
+	/// here would be a second source of truth. Both views are derived by the
+	/// same fillScopeFromSchema(), which is what keeps them in step.
+	std::map<std::string, TermInfo> termInfo;
+
 	std::set<std::string> allVars() const {
 		std::set<std::string> out = boundVars;
 		out.insert(optionalVars.begin(), optionalVars.end());
@@ -31,6 +50,13 @@ struct TranslatedPattern {
 
 	bool hasOuterJoinLineage() const {
 		return !optionalVars.empty();
+	}
+
+	/// The static term annotation of `var`, or a default (Unknown) one if the
+	/// variable is absent - which is always a safe answer.
+	TermInfo termInfoOf(const std::string &var) const {
+		std::map<std::string, TermInfo>::const_iterator it = termInfo.find(var);
+		return it == termInfo.end() ? TermInfo() : it->second;
 	}
 };
 
@@ -89,6 +115,29 @@ public:
 		return internalVars_.count(varName) != 0;
 	}
 
+	/// SPARQL 1.1 §17.4.1.7 requires NOW() to return the same value for every
+	/// call within a single query evaluation. Stamp the current UTC time into
+	/// a lexical xsd:dateTime string the first time NOW() is translated, then
+	/// return that same string for every later call in this translation -
+	/// never emit a SQL function like current_timestamp, which would be
+	/// re-evaluated per row instead of once per query.
+	const std::string &nowLiteral() {
+		if (nowLiteral_.empty()) {
+			std::time_t t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+			std::tm utc;
+#if defined(_WIN32)
+			gmtime_s(&utc, &t);
+#else
+			gmtime_r(&t, &utc);
+#endif
+			char buf[32];
+			std::snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d", utc.tm_year + 1900, utc.tm_mon + 1,
+			              utc.tm_mday, utc.tm_hour, utc.tm_min, utc.tm_sec);
+			nowLiteral_ = buf;
+		}
+		return nowLiteral_;
+	}
+
 private:
 	const r2rml::R2RMLMapping &mapping_;
 	const SqlDialect &dialect_;
@@ -96,6 +145,7 @@ private:
 	std::size_t aliasCounter_;
 	std::size_t internalVarCounter_ = 0;
 	std::set<std::string> internalVars_;
+	std::string nowLiteral_;
 };
 
 /// Mangle a SPARQL variable name into its projected SQL column name

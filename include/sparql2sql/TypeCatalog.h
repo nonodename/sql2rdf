@@ -28,4 +28,16 @@ struct TypeCatalog {
 	                const std::string &columnB) const;
 };
 
+/// R2RML Section 10.2's natural mapping from a SQL datatype to an XSD datatype
+/// IRI, keyed on a SQL *type name* as a catalog reports it. Case-insensitive
+/// and precision/width-insensitive ("DECIMAL(18,2)" == "decimal"). Returns the
+/// empty string for a type with no natural mapping, or an unrecognised one,
+/// meaning "no datatype can be inferred" - never a guess.
+///
+/// Deliberately distinct from - and not derivable from -
+/// r2rml::SQLValue::datatypeIRI(), which classifies a *runtime value* through a
+/// five-way enum with no notion of SQL type names. This one is static, needed
+/// before any row is read, and covers the full table.
+std::string naturalXsdDatatype(const std::string &sqlTypeName);
+
 } // namespace sparql2sql

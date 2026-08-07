@@ -1,0 +1,11 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?e ?y ?mo ?d ?h ?mi ?s
+WHERE {
+  ?e ex:name "SMITH" .
+  BIND(YEAR("2020-05-15T10:30:45") AS ?y)
+  BIND(MONTH("2020-05-15T10:30:45") AS ?mo)
+  BIND(DAY("2020-05-15T10:30:45") AS ?d)
+  BIND(HOURS("2020-05-15T10:30:45") AS ?h)
+  BIND(MINUTES("2020-05-15T10:30:45") AS ?mi)
+  BIND(SECONDS("2020-05-15T10:30:45") AS ?s)
+}

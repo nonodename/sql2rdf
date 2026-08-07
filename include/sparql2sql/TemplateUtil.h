@@ -32,11 +32,13 @@ std::vector<std::string> referencedColumns(const std::vector<TemplateSegment> &s
 
 /// Build a SQL expression that reconstructs the template's string value from
 /// the given source alias's columns (string concatenation of literal text
-/// and CAST(...AS VARCHAR) column references). V1 does not percent-encode
-/// substituted column values (documented limitation: assumes
-/// template-referenced columns hold only RFC3986-unreserved characters).
+/// and, when percentEncodeValues is true, percent-encoded CAST(...AS VARCHAR)
+/// column references). Matches what forward R2RML generation produces
+/// (r2rml::AbstractMap::percentEncode): R2RML 7.3 percent-encodes substituted
+/// template values only for an rr:IRI term map, so callers must pass
+/// percentEncodeValues = (termMap.termType == r2rml::TermType::IRI).
 std::string buildProjectionSql(const std::vector<TemplateSegment> &segments, const std::string &sourceAlias,
-                               const SqlDialect &dialect);
+                               const SqlDialect &dialect, bool percentEncodeValues);
 
 enum class InversionKind { NeverMatches, PerColumnMatch, WholeTemplateMatch };
 
@@ -69,7 +71,13 @@ struct InversionOutcome {
 /// adjacent. This case is not detected; PerColumnMatch is used whenever
 /// segments simply alternate, which is correct for the common case of
 /// non-unreserved delimiters (e.g. "/", ":", "=").
-InversionOutcome invertTemplate(const std::vector<TemplateSegment> &segments, const std::string &boundValue);
+///
+/// percentDecodeValues must agree with the term map's rr:termType, mirroring
+/// buildProjectionSql above: only an rr:IRI template percent-encodes
+/// substituted values in forward generation, so only for rr:IRI should the
+/// extracted spans be percent-decoded here.
+InversionOutcome invertTemplate(const std::vector<TemplateSegment> &segments, const std::string &boundValue,
+                                bool percentDecodeValues);
 
 /// RFC3986 percent-decode. The inverse of r2rml::TemplateTermMap.cpp's
 /// translation-unit-local percentEncode() helper; re-implemented here since

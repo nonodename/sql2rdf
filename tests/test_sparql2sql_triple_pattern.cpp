@@ -7,7 +7,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <memory>
 #include <string>
+#include <vector>
 
 #ifndef SOURCE_SPARQL2SQL_DIR
 #define SOURCE_SPARQL2SQL_DIR ""
@@ -20,6 +22,7 @@
 #include "r2rml/R2RMLParser.h"
 #include "sparql-parser/Parser.h"
 #include "sparql2sql/DuckDbDialect.h"
+#include "sparql2sql/TermInfo.h"
 #include "sparql2sql/TranslatedPattern.h"
 #include "sparql2sql/TranslationError.h"
 #include "sparql2sql/TriplePatternTranslator.h"
@@ -220,4 +223,89 @@ TEST_CASE("translateTriplePattern: the one-or-more property path operator throws
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
 	CHECK_THROWS_AS(translateTriplePattern(nthTriple(*q, 0), ctx), TranslationError);
+}
+
+// ---------------------------------------------------------------------------
+// The static RDF term dimension a triple pattern's translation carries. These
+// are the observable half of the ColumnInfo::term plumbing: the annotation is
+// derived at the producers (termMapToSqlExpr), met across candidate arms, and
+// surfaced on the rendered TranslatedPattern by fillScopeFromSchema.
+//
+// Unknown reproduces the pre-annotation behaviour exactly, so a regression that
+// wipes an annotation out is invisible to every assertion that looks at SQL
+// text. These look at the annotation directly for that reason.
+// ---------------------------------------------------------------------------
+namespace {
+
+TranslatedPattern translateTermsFixture(const char *rq, std::size_t elementIndex = 0, std::size_t tripleIndex = 0) {
+	static Parser parser;
+	static R2RMLParser mappingParser;
+	static R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_terms.ttl");
+	static DuckDbDialect dialect;
+	// Kept alive for the returned pattern's lifetime by the caller's use of it.
+	static std::vector<std::unique_ptr<sparql::ast::Query>> queries;
+	queries.push_back(parser.parseString(rq));
+	TranslationContext ctx(mapping, dialect);
+	return translated(nthTriple(*queries.back(), elementIndex, tripleIndex), ctx);
+}
+
+const char *const kTermsPrefix = "PREFIX ex: <http://example.com/ns#>\n";
+
+} // namespace
+
+TEST_CASE("term annotation: a template subject is a known IRI") {
+	TranslatedPattern r =
+	    translateTermsFixture(std::string(std::string(kTermsPrefix) + "SELECT * WHERE { ?m ex:amount ?a }").c_str());
+	CHECK(r.termInfoOf("m").kind == sparql2sql::RdfTermKind::Iri);
+}
+
+TEST_CASE("term annotation: a declared rr:datatype reaches the projected column") {
+	TranslatedPattern r =
+	    translateTermsFixture(std::string(std::string(kTermsPrefix) + "SELECT * WHERE { ?m ex:amount ?a }").c_str());
+	const sparql2sql::TermInfo a = r.termInfoOf("a");
+	CHECK(a.kind == sparql2sql::RdfTermKind::Literal);
+	CHECK(a.datatypeIri == sparql2sql::xsd::kInteger);
+	CHECK(a.isIntegral());
+}
+
+TEST_CASE("term annotation: rr:language yields rdf:langString plus the tag") {
+	TranslatedPattern r =
+	    translateTermsFixture(std::string(std::string(kTermsPrefix) + "SELECT * WHERE { ?m ex:title ?t }").c_str());
+	const sparql2sql::TermInfo t = r.termInfoOf("t");
+	CHECK(t.kind == sparql2sql::RdfTermKind::Literal);
+	CHECK(t.datatypeIri == sparql2sql::kRdfLangString);
+	CHECK(t.lang == "en");
+}
+
+TEST_CASE("term annotation: a bare rr:column is a known Literal with an unknown datatype") {
+	// The distinction that keeps DATATYPE() honest: the *kind* is known (so
+	// isLITERAL() may fold) while the datatype genuinely is not, because R2RML
+	// would have derived it from the column's SQL type and no catalog is given.
+	TranslatedPattern r =
+	    translateTermsFixture(std::string(std::string(kTermsPrefix) + "SELECT * WHERE { ?m ex:plain ?p }").c_str());
+	const sparql2sql::TermInfo p = r.termInfoOf("p");
+	CHECK(p.kind == sparql2sql::RdfTermKind::Literal);
+	CHECK(p.datatypeIri.empty());
+	CHECK_FALSE(p.isNumeric());
+}
+
+TEST_CASE("term annotation: rr:termType rr:IRI on a column overrides the object-map default") {
+	TranslatedPattern r =
+	    translateTermsFixture(std::string(std::string(kTermsPrefix) + "SELECT * WHERE { ?m ex:homepage ?h }").c_str());
+	CHECK(r.termInfoOf("h").kind == sparql2sql::RdfTermKind::Iri);
+}
+
+TEST_CASE("term annotation: an rr:BlankNode subject map is a known blank node") {
+	TranslatedPattern r =
+	    translateTermsFixture(std::string(std::string(kTermsPrefix) + "SELECT * WHERE { ?n ex:body ?b }").c_str());
+	CHECK(r.termInfoOf("n").kind == sparql2sql::RdfTermKind::BlankNode);
+}
+
+TEST_CASE("term annotation: candidate arms that disagree on term kind meet to Unknown") {
+	// ex:mixed is mapped by two triples maps, one producing an IRI object and
+	// one a literal. Neither the kind nor the subject's kind survives.
+	TranslatedPattern r =
+	    translateTermsFixture(std::string(std::string(kTermsPrefix) + "SELECT * WHERE { ?s ex:mixed ?x }").c_str());
+	CHECK(r.termInfoOf("x").kind == sparql2sql::RdfTermKind::Unknown);
+	CHECK(r.termInfoOf("s").kind == sparql2sql::RdfTermKind::Unknown);
 }

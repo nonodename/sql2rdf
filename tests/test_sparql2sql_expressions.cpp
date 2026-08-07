@@ -118,22 +118,96 @@ TEST_CASE("FILTER: deferred builtins throw a named TranslationError") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
 
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(isIRI(?e)) }", mapping), TranslationError);
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(isBLANK(?e)) }", mapping), TranslationError);
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(isLITERAL(?n)) }", mapping), TranslationError);
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(lang(?n) = \"\") }", mapping),
-	                TranslationError);
+	// datatype(?n) is the term-kind builtin that still refuses under this
+	// mapping: ?n is a *known literal* (so isLITERAL() folds - see below), but
+	// its datatype is not declared and test_runner supplies no TypeCatalog, so
+	// there is genuinely nothing to report.
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(datatype(?n) = ex:foo) }", mapping),
 	                TranslationError);
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(SHA384(?n) = \"x\") }", mapping),
 	                TranslationError);
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(SHA512(?n) = \"x\") }", mapping),
 	                TranslationError);
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(YEAR(?n) = 2020) }", mapping),
+	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(TIMEZONE(?n) = \"\") }", mapping),
 	                TranslationError);
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(ENCODE_FOR_URI(?n) = \"\") }", mapping),
+	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(TZ(?n) = \"\") }", mapping), TranslationError);
+	// Term construction is still out of scope: these mint new terms, which
+	// needs more than term *tracking*.
+	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(IRI(?n) = ex:foo) }", mapping),
 	                TranslationError);
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(RAND() > 0.5) }", mapping), TranslationError);
+	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(BNODE(?n) = ?e) }", mapping), TranslationError);
+}
+
+// Coverage transferred from the case above: isIRI/isBLANK/isLITERAL/lang used
+// to throw here, and now resolve, because example_emp_dept.ttl's subject maps
+// are rr:template IRIs and its ex:name object map is a bare rr:column literal.
+TEST_CASE("FILTER: term-kind builtins fold against a mapping that determines the kind") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+
+	// ?e is a template-generated IRI in every candidate arm.
+	CHECK(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(isIRI(?e)) }", mapping).find("TRUE") !=
+	      std::string::npos);
+	CHECK(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(isBLANK(?e)) }", mapping).find("FALSE") !=
+	      std::string::npos);
+	// ?n is a known literal even though its datatype is not known.
+	CHECK(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(isLITERAL(?n)) }", mapping).find("TRUE") !=
+	      std::string::npos);
+	// A literal with no rr:language has the empty tag - a known answer.
+	CHECK(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(lang(?n) = \"\") }", mapping).find("''") !=
+	      std::string::npos);
+	// lang() on a statically-IRI argument is a type error, not an unknown.
+	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(lang(?e) = \"\") }", mapping),
+	                TranslationError);
+}
+
+TEST_CASE("BIND: NOW() stamps a single literal, reused for every call in the query") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql =
+	    translate("SELECT ?e ?n1 ?n2 WHERE { ?e ex:name ?x . BIND(NOW() AS ?n1) BIND(NOW() AS ?n2) }", mapping);
+	// NOW() must not be rendered as a per-row SQL function - only a fixed
+	// string literal, stamped once and reused for every call.
+	CHECK(sql.find("current_timestamp") == std::string::npos);
+	CHECK(sql.find("CURRENT_TIMESTAMP") == std::string::npos);
+	CHECK(sql.find("now(") == std::string::npos);
+
+	std::size_t firstQuote = sql.find('\'');
+	REQUIRE(firstQuote != std::string::npos);
+	std::size_t closeQuote = sql.find('\'', firstQuote + 1);
+	REQUIRE(closeQuote != std::string::npos);
+	std::string literal = sql.substr(firstQuote, closeQuote - firstQuote + 1);
+	CHECK(literal.size() == 21); // 'YYYY-MM-DDTHH:MM:SS'
+
+	// The exact same literal must appear a second time, for the second BIND.
+	std::size_t secondOccurrence = sql.find(literal, closeQuote + 1);
+	CHECK(secondOccurrence != std::string::npos);
+}
+
+TEST_CASE("FILTER/BIND: RAND()/UUID()/STRUUID() map to per-row DuckDB scalar functions") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+
+	std::string randSql = translate("SELECT ?e ?r WHERE { ?e ex:name ?n . BIND(RAND() AS ?r) }", mapping);
+	CHECK(randSql.find("random()") != std::string::npos);
+
+	std::string uuidSql = translate("SELECT ?e ?u WHERE { ?e ex:name ?n . BIND(UUID() AS ?u) }", mapping);
+	CHECK(uuidSql.find("uuid()") != std::string::npos);
+	CHECK(uuidSql.find("urn:uuid:") != std::string::npos);
+
+	std::string struuidSql = translate("SELECT ?e ?u WHERE { ?e ex:name ?n . BIND(STRUUID() AS ?u) }", mapping);
+	CHECK(struuidSql.find("uuid()") != std::string::npos);
+	CHECK(struuidSql.find("urn:uuid:") == std::string::npos);
+}
+
+TEST_CASE("FILTER/BIND: ENCODE_FOR_URI() percent-encodes via the dialect, matching forward R2RML generation") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?e ?enc WHERE { ?e ex:name ?n . BIND(ENCODE_FOR_URI(?n) AS ?enc) }", mapping);
+	CHECK(sql.find("url_encode(") != std::string::npos);
+	CHECK(sql.find("\"v_enc\"") != std::string::npos);
+
+	CHECK_NOTHROW(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(ENCODE_FOR_URI(?n) = \"x\") }", mapping));
 }
 
 TEST_CASE("FILTER: a non-builtin function call throws a named TranslationError") {
@@ -155,12 +229,84 @@ TEST_CASE("FILTER: xsd:integer/decimal/double/float/string casts translate witho
 	CHECK(sql.find("AS BIGINT)") != std::string::npos);
 }
 
-TEST_CASE("FILTER: xsd:integer() comparison produces a numeric-aware comparison") {
+TEST_CASE("FILTER: xsd:decimal() casts to a fixed-point DECIMAL, not DOUBLE") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string decSql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                               "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(xsd:decimal(?n) != \"\") }",
+	                               mapping);
+	CHECK(decSql.find("AS DECIMAL(38,18))") != std::string::npos);
+
+	std::string doubleSql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                                  "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(xsd:double(?n) != \"\") }",
+	                                  mapping);
+	CHECK(doubleSql.find("AS DOUBLE)") != std::string::npos);
+	CHECK(doubleSql.find("DECIMAL") == std::string::npos);
+}
+
+TEST_CASE("FILTER: xsd:boolean() casts translate without throwing") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                            "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(xsd:boolean(?n) = \"true\") }",
+	                            mapping);
+	CHECK(sql.find("AS BOOLEAN)") != std::string::npos);
+}
+
+TEST_CASE("FILTER: xsd:date() casts translate without throwing") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                            "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(xsd:date(?n) != \"\") }",
+	                            mapping);
+	CHECK(sql.find("AS DATE)") != std::string::npos);
+}
+
+TEST_CASE("FILTER: xsd:dateTime() casts translate without throwing") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                            "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(xsd:dateTime(?n) != \"\") }",
+	                            mapping);
+	CHECK(sql.find("AS TIMESTAMP)") != std::string::npos);
+	CHECK(sql.find("REPLACE(") != std::string::npos);
+}
+
+TEST_CASE("FILTER: xsd:long/int/short/byte casts alias xsd:integer") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	for (const std::string &type : {"long", "int", "short", "byte"}) {
+		std::string sql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+		                            "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(xsd:" +
+		                                type + "(?n) > 5) }",
+		                            mapping);
+		CHECK(sql.find("AS BIGINT)") != std::string::npos);
+	}
+}
+
+TEST_CASE("FILTER: xsd:integer() comparison produces a direct numeric comparison") {
+	// Both operands are statically typed here - the cast types its result, and
+	// the integer literal carries xsd:integer - so the string-fallback wrapper
+	// is dropped. (It used to be emitted unconditionally; see the sibling case
+	// below for the untyped shape that still needs it.)
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
 	std::string sql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
 	                            "SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(xsd:integer(?n) > 5) }",
 	                            mapping);
+	CHECK(sql.find("CASE WHEN") == std::string::npos);
+	CHECK(sql.find("IS NOT NULL AND") == std::string::npos);
+	CHECK(sql.find("TRY_CAST") != std::string::npos);
+	CHECK(sql.find("AS DOUBLE") != std::string::npos);
+}
+
+TEST_CASE("FILTER: an untyped variable comparison keeps the numeric-aware fallback") {
+	// ?n is a bare rr:column with no rr:datatype and no TypeCatalog is supplied,
+	// so nothing is statically known and the pre-existing form must survive
+	// verbatim. This is the no-regression anchor for the typed-comparison work.
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(?n > 5) }", mapping);
 	CHECK(sql.find("CASE WHEN") != std::string::npos);
 	CHECK(sql.find("IS NOT NULL AND") != std::string::npos);
 }
@@ -175,6 +321,22 @@ TEST_CASE("BIND: xsd:integer introduces a computed column") {
 	CHECK(sql.find("AS BIGINT)") != std::string::npos);
 }
 
+TEST_CASE("BIND: xsd:boolean/xsd:dateTime introduce computed columns") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string boolSql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                                "SELECT ?e ?asbool WHERE { ?e ex:name ?n . BIND(xsd:boolean(?n) AS ?asbool) }",
+	                                mapping);
+	CHECK(boolSql.find("\"v_asbool\"") != std::string::npos);
+	CHECK(boolSql.find("AS BOOLEAN)") != std::string::npos);
+
+	std::string dtSql = translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                              "SELECT ?e ?asdt WHERE { ?e ex:name ?n . BIND(xsd:dateTime(?n) AS ?asdt) }",
+	                              mapping);
+	CHECK(dtSql.find("\"v_asdt\"") != std::string::npos);
+	CHECK(dtSql.find("AS TIMESTAMP)") != std::string::npos);
+}
+
 TEST_CASE("FILTER: xsd cast with wrong arity throws a named TranslationError") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
@@ -186,13 +348,21 @@ TEST_CASE("FILTER: xsd cast with wrong arity throws a named TranslationError") {
 	                          "SELECT ?e WHERE { ?e ex:name ?n . FILTER(xsd:integer(?n, ?n) > 0) }",
 	                          mapping),
 	                TranslationError);
+	CHECK_THROWS_AS(translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                          "SELECT ?e WHERE { ?e ex:name ?n . FILTER(xsd:boolean() = \"\") }",
+	                          mapping),
+	                TranslationError);
+	CHECK_THROWS_AS(translate("PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
+	                          "SELECT ?e WHERE { ?e ex:name ?n . FILTER(xsd:boolean(?n, ?n) = \"true\") }",
+	                          mapping),
+	                TranslationError);
 }
 
-TEST_CASE("FILTER: xsd:boolean is out of scope and still throws") {
+TEST_CASE("FILTER: an unsupported XSD constructor still throws a named TranslationError") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . "
-	                          "FILTER(<http://www.w3.org/2001/XMLSchema#boolean>(?n) = \"true\") }",
+	                          "FILTER(<http://www.w3.org/2001/XMLSchema#anyURI>(?n) = \"x\") }",
 	                          mapping),
 	                TranslationError);
 }
@@ -242,10 +412,28 @@ TEST_CASE("FILTER: IN and NOT IN translate to SQL IN/NOT IN lists") {
 }
 
 TEST_CASE("FILTER: a bare IriRef operand translates to its lexical IRI value") {
+	// Compared against ?e, which is itself a template-generated IRI: same term
+	// kind, so the comparison survives as a real string comparison and the IRI's
+	// text has to appear in it.
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
-	std::string sql = translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(?n != ex:foo) }", mapping);
+	std::string sql = translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(?e != ex:foo) }", mapping);
 	CHECK(sql.find("example.com/ns#foo") != std::string::npos);
+}
+
+TEST_CASE("FILTER: comparing a known literal with an IRI folds, since no literal is ever an IRI") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	// ?n is a known literal and ex:foo an IRI, so RDF term equality settles this
+	// without looking at any data: != is TRUE, = is FALSE.
+	CHECK(translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(?n != ex:foo) }", mapping).find("TRUE") !=
+	      std::string::npos);
+	CHECK(translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(?n = ex:foo) }", mapping).find("FALSE") !=
+	      std::string::npos);
+	// Ordering comparisons are NOT folded: a literal-vs-IRI `<` is a genuine
+	// type error, and answering FALSE would be wrong rather than imprecise.
+	CHECK(translate("SELECT ?e ?n WHERE { ?e ex:name ?n . FILTER(?n < ex:foo) }", mapping).find("example.com/ns#foo") !=
+	      std::string::npos);
 }
 
 TEST_CASE("FILTER EXISTS: correlates on multiple shared variables joined with AND") {
@@ -333,6 +521,23 @@ TEST_CASE("FILTER: numeric builtins ABS/CEIL/FLOOR/ROUND") {
 	CHECK(sql.find("CEIL(") != std::string::npos);
 	CHECK(sql.find("FLOOR(") != std::string::npos);
 	CHECK(sql.find("ROUND(") != std::string::npos);
+}
+
+TEST_CASE("FILTER: date/time accessors YEAR/MONTH/DAY/HOURS/MINUTES/SECONDS translate via EXTRACT") {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	std::string sql = translate("SELECT ?e ?n WHERE { ?e ex:name ?n . "
+	                            "FILTER(YEAR(?n) != \"0\" || MONTH(?n) != \"0\" || DAY(?n) != \"0\" || "
+	                            "HOURS(?n) != \"0\" || MINUTES(?n) != \"0\" || SECONDS(?n) != \"0\") }",
+	                            mapping);
+	CHECK(sql.find("EXTRACT(YEAR") != std::string::npos);
+	CHECK(sql.find("EXTRACT(MONTH") != std::string::npos);
+	CHECK(sql.find("EXTRACT(DAY") != std::string::npos);
+	CHECK(sql.find("EXTRACT(HOUR") != std::string::npos);
+	CHECK(sql.find("EXTRACT(MINUTE") != std::string::npos);
+	CHECK(sql.find("EXTRACT(SECOND") != std::string::npos);
+	CHECK(sql.find("TRY_CAST") != std::string::npos);
+	CHECK(sql.find("AS TIMESTAMP)") != std::string::npos);
 }
 
 TEST_CASE("BIND: COALESCE, IF, SAMETERM, and ISNUMERIC") {

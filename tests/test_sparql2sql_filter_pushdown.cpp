@@ -6,10 +6,13 @@
  * correctness oracle. Uses the full translateQuery pipeline (fold -> optimize
  * -> render) against real fixtures, all mapped by example_emp_dept.ttl.
  *
- * The `?x = "..."` comparisons in these fixtures each render as a single
- * `CASE WHEN` block, so counting `CASE WHEN` counts filter instances: >1 means
- * the predicate was replicated across union arms / join sides (pushed down),
- * ==1 with an outer position means it stayed at a boundary.
+ * "How many times was this predicate instantiated" is the quantity these tests
+ * actually care about: >1 means the predicate was replicated across union arms
+ * / join sides (pushed down), ==1 with an outer position means it stayed at a
+ * boundary. It is counted via countFilterInstances(), which normalises by how
+ * many times one instantiation mentions its constant literal - deliberately
+ * *measured* rather than hard-coded, so these tests measure pushdown and not
+ * the incidental SQL shape of a comparison. See literalsPerFilter().
  */
 
 #include <catch2/catch_test_macros.hpp>
@@ -57,12 +60,36 @@ std::size_t countOccurrences(const std::string &haystack, const std::string &nee
 	return count;
 }
 
+// How many times one instantiation of a `?x = "<literal>"` predicate mentions
+// that literal. NOT a constant: it depends on how the comparison is spelled.
+// The numeric-aware form mentions each operand three times (twice in the CASE
+// guard and result, once in the string fallback); a comparison the translator
+// can type statically mentions it once. So it is measured from a fixture whose
+// predicate is known to be instantiated exactly once - see the
+// "folded into its WHERE" case below, which pins that independently.
+std::size_t literalsPerFilter() {
+	static const std::size_t perFilter = countOccurrences(translateFixture("emp_dept_filter_folded.rq"), "'NEW YORK'");
+	return perFilter;
+}
+
+// How many times a filter predicate carrying `literal` was instantiated in
+// `sql`. The divisibility check is the point: if a change makes one predicate's
+// SQL shape differ from the calibration fixture's, this fails loudly instead of
+// silently reporting a wrong instance count.
+std::size_t countFilterInstances(const std::string &sql, const std::string &literal) {
+	const std::size_t perFilter = literalsPerFilter();
+	REQUIRE(perFilter > 0);
+	const std::size_t total = countOccurrences(sql, literal);
+	REQUIRE(total % perFilter == 0);
+	return total / perFilter;
+}
+
 } // namespace
 
 TEST_CASE("pushdown: FILTER over UNION is distributed into every arm", "[sparql2sql]") {
 	std::string sql = translateFixture("emp_dept_filter_union.rq");
-	// One CASE WHEN per union arm (>1) rather than a single outer wrap.
-	CHECK(countOccurrences(sql, "CASE WHEN") >= 2);
+	// One instantiation per union arm (>1) rather than a single outer wrap.
+	CHECK(countFilterInstances(sql, "'NEW YORK'") >= 2);
 	CHECK(sql.find("UNION ALL BY NAME") != std::string::npos);
 	// No top-level wrapping filter above the union: the union feeds the
 	// projection directly.
@@ -77,7 +104,7 @@ TEST_CASE("pushdown: FILTER over an inner join lands on the referenced side only
 	// - it appears before the INNER JOIN keyword, not above the whole join.
 	CHECK(sql.find("'NEW YORK'") < sql.find("INNER JOIN"));
 	// It is applied exactly once (on one side), not duplicated onto the union.
-	CHECK(countOccurrences(sql, "CASE WHEN") == 1);
+	CHECK(countFilterInstances(sql, "'NEW YORK'") == 1);
 }
 
 TEST_CASE("pushdown: FILTER on an OPTIONAL var is NOT pushed below the left outer join", "[sparql2sql]") {
@@ -87,7 +114,7 @@ TEST_CASE("pushdown: FILTER on an OPTIONAL var is NOT pushed below the left oute
 	// The filter stays above the outer join (boundary): it appears after the
 	// LEFT OUTER JOIN, never pushed down onto the optional side.
 	CHECK(sql.find("LEFT OUTER JOIN") < sql.find("'NEW YORK'"));
-	CHECK(countOccurrences(sql, "CASE WHEN") == 1);
+	CHECK(countFilterInstances(sql, "'NEW YORK'") == 1);
 }
 
 TEST_CASE("pushdown: FILTER on a var nullable via OPTIONAL on one join side but required on the other is not "
@@ -104,7 +131,7 @@ TEST_CASE("pushdown: FILTER on a var nullable via OPTIONAL on one join side but 
 	CHECK(sql.find("LEFT OUTER JOIN") < sql.find("INNER JOIN"));
 	CHECK(sql.find("INNER JOIN") < sql.find("'NEW YORK'"));
 	// Folded once (into the ?d2 block's WHERE), not duplicated, not dropped.
-	CHECK(countOccurrences(sql, "CASE WHEN") == 1);
+	CHECK(countFilterInstances(sql, "'NEW YORK'") == 1);
 	CHECK(sql.find("SELECT * FROM (") == std::string::npos);
 }
 
@@ -127,7 +154,14 @@ TEST_CASE("pushdown: a FILTER reaching an SPJ block is folded into its WHERE", "
 	CHECK(sql.find("SELECT * FROM (") == std::string::npos);
 	// Folded predicates reference the block's own column expressions, not a
 	// wrapper alias's projected v_ columns.
+	//
+	// This exact spelling holds because ?loc is a bare rr:column with no
+	// rr:datatype and no TypeCatalog is supplied, so the translator cannot type
+	// the comparison and falls back to the lexical form. Supplying a catalog
+	// (as the CLI does) would legitimately change it. This case is also
+	// literalsPerFilter()'s calibration fixture - exactly one instantiation.
 	CHECK(sql.find("(CAST(t5.\"LOC\" AS VARCHAR)) = 'NEW YORK'") != std::string::npos);
+	CHECK(countFilterInstances(sql, "'NEW YORK'") == 1);
 }
 
 TEST_CASE("pushdown: folding a FILTER keeps its block mergeable by flattening", "[sparql2sql]") {
@@ -151,5 +185,5 @@ TEST_CASE("pushdown: FILTER over MINUS is pushed onto the anti-join left side", 
 	// left side is itself a UNION (ex:name maps two tables), so the filter is
 	// then distributed into both of its arms.
 	CHECK(sql.find("'SMITH'") < sql.find("NOT EXISTS"));
-	CHECK(countOccurrences(sql, "CASE WHEN") >= 2);
+	CHECK(countFilterInstances(sql, "'SMITH'") >= 2);
 }

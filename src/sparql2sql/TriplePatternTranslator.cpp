@@ -52,6 +52,7 @@ struct Resolved {
 	std::string templateString;
 	std::string sourceAlias;
 	std::string tableIdentity;
+	TermInfo term;
 };
 
 Provenance provenanceOf(const r2rml::TermMap &termMap, std::string &columnName, std::string &templateString) {
@@ -69,19 +70,23 @@ Provenance provenanceOf(const r2rml::TermMap &termMap, std::string &columnName, 
 	return Provenance::Computed;
 }
 
-Resolved resolveSource(const TermSource &src, const SqlDialect &dialect) {
+Resolved resolveSource(const TermSource &src, const SqlDialect &dialect, const TypeCatalog *catalog) {
 	Resolved r;
 	if (src.isConstant) {
 		r.expr = dialect.stringLiteral(src.constantValue);
 		r.prov = Provenance::ConstantExpr;
+		// Every constant TermSource this file constructs is an IRI: either
+		// rdf:type for a synthetic rr:class triple, or the rr:class IRI itself.
+		r.term.kind = RdfTermKind::Iri;
 		return r;
 	}
-	SqlExpr e = termMapToSqlExpr(*src.termMap, src.alias, dialect);
+	SqlExpr e = termMapToSqlExpr(*src.termMap, src.alias, dialect, catalog, src.tableIdentity);
 	r.expr = e.expr;
 	r.requiredNonNull = e.requiredNonNullColumns;
 	r.prov = provenanceOf(*src.termMap, r.columnName, r.templateString);
 	r.sourceAlias = src.alias;
 	r.tableIdentity = src.tableIdentity;
+	r.term = e.term;
 	return r;
 }
 
@@ -238,6 +243,7 @@ void fillColumnFromResolved(ColumnInfo &col, const Resolved &r, const SqlDialect
 		fillTemplateKeyInfo(col, dialect);
 	}
 	col.nonNull = true;
+	col.term = r.term;
 }
 
 // One arm of the term universe: a single-source SpjRelation projecting one
@@ -250,7 +256,7 @@ void addTermArm(std::vector<RelNodePtr> &arms, const std::string &fromSql, const
 	src.termMap = &termMap;
 	src.alias = alias;
 	src.tableIdentity = tableIdentity;
-	Resolved r = resolveSource(src, dialect);
+	Resolved r = resolveSource(src, dialect, ctx.catalog());
 
 	RelNodePtr node(new SpjRelation());
 	SpjRelation &spj = static_cast<SpjRelation &>(*node);
@@ -293,6 +299,8 @@ void addConstantTermArm(std::vector<RelNodePtr> &arms, const std::string &value,
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = true;
+		// This arm only ever carries an rr:class IRI (see the caller).
+		col.term.kind = RdfTermKind::Iri;
 		raw.schema().push_back(col);
 	}
 	arms.push_back(std::move(node));
@@ -310,7 +318,7 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 	std::vector<std::string> whereConditions;
 	std::vector<std::string> requiredNonNull;
 
-	Resolved subjectR = resolveSource(subjectSrc, dialect);
+	Resolved subjectR = resolveSource(subjectSrc, dialect, ctx.catalog());
 	addUnique(requiredNonNull, subjectR.requiredNonNull);
 	if (!subjectSpec.isVar) {
 		InversionResult inv = resolveInversion(subjectSrc, *subjectSpec.boundTerm, dialect);
@@ -320,7 +328,7 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 		addUnique(whereConditions, inv.whereConditions);
 	}
 
-	Resolved predicateR = resolveSource(predicateSrc, dialect);
+	Resolved predicateR = resolveSource(predicateSrc, dialect, ctx.catalog());
 	addUnique(requiredNonNull, predicateR.requiredNonNull);
 	if (predicateSpec.kind == PredicateConstraint::ConstantIri) {
 		sparql::ast::Iri predicateBoundTerm(predicateSpec.iri, predicateSpec.iri);
@@ -335,7 +343,7 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 		}
 	}
 
-	Resolved objectR = resolveSource(objectSrc, dialect);
+	Resolved objectR = resolveSource(objectSrc, dialect, ctx.catalog());
 	addUnique(requiredNonNull, objectR.requiredNonNull);
 	if (!objectSpec.isVar) {
 		InversionResult inv = resolveInversion(objectSrc, *objectSpec.boundTerm, dialect);
@@ -368,6 +376,16 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 		for (int j = 0; j < i; ++j) {
 			if (positions[j].isVar && positions[j].varName == positions[i].varName) {
 				whereConditions.push_back(positions[j].resolved->expr + " = " + positions[i].resolved->expr);
+				// The WHERE forces the two expressions equal, but the two term
+				// maps may still *declare* different kinds or datatypes, so the
+				// projected column can only claim what both agree on. (Position j
+				// is the earliest occurrence, so it is already in `projections`.)
+				for (auto &existing : projections) {
+					if (existing.var == positions[i].varName) {
+						existing.term = meet(existing.term, positions[i].resolved->term);
+						break;
+					}
+				}
 				seen = true;
 				break;
 			}
@@ -602,6 +620,8 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 			ColumnInfo col;
 			col.var = v;
 			col.nonNull = true;
+			// Term annotation stays Unknown: an empty relation has no rows, so
+			// no term kind is ever observable through it.
 			node->schema().push_back(col);
 		}
 		return node;
@@ -613,13 +633,17 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 	RelNodePtr node(new UnionByNameNode());
 	UnionByNameNode &un = static_cast<UnionByNameNode &>(*node);
 	un.all = false; // candidate union dedups (matches combineByName(all=false)).
-	un.arms = std::move(branches);
+	// Meet each variable across the arms *before* moving them: this is the
+	// dominant source of disagreement in practice, since one predicate mapped by
+	// several triples maps produces one arm per candidate.
 	for (const auto &v : varOrder) {
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = true;
+		col.term = meetAcrossArms(v, branches);
 		un.schema().push_back(col);
 	}
+	un.arms = std::move(branches);
 	return node;
 }
 
@@ -675,6 +699,7 @@ RelNodePtr allTermsRelation(const std::vector<std::string> &varNames, Translatio
 			ColumnInfo col;
 			col.var = v;
 			col.nonNull = true;
+			// Unknown: no rows, so no term kind is observable (as above).
 			node->schema().push_back(col);
 		}
 		return node;
@@ -686,13 +711,17 @@ RelNodePtr allTermsRelation(const std::vector<std::string> &varNames, Translatio
 	RelNodePtr node(new UnionByNameNode());
 	UnionByNameNode &un = static_cast<UnionByNameNode &>(*node);
 	un.all = false; // the term universe is a set, not a bag.
-	un.arms = std::move(arms);
+	// Meet before moving the arms - see the candidate union above. The term
+	// universe spans every subject and object term map in the mapping, so this
+	// realistically only stays known for a single-term-map mapping.
 	for (const auto &v : varNames) {
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = true;
+		col.term = meetAcrossArms(v, arms);
 		un.schema().push_back(col);
 	}
+	un.arms = std::move(arms);
 	return node;
 }
 
