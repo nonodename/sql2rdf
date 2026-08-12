@@ -34,6 +34,7 @@
 #endif
 
 #include "r2rml/ColumnTermMap.h"
+#include "r2rml/PredicateObjectMap.h"
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/R2RMLParser.h"
 #include "r2rml/SQLConnection.h"
@@ -42,6 +43,7 @@
 #include "r2rml/SQLRow.h"
 #include "r2rml/SQLValue.h"
 #include "r2rml/StringSQLValue.h"
+#include "r2rml/TermMap.h"
 #include "r2rml/TriplesMap.h"
 #include "MockSQL.h"
 
@@ -517,4 +519,44 @@ TEST_CASE("processDatabase: a rr:BlankNode subject map emits a blank node, not a
 	// The rr:Literal subject map, coerced to IRI, emits an IRI subject rather
 	// than a literal in the subject position (which is not even representable).
 	CHECK(out.find("<http://data.example.com/note/1>") != std::string::npos);
+}
+
+TEST_CASE("processDatabase: rr:column/rr:template object maps with explicit rr:termType rr:IRI emit IRIs") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "termtype_iri_object.ttl");
+	REQUIRE(mapping.isValid());
+
+	MockSQLConnection conn;
+	conn.addResult("FROG", {makeRow({{"ID", StringSQLValue(std::string("F0009"))},
+	                                 {"TARGET", StringSQLValue(std::string("frog:F0009/HTT0000001"))}})});
+
+	std::string out = runProcessDatabase(mapping, conn);
+	INFO(out);
+	CHECK(out.find("<frog:F0009/HTT0000001>") != std::string::npos);
+	CHECK(out.find("\"frog:F0009/HTT0000001\"") == std::string::npos);
+	CHECK(out.find("<frog:F0009/HTT0000001> .") != std::string::npos);
+}
+
+// Regression test for a real-world defect report: a few bytes of corrupted/
+// mis-encoded whitespace sat right before "rr:termType rr:IRI" on an object
+// map. Serd's Turtle tokenizer can't parse the resulting garbled token and
+// drops the rr:termType triple while silently recovering - and until now,
+// R2RMLParser's Serd error sink discarded every syntax error unconditionally
+// (see the old cbError()), so the mapping reported isValid()==true with zero
+// parseErrors while the object map silently fell back to the rr:column
+// object-map default of rr:Literal instead of the rr:IRI the author wrote.
+// The fix is to feed Serd's error callback into the same error-collection
+// path used for semantic errors, so a syntax error near a term-type
+// assertion is surfaced instead of silently swallowed.
+TEST_CASE("R2RML parser reports a Turtle syntax error instead of silently dropping rr:termType") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "object_termtype_corrupted_whitespace.ttl");
+
+	bool reportedSyntaxError = false;
+	for (const auto &err : mapping.parseErrors) {
+		if (err.find("Turtle syntax error") != std::string::npos) {
+			reportedSyntaxError = true;
+		}
+	}
+	CHECK(reportedSyntaxError);
 }

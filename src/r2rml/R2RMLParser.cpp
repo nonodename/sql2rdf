@@ -31,6 +31,8 @@
 
 #include <serd/serd.h>
 
+#include <cstdarg>
+#include <cstdio>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -244,8 +246,28 @@ static SerdStatus cbStatement(void *handle, SerdStatementFlags /*flags*/, const 
 	return SERD_SUCCESS;
 }
 
-static SerdStatus cbError(void * /*handle*/, const SerdError * /*error*/) {
-	return SERD_SUCCESS; // non-fatal: keep going
+// Turtle syntax errors (e.g. a malformed token from corrupted/mis-encoded
+// input) must not vanish silently: Serd itself recovers and keeps parsing
+// past them, which can silently drop whole statements - including an
+// rr:termType assertion, downgrading an intended IRI to the object-map
+// default of rr:Literal with no trace. Record every error via the same
+// TripleCollector used for semantic errors so it surfaces through
+// R2RMLMapping::parseErrors (or throws in strict mode), then keep going so a
+// single bad statement doesn't prevent the rest of a mostly-valid file from
+// being reported too.
+static SerdStatus cbError(void *handle, const SerdError *error) {
+	if (handle && error) {
+		char buf[1024];
+		int n = std::vsnprintf(buf, sizeof(buf), error->fmt, *error->args);
+		std::ostringstream msg;
+		msg << "R2RML parser: Turtle syntax error";
+		if (error->line) {
+			msg << " at line " << error->line << ", column " << error->col;
+		}
+		msg << ": " << (n > 0 ? std::string(buf) : std::string("(unknown error)"));
+		static_cast<TripleCollector *>(handle)->addError(msg.str());
+	}
+	return SERD_SUCCESS;
 }
 
 // ---------------------------------------------------------------------------
@@ -763,7 +785,7 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreN
 
 	SerdReader *reader =
 	    serd_reader_new(SERD_TURTLE, &collector, nullptr, cbBase, cbPrefix, cbStatement, /*end_sink=*/nullptr);
-	serd_reader_set_error_sink(reader, cbError, nullptr);
+	serd_reader_set_error_sink(reader, cbError, &collector);
 
 	// Convert the filesystem path to a file URI and use it as the document base.
 	// serd_node_new_file_uri only recognises absolute paths; resolve relative
@@ -795,7 +817,7 @@ R2RMLMapping R2RMLParser::parseString(const std::string &turtleText, const std::
 
 	SerdReader *reader =
 	    serd_reader_new(SERD_TURTLE, &collector, nullptr, cbBase, cbPrefix, cbStatement, /*end_sink=*/nullptr);
-	serd_reader_set_error_sink(reader, cbError, nullptr);
+	serd_reader_set_error_sink(reader, cbError, &collector);
 
 	SerdNode baseNode = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(baseUri.c_str()));
 	collector.setBase(&baseNode);

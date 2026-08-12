@@ -1,0 +1,22 @@
+@prefix rr:  <http://www.w3.org/ns/r2rml#>.
+@prefix ex:  <http://example.com/ns#>.
+
+# Regression fixture for a real-world defect report: a few bytes of
+# corrupted/mis-encoded whitespace (mojibake, likely from a copy-paste
+# through an editor that mangled a Unicode soft hyphen) landed right before
+# "rr:termType rr:IRI" on this object map. Serd's Turtle tokenizer cannot
+# parse the resulting garbled token, drops the rr:termType triple while
+# silently recovering, and the codebase's error sink used to discard that
+# syntax error entirely - so the mapping looked isValid() with zero
+# parseErrors, yet the object map silently fell back to its rr:column
+# object-map default of rr:Literal instead of the rr:IRI the author wrote.
+<#TriplesMap1>
+    rr:logicalTable [ rr:tableName "VOCAB" ];
+    rr:subjectMap [ rr:column "subject"; rr:termType rr:IRI ];
+    rr:predicateObjectMap [
+        rr:predicateMap [ rr:column "predicate"; rr:termType rr:IRI ];
+        rr:objectMap [
+            rr:column "object" ;
+â­â­â­â­â­â­		rr:termType rr:IRI
+        ]
+    ].
