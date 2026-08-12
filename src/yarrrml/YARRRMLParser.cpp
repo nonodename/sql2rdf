@@ -247,7 +247,7 @@ enum class VKind { Column, Template, ConstIri, ConstLit };
 struct VSpec {
 	VKind kind {VKind::ConstLit};
 	std::string text;
-	bool forceIri {false}; // Column only: "$(COL)~iri" was given.
+	bool forceIri {false}; // "$(COL)~iri" / mixed template with ~iri was given.
 };
 
 /// Classify a raw YARRRML value string into a Column / Template / constant
@@ -302,6 +302,7 @@ VSpec classifyValue(const std::string &rawIn, bool allowIriSuffix, bool literals
 		VSpec vs;
 		vs.kind = VKind::Template;
 		vs.text = tmpl;
+		vs.forceIri = forceIri;
 		return vs;
 	}
 
@@ -316,7 +317,10 @@ VSpec classifyValue(const std::string &rawIn, bool allowIriSuffix, bool literals
 		vs.kind = VKind::ConstIri; // subjects/predicates: always an IRI.
 		return vs;
 	}
-	vs.kind = (looksAbsoluteIri(literalText) || looksCurie(literalText, prefixes)) ? VKind::ConstIri : VKind::ConstLit;
+	// A "~iri" suffix always forces IRI treatment, even for a literal that
+	// doesn't look like an absolute IRI or a recognised CURIE.
+	vs.kind = (forceIri || looksAbsoluteIri(literalText) || looksCurie(literalText, prefixes)) ? VKind::ConstIri
+	                                                                                           : VKind::ConstLit;
 	return vs;
 }
 
@@ -443,6 +447,9 @@ NodeRef emitValueSpecAsMap(r2rml::TripleCollector &collector, BlankNodeMinter &b
 		break;
 	case VKind::Template:
 		emitLiteralTriple(collector, node, RR_TEMPLATE, vs.text);
+		if (vs.forceIri) {
+			emitUriTriple(collector, node, RR_TERM_TYPE, NodeRef::uri(RR_IRI_TERM_TYPE));
+		}
 		break;
 	case VKind::ConstIri:
 		// Per R2RML, rr:constant with an IRI object carries no datatype/language.

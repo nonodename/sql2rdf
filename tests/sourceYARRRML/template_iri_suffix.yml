@@ -1,0 +1,11 @@
+prefixes:
+  ex: http://example.com/ns#
+  frog: http://example.com/frog#
+
+mappings:
+  employee:
+    sources:
+      - table: EMP
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - [ex:code, frog:F0009/$(CODE)~iri]

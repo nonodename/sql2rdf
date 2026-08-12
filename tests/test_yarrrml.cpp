@@ -676,6 +676,41 @@ TEST_CASE("YARRRML processDatabase - ~iri suffix produces an IRI object") {
 	REQUIRE(out.find("<http://example.com/~smith>") != std::string::npos);
 }
 
+TEST_CASE("YARRRML processDatabase - ~iri suffix on a mixed template forces an IRI object") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "template_iri_suffix.yml");
+	REQUIRE(mapping.isValid());
+
+	TriplesMap *tm = findById(mapping, "employee");
+	REQUIRE(tm != nullptr);
+	auto *tpl = dynamic_cast<TemplateTermMap *>(tm->predicateObjectMaps[0]->objectMaps[0].get());
+	REQUIRE(tpl != nullptr);
+	REQUIRE(tpl->termType == TermType::IRI);
+
+	MockSQLConnection conn;
+	conn.addResult("EMP", {makeRow({{"EMPNO", StringSQLValue(std::string("7369"))},
+	                                {"CODE", StringSQLValue(std::string("HTT0000001"))}})});
+	std::string out = runProcessDatabase(mapping, conn);
+	REQUIRE(out.find("<http://example.com/frog#F0009/HTT0000001>") != std::string::npos);
+}
+
+TEST_CASE("YARRRML processDatabase - ~iri suffix on an unresolvable constant forces an IRI object") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "constant_literal_iri_suffix.yml");
+	REQUIRE(mapping.isValid());
+
+	TriplesMap *tm = findById(mapping, "employee");
+	REQUIRE(tm != nullptr);
+	auto *cst = dynamic_cast<ConstantTermMap *>(tm->predicateObjectMaps[0]->objectMaps[0].get());
+	REQUIRE(cst != nullptr);
+	REQUIRE(cst->termType == TermType::IRI);
+
+	MockSQLConnection conn;
+	conn.addResult("EMP", {makeRow({{"EMPNO", StringSQLValue(std::string("7369"))}})});
+	std::string out = runProcessDatabase(mapping, conn);
+	REQUIRE(out.find("<frog:F0009/HTT0000001>") != std::string::npos);
+}
+
 TEST_CASE("YARRRML processDatabase - constant literal object produces a plain literal") {
 	YARRRMLParser parser;
 	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "constant_literal.yml");
