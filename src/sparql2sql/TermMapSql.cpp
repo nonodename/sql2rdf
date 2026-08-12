@@ -82,6 +82,7 @@ TermInfo annotate(const r2rml::TermMap &termMap, const std::string &columnName, 
 	if (termMap.languageTag && !termMap.languageTag->empty()) {
 		out.lang = *termMap.languageTag;
 		out.datatypeIri = kRdfLangString;
+		out.maybeLangTagged = true;
 		return out;
 	}
 	if (termMap.datatypeIRI && !termMap.datatypeIRI->empty()) {
@@ -123,6 +124,7 @@ TermInfo termInfoOfTerm(const sparql::ast::Term &term) {
 		if (!literal.languageTag.empty()) {
 			out.lang = literal.languageTag;
 			out.datatypeIri = kRdfLangString;
+			out.maybeLangTagged = true;
 		} else if (literal.datatype) {
 			out.datatypeIri = literal.datatype->value;
 		} else {

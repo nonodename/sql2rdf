@@ -71,6 +71,7 @@ TermInfo meet(const TermInfo &a, const TermInfo &b) {
 	if (a.lang == b.lang) {
 		out.lang = a.lang;
 	}
+	out.maybeLangTagged = a.maybeLangTagged || b.maybeLangTagged;
 	return out;
 }
 

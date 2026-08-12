@@ -232,6 +232,7 @@ TermInfo inferBuiltIn(const BuiltInCallExpr &b, const TranslatedPattern &scope) 
 			out.kind = RdfTermKind::Literal;
 			out.datatypeIri = kRdfLangString;
 			out.lang = lang;
+			out.maybeLangTagged = true;
 			return out;
 		}
 		return TermInfo();

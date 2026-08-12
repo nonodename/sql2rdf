@@ -504,12 +504,16 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 			throw TranslationError(
 			    "lang(): the argument is statically an IRI or blank node, which has no language tag");
 		}
-		if (info.datatypeIri == kRdfLangString && info.lang.empty()) {
-			// Known to be language-tagged, but meet() degraded the specific tag
-			// because two contributing term maps disagreed (e.g. different
-			// rr:language values across a UNION's arms). Folding the empty tag in
-			// here would silently answer "" for a literal that is actually
-			// tagged - same rationale as the datatypeIri.empty() guard below.
+		if (info.maybeLangTagged && info.lang.empty()) {
+			// Known to be language-tagged in at least one contributing term map,
+			// but the specific tag isn't statically known - either because two
+			// arms disagree on rr:language (both tagged, meet() degrades
+			// datatypeIri/lang but maybeLangTagged stays set), or because one arm
+			// is tagged and a sibling arm isn't (datatypeIri/lang both degrade to
+			// "", indistinguishable from "no rr:language anywhere" without this
+			// flag). Folding the empty tag in here would silently answer "" for a
+			// literal that is actually tagged - same rationale as the
+			// datatypeIri.empty() guard below.
 			throw TranslationError(
 			    "unsupported: lang() - the argument is known to be language-tagged, but the specific language is "
 			    "not statically known (its contributing term maps declare different rr:language values)");

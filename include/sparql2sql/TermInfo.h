@@ -40,6 +40,15 @@ struct TermInfo {
 	std::string datatypeIri;
 	std::string lang;
 
+	/// Sticky across meet(): true if ANY contributing term map is known to be
+	/// language-tagged (rr:language), even once a disagreeing sibling (a
+	/// different tag, or no tag at all) has degraded datatypeIri/lang back to
+	/// "not statically known". Without this, a literal that is @en in one
+	/// union arm and untagged in another becomes indistinguishable from a
+	/// literal that carries no rr:language anywhere - and LANG() would fold
+	/// silently to "" instead of refusing an answer it cannot prove.
+	bool maybeLangTagged = false;
+
 	bool kindKnown() const {
 		return kind != RdfTermKind::Unknown;
 	}
@@ -66,6 +75,8 @@ struct TermInfo {
 ///     meet({Iri}, {Literal})                        -> {Unknown, "",             ""}
 ///     meet({Literal, integer}, {Literal, string})   -> {Literal, "",             ""}
 ///     meet({Literal, langString, "en"}, {..., "fr"})-> {Literal, rdf:langString, ""}
+///     meet({Literal, langString, "en"}, {Literal, "", ""})
+///                                                    -> {Literal, "", "", maybeLangTagged=true}
 ///
 /// Commutative, associative and idempotent, with a default-constructed
 /// TermInfo as the absorbing element. An Unknown kind additionally clears the

@@ -30,6 +30,13 @@
 # to be rdf:langString whose specific tag is not statically known - the case
 # where LANG() must still refuse to fold, the same way DATATYPE() refuses when
 # only the kind (not the datatype) is known.
+#
+# ex:mixedtag is produced by BOTH triples maps as a literal, but ONE arm is
+# rr:language "en" (rdf:langString) and the OTHER has no rr:language/rr:datatype
+# at all - so unlike ex:desc, the two arms' datatypeIri also disagree
+# ("rdf:langString" vs unknown), and meet() degrades datatypeIri to "" as well
+# as lang. That is the case that must not be confused with "no rr:language
+# anywhere" (ex:plain): the mapping DOES prove one arm is language-tagged.
 
 <#Measure>
     rr:logicalTable [ rr:tableName "MEASURES" ];
@@ -53,6 +60,8 @@
     rr:predicateObjectMap [ rr:predicate ex:mixed;
         rr:objectMap [ rr:template "http://ex.org/m/{REF}" ] ];
     rr:predicateObjectMap [ rr:predicate ex:desc;
+        rr:objectMap [ rr:column "TITLE"; rr:language "en" ] ];
+    rr:predicateObjectMap [ rr:predicate ex:mixedtag;
         rr:objectMap [ rr:column "TITLE"; rr:language "en" ] ].
 
 # A blank-node subject map - only reachable since buildSubjectMap started
@@ -65,4 +74,6 @@
     rr:predicateObjectMap [ rr:predicate ex:mixed;
         rr:objectMap [ rr:column "BODY" ] ];
     rr:predicateObjectMap [ rr:predicate ex:desc;
-        rr:objectMap [ rr:column "BODY"; rr:language "fr" ] ].
+        rr:objectMap [ rr:column "BODY"; rr:language "fr" ] ];
+    rr:predicateObjectMap [ rr:predicate ex:mixedtag;
+        rr:objectMap [ rr:column "BODY" ] ].

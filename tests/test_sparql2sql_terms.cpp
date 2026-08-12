@@ -154,6 +154,23 @@ TEST_CASE("LANG: disagreeing rr:language candidate arms are resolved per arm by 
 	CHECK(contains(sql, "UNION"));
 }
 
+TEST_CASE("LANG: an rr:language arm meeting an untagged arm must not fold to the empty string", "[sparql2sql]") {
+	// ex:mixedtag is @en in <#Measure> and a bare, untagged rr:column in <#Note>.
+	// Their datatypeIri disagrees ("rdf:langString" vs unknown) as well as their
+	// lang, so meet() degrades BOTH to "" - indistinguishable, by field value
+	// alone, from ex:plain's "no rr:language anywhere" case.
+	//
+	// Bug reproduced here: the LANG() guard only fires when the merged
+	// datatypeIri still reads rdf:langString, so this mixed case slips past it
+	// and folds lang(?x) to '' unconditionally. That silently discards the
+	// "en" tag on every row from the <#Measure> arm: FILTER(lang(?x) = "en")
+	// always evaluates false (the row that really is @en never matches), which
+	// is exactly the reported "@en tags are silently dropped" bug. The BIND
+	// makes this pushdown-proof, mirroring the ex:desc LANG throw test above.
+	const std::string q = "SELECT ?x WHERE { ?m ex:mixedtag ?d . BIND(?d AS ?x) ";
+	CHECK_THROWS_AS(translate(q + "FILTER(lang(?x) = \"en\") }"), TranslationError);
+}
+
 TEST_CASE("DATATYPE: a declared rr:datatype folds to that IRI", "[sparql2sql]") {
 	CHECK(contains(translate("SELECT ?a WHERE { ?m ex:amount ?a . FILTER(datatype(?a) = xsd:integer) }"),
 	               "'http://www.w3.org/2001/XMLSchema#integer'"));
