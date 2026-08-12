@@ -1,0 +1,5 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?s ?l (datatype(?l) AS ?dt)
+WHERE {
+  ?s ex:label ?l .
+}

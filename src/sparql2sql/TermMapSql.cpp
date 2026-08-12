@@ -100,9 +100,11 @@ TermInfo annotate(const r2rml::TermMap &termMap, const std::string &columnName, 
 	if (catalog == nullptr || tableIdentity.empty()) {
 		return out;
 	}
-	// R2RML 10.2's natural mapping. Misses for an rr:sqlQuery view, whose
-	// tableIdentity is a "view:<sql>" key, which is correct: a view's columns
-	// have no declared type to consult.
+	// R2RML 10.2's natural mapping. For an rr:sqlQuery view the tableIdentity
+	// is a "view:<sql>" key, which a catalog only holds if its populator asked
+	// the backend to describe the view's result schema (see
+	// sparql2sql/LogicalTableSource.h); if it didn't, this misses and the
+	// datatype stays unknown rather than guessed.
 	out.datatypeIri = naturalXsdDatatype(catalog->typeOf(tableIdentity, columnName));
 	return out;
 }

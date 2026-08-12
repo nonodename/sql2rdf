@@ -11,6 +11,7 @@
 #include <serd/serd.h>
 
 #include "DuckDBConnection.h"
+#include "TypeCatalogLoader.h"
 #include "r2rml/MappingParser.h"
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/SQLResultSet.h"
@@ -23,57 +24,6 @@
 #include "sparql2sql/Translator.h"
 #include "sparql2sql/TypeCatalog.h"
 #include "yarrrml/YARRRMLParser.h"
-
-// Read every column's SQL type from the connection's information_schema into a
-// TypeCatalog, so the SPARQL-to-SQL translator can emit native (uncast) join
-// keys for type-comparable columns. Best-effort: the caller treats any failure
-// as "no catalog" (VARCHAR-cast joins), which is always correct.
-// Resolve a result column by name, case-insensitively: backends report result
-// column names in their own case (DuckDB upper-cases them). Returns nullptr if
-// absent.
-static const std::string *findResultColumn(const std::vector<std::string> &names, const char *wanted) {
-	for (const auto &n : names) {
-		if (n.size() != std::strlen(wanted)) {
-			continue;
-		}
-		bool same = true;
-		for (std::size_t i = 0; i < n.size(); ++i) {
-			if (std::tolower(static_cast<unsigned char>(n[i])) != std::tolower(static_cast<unsigned char>(wanted[i]))) {
-				same = false;
-				break;
-			}
-		}
-		if (same) {
-			return &n;
-		}
-	}
-	return nullptr;
-}
-
-static void populateTypeCatalog(r2rml::SQLConnection &conn, sparql2sql::TypeCatalog &catalog) {
-	std::unique_ptr<r2rml::SQLResultSet> rs =
-	    conn.execute("SELECT table_name, column_name, data_type FROM information_schema.columns");
-	while (rs->next()) {
-		const r2rml::SQLRow &row = rs->getCurrentRow();
-		// Resolve by NAME, not by position: SQLRow holds its columns in a
-		// std::map, so columnNames() comes back sorted alphabetically rather
-		// than in SELECT order.
-		std::vector<std::string> names = row.columnNames();
-		const std::string *tableName = findResultColumn(names, "table_name");
-		const std::string *columnName = findResultColumn(names, "column_name");
-		const std::string *typeName = findResultColumn(names, "data_type");
-		if (tableName == nullptr || columnName == nullptr || typeName == nullptr) {
-			continue;
-		}
-		std::unique_ptr<r2rml::SQLValue> table = row.getValue(*tableName);
-		std::unique_ptr<r2rml::SQLValue> column = row.getValue(*columnName);
-		std::unique_ptr<r2rml::SQLValue> dataType = row.getValue(*typeName);
-		if (table->isNull() || column->isNull() || dataType->isNull()) {
-			continue;
-		}
-		catalog.columnTypes[table->asString()][column->asString()] = dataType->asString();
-	}
-}
 
 static void printHelp(const char *programName) {
 	std::cerr << "Usage: " << programName << " [options] <mapping.ttl|mapping.yml> <database.db> <output.nt>\n"
@@ -239,7 +189,10 @@ int main(int argc, char *argv[]) {
 		}
 
 		// If a database is available, open it up front and read column types
-		// into a catalog so the translator can emit native (uncast) join keys.
+		// into a catalog so the translator can emit native (uncast) join keys
+		// and derive datatypes for undeclared literals. Passing the mapping in
+		// also types the result columns of its rr:sqlQuery views, which no
+		// information_schema knows about.
 		std::unique_ptr<r2rml::DuckDBConnection> dbConn;
 		sparql2sql::TypeCatalog catalog;
 		const sparql2sql::TypeCatalog *catalogPtr = nullptr;
@@ -251,7 +204,7 @@ int main(int argc, char *argv[]) {
 				return 1;
 			}
 			try {
-				populateTypeCatalog(*dbConn, catalog);
+				sql2rdf::loadTypeCatalog(*dbConn, &mapping, catalog);
 				catalogPtr = &catalog;
 			} catch (const std::exception &e) {
 				std::cerr << "Warning: could not read column types (native-typed joins disabled): " << e.what() << "\n";

@@ -28,6 +28,7 @@
 #endif
 
 #include "DuckDBConnection.h"
+#include "TypeCatalogLoader.h"
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/R2RMLParser.h"
 #include "r2rml/SQLResultSet.h"
@@ -35,6 +36,8 @@
 #include "r2rml/SQLValue.h"
 #include "sparql-parser/Parser.h"
 #include "sparql2sql/DuckDbDialect.h"
+#include "sparql2sql/TermInfo.h"
+#include "sparql2sql/TranslationError.h"
 #include "sparql2sql/Translator.h"
 #include "sparql2sql/TypeCatalog.h"
 
@@ -994,4 +997,65 @@ TEST_CASE("sparql2sql_count_order.rq: ORDER BY over a COUNT alias sorts numerica
 	// sorts below "2", so the pre-fix bare-alias ORDER BY inverted this.
 	CHECK(columnSeq(rows, "V_G") == std::vector<std::string>({"a", "b"}));
 	CHECK(columnSeq(rows, "V_C") == std::vector<std::string>({"11", "2"}));
+}
+
+TEST_CASE("sparql2sql_view_types.rq: describing rr:sqlQuery views makes DATATYPE() answerable") {
+	auto conn = makeSeededDatabase();
+	Parser parser;
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_view_types.ttl");
+	REQUIRE(mapping.isValid());
+	DuckDbDialect dialect;
+
+	// The reported failure: a catalog read only from information_schema types
+	// EMP.ENAME but not the view's DNAME, and one untyped candidate arm degrades
+	// the meet, so DATATYPE() refuses even though both arms are really VARCHAR.
+	auto query = parser.parseFile(SOURCE_SPARQL2SQL_DIR "sparql2sql_view_types.rq");
+	sparql2sql::TypeCatalog baseOnly = catalogOf(*conn);
+	REQUIRE_FALSE(baseOnly.typeOf("EMP", "ENAME").empty());
+	REQUIRE(baseOnly.typeOf("view:SELECT DEPTNO, DNAME FROM DEPT", "DNAME").empty());
+	CHECK_THROWS_AS(translateQuery(*query, mapping, dialect, &baseOnly), sparql2sql::TranslationError);
+
+	// The fix: loadTypeCatalog also describes each rr:sqlQuery view and files
+	// its result columns under the view's identity.
+	sparql2sql::TypeCatalog cat;
+	sql2rdf::loadTypeCatalog(*conn, &mapping, cat);
+	INFO("typeOf(dept view, DNAME)='" << cat.typeOf("view:SELECT DEPTNO, DNAME FROM DEPT", "DNAME") << "'");
+	REQUIRE_FALSE(cat.typeOf("view:SELECT DEPTNO, DNAME FROM DEPT", "DNAME").empty());
+	// A computed column exists in no information_schema at all, so describing
+	// the query is the only way to learn it is an integer.
+	REQUIRE(sparql2sql::naturalXsdDatatype(cat.typeOf("view:SELECT EMPNO, LENGTH(ENAME) AS NAMELEN FROM EMP",
+	                                                  "NAMELEN")) == std::string(sparql2sql::xsd::kInteger));
+
+	std::string sql = translateQuery(*query, mapping, dialect, &cat);
+	INFO("SQL: " << sql);
+	std::unique_ptr<r2rml::SQLResultSet> rs = conn->execute(sql);
+	auto rows = collectRows(*rs);
+	const char *const kXsdString = "http://www.w3.org/2001/XMLSchema#string";
+	REQUIRE(rows.size() == 4);
+	// Both the base-table arm and the view arm report a datatype now.
+	CHECK(containsRow(rows, {{"V_S", "http://data.example.com/emp/7369"}, {"V_L", "SMITH"}, {"V_DT", kXsdString}}));
+	CHECK(containsRow(rows, {{"V_S", "http://data.example.com/dept/10"}, {"V_L", "APPSERVER"}, {"V_DT", kXsdString}}));
+	CHECK(containsRow(rows, {{"V_S", "http://data.example.com/dept/20"}, {"V_L", "SALES"}, {"V_DT", kXsdString}}));
+}
+
+TEST_CASE("sparql2sql_view_types_computed.rq: a computed view column's datatype comes from DESCRIBE") {
+	auto conn = makeSeededDatabase();
+	Parser parser;
+	auto query = parser.parseFile(SOURCE_SPARQL2SQL_DIR "sparql2sql_view_types_computed.rq");
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_view_types.ttl");
+	REQUIRE(mapping.isValid());
+	DuckDbDialect dialect;
+
+	sparql2sql::TypeCatalog cat;
+	sql2rdf::loadTypeCatalog(*conn, &mapping, cat);
+	std::string sql = translateQuery(*query, mapping, dialect, &cat);
+	INFO("SQL: " << sql);
+	std::unique_ptr<r2rml::SQLResultSet> rs = conn->execute(sql);
+	auto rows = collectRows(*rs);
+	const char *const kXsdInteger = "http://www.w3.org/2001/XMLSchema#integer";
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_S", "http://data.example.com/emp/7369"}, {"V_N", "5"}, {"V_DT", kXsdInteger}}));
+	CHECK(containsRow(rows, {{"V_S", "http://data.example.com/emp/7400"}, {"V_N", "5"}, {"V_DT", kXsdInteger}}));
 }

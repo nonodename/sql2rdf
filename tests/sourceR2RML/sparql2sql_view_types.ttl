@@ -1,0 +1,62 @@
+@prefix rr:  <http://www.w3.org/ns/r2rml#>.
+@prefix ex:  <http://example.com/ns#>.
+
+# Toy mapping for datatype inference over rr:sqlQuery logical tables - the
+# customer-reported case where one predicate is produced by BOTH a base table
+# and a view.
+#
+#   ex:label   -> produced TWICE: from EMP.ENAME (rr:tableName, so a plain
+#                 information_schema read types it) and from a view's DNAME
+#                 (rr:sqlQuery, which appears in no information_schema). Both
+#                 arms are VARCHAR, so their meet is xsd:string - but ONLY if
+#                 the catalog also knows the view's columns. One untyped arm is
+#                 enough to degrade the meet and make DATATYPE() refuse, which
+#                 is exactly the reported failure.
+#   ex:namelen -> a *computed* view column (LENGTH(...)), which has no base
+#                 table to fall back on at all: describing the query is the
+#                 only way to learn it is an integer.
+#
+# No rr:datatype is declared anywhere on purpose: every datatype here has to
+# come from R2RML Section 10.2's natural mapping of the SQL type.
+
+<#EmpLabel>
+    rr:logicalTable [ rr:tableName "EMP" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/emp/{EMPNO}";
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:label;
+        rr:objectMap [ rr:column "ENAME" ];
+    ].
+
+<#DeptLabel>
+    rr:logicalTable [ rr:sqlQuery "SELECT DEPTNO, DNAME FROM DEPT" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/dept/{DEPTNO}";
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:label;
+        rr:objectMap [ rr:column "DNAME" ];
+    ].
+
+# Reads the SAME rr:sqlQuery as <#DeptLabel> above, so a populator must be
+# offered that view once, not once per triples map.
+<#DeptCode>
+    rr:logicalTable [ rr:sqlQuery "SELECT DEPTNO, DNAME FROM DEPT" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/dept/{DEPTNO}";
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:code;
+        rr:objectMap [ rr:column "DEPTNO" ];
+    ].
+
+<#EmpNameLength>
+    rr:logicalTable [ rr:sqlQuery "SELECT EMPNO, LENGTH(ENAME) AS NAMELEN FROM EMP" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/emp/{EMPNO}";
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:namelen;
+        rr:objectMap [ rr:column "NAMELEN" ];
+    ].

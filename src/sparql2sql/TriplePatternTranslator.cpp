@@ -19,6 +19,7 @@
 #include "r2rml/TermMap.h"
 #include "r2rml/TriplesMap.h"
 #include "sparql-parser/ast/Term.h"
+#include "sparql2sql/LogicalTableSource.h"
 #include "sparql2sql/PropertyPathTranslator.h"
 #include "sparql2sql/SqlDialect.h"
 #include "sparql2sql/TemplateUtil.h"
@@ -99,18 +100,6 @@ InversionResult resolveInversion(const TermSource &src, const sparql::ast::Term 
 	return invertTermMapAgainstBoundTerm(*src.termMap, boundTerm, src.alias, dialect);
 }
 
-std::string stripTrailingSemicolon(std::string sql) {
-	std::size_t end = sql.find_last_not_of(" \t\r\n");
-	if (end == std::string::npos) {
-		return std::string();
-	}
-	sql.erase(end + 1);
-	if (!sql.empty() && sql.back() == ';') {
-		sql.pop_back();
-	}
-	return sql;
-}
-
 std::string logicalTableFromSql(const r2rml::LogicalTable &lt, const std::string &alias, const SqlDialect &dialect) {
 	if (const auto *base = dynamic_cast<const r2rml::BaseTableOrView *>(&lt)) {
 		return dialect.quoteIdentifier(base->tableName) + " AS " + alias;
@@ -119,19 +108,6 @@ std::string logicalTableFromSql(const r2rml::LogicalTable &lt, const std::string
 		return "(" + stripTrailingSemicolon(view->sqlQuery) + ") AS " + alias;
 	}
 	throw std::logic_error("logicalTableFromSql: unrecognized LogicalTable subtype");
-}
-
-// A stable identity for a logical table, used by self-join elimination to
-// recognize two scans of the same source. Base tables key on their name;
-// views key on their SQL text (never merged in practice, but distinct).
-std::string logicalTableIdentity(const r2rml::LogicalTable &lt) {
-	if (const auto *base = dynamic_cast<const r2rml::BaseTableOrView *>(&lt)) {
-		return base->tableName;
-	}
-	if (const auto *view = dynamic_cast<const r2rml::R2RMLView *>(&lt)) {
-		return "view:" + view->sqlQuery;
-	}
-	return std::string();
 }
 
 // Fill in a TemplateExpr column's placeholder metadata: the raw placeholder

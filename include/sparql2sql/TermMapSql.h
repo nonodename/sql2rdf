@@ -58,8 +58,10 @@ std::string termLexicalForm(const sparql::ast::Term &term);
 /// map that declares neither rr:datatype nor rr:language, the column's SQL type
 /// is looked up in the catalog and run through R2RML Section 10.2's natural
 /// mapping. Both are inert for a template or constant term map (no single
-/// source column), and the lookup necessarily misses for an rr:sqlQuery view,
-/// whose tableIdentity is a "view:<sql>" key no catalog contains.
+/// source column). For an rr:sqlQuery view the tableIdentity is a "view:<sql>"
+/// key, which only a catalog whose populator described the view's result
+/// schema contains (see sparql2sql/LogicalTableSource.h); otherwise the lookup
+/// misses and the datatype stays unknown.
 SqlExpr termMapToSqlExpr(const r2rml::TermMap &termMap, const std::string &sourceAlias, const SqlDialect &dialect,
                          const TypeCatalog *catalog = nullptr, const std::string &tableIdentity = std::string());
 

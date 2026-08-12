@@ -485,14 +485,50 @@ Across a derived-table boundary (an OPTIONAL's join, a MINUS's anti-join) the ba
 in scope, so the rewrite additionally projects them as hidden `k_N` columns on both sides; this is
 attempted only when both children render their own SELECT list (a direct SPJ block).
 
-The catalog is keyed by **logical-table identity**, which for an `rr:sqlQuery` view is the view's
-SQL text rather than a table name. Columns of an R2RML view therefore never resolve to a declared
-type, so joins involving one always keep the VARCHAR-cast/term-text form. Mapping a base table
-(`rr:tableName`) rather than a view is what makes a join key eligible. When `catalog` is null, or a column's type is unknown, or the types aren't comparable, the
-join falls back to the always-correct VARCHAR-cast comparison. The catalog is a plain,
-dependency-free data structure: the core library never opens a database; the CLI populates it from
-`information_schema.columns`. Because all downstream variables remain VARCHAR, only the join
-*condition* changes — projected values and result semantics are identical either way.
+The catalog is keyed by **logical-table identity** — a base table's declared `rr:tableName`, or
+`"view:" + <the rr:sqlQuery text>` for an R2RML view — which is what
+`sparql2sql::logicalTableIdentity()` returns for the source. A view's columns appear in no
+`information_schema`, so a populator that only sweeps one leaves them untyped; see
+`LogicalTableSource.h` below for how to type them, and note that whether a *join key* is eligible
+also depends on the two sides being pure columns or the same invertible template, which a view's
+columns can be. When `catalog` is null, or a column's type is unknown, or the types aren't
+comparable, the join falls back to the always-correct VARCHAR-cast comparison. The catalog is a
+plain, dependency-free data structure: the core library never opens a database; the CLI populates it
+from `information_schema.columns` plus a `DESCRIBE` per view. Because all downstream variables
+remain VARCHAR, only the join *condition* changes — projected values and result semantics are
+identical either way.
+
+```cpp
+#include "sparql2sql/LogicalTableSource.h"
+
+// The catalog key / self-join identity of a logical table: a base table's declared name, or
+// "view:" + the raw rr:sqlQuery text.
+std::string sparql2sql::logicalTableIdentity(const r2rml::LogicalTable& logicalTable);
+
+// Strip trailing whitespace and at most one trailing ';', yielding text safe to embed as a derived
+// table or hand to a backend's schema-description statement.
+std::string sparql2sql::stripTrailingSemicolon(std::string sql);
+
+struct sparql2sql::ViewSource {
+    std::string identity; // the TypeCatalog::columnTypes key for this view
+    std::string sql;      // the view's SQL, semicolon-stripped and ready to describe
+};
+
+// Every distinct rr:sqlQuery logical table the mapping reads from, de-duplicated by identity.
+std::vector<sparql2sql::ViewSource> sparql2sql::mappingViewSources(const r2rml::R2RMLMapping& mapping);
+```
+
+This is the hook for typing an `rr:sqlQuery` view's columns, which matters well beyond join keys:
+without it, R2RML §10.2's natural mapping cannot supply a datatype for a bare `rr:column` literal
+over a view, and since a predicate's candidate term maps are combined by a **meet**, one untyped
+view arm makes `datatype()` refuse an answer for a predicate whose other arms *are* typed (the
+common case of a mapping where some `skos:prefLabel`s come from tables and some from queries). A
+caller holding a connection walks `mappingViewSources()`, asks the backend for each query's result
+schema — in DuckDB `DESCRIBE SELECT * FROM (<sql>) AS v`, which binds the query without executing
+it, so it costs a plan and reads no rows — and files the answers under `identity`. The core library
+stays connection-free: it only says which queries to describe. The CLI's own implementation is
+`sql2rdf::loadTypeCatalog()` (`src/TypeCatalogLoader.h`, DuckDB layer), which does both halves:
+the `information_schema` sweep for base tables and a `DESCRIBE` per view.
 
 ```cpp
 #include "sparql2sql/DialectFactory.h"
@@ -568,7 +604,9 @@ std::string sparql2sql::naturalXsdDatatype(const std::string& sqlTypeName);
 
 The CLI exposes this via `-T <file.rq> [--dialect <name>]` (default dialect: `duckdb`), paired
 with the mapping-file positional argument. If the database-file positional is also given, the CLI
-reads that database's column types into a `TypeCatalog` (so native-typed join keys are enabled),
+reads that database's column types into a `TypeCatalog` (base tables from `information_schema`, plus
+a `DESCRIBE` of each `rr:sqlQuery` view, so native-typed join keys and §10.2 datatype inference are
+both enabled),
 translates against it, then executes the SQL via `r2rml::DuckDBConnection` and prints the result
 rows; see `-h` for exact stdout/stderr routing. Without a database file, the SQL alone is printed
 and joins use the VARCHAR-cast fallback.
@@ -627,7 +665,10 @@ and joins use the VARCHAR-cast fallback.
     determine the answer they still throw `TranslationError` naming the function and why.
     `datatype()` in particular still throws for a bare `rr:column` literal with no `rr:datatype` and
     no `TypeCatalog`: the datatype is genuinely not known, and defaulting to `xsd:string` would
-    contradict R2RML's own natural mapping. Note that whether a term-kind builtin throws is
+    contradict R2RML's own natural mapping. For a literal sourced from an `rr:sqlQuery` view, the
+    catalog only knows the column if its populator described the view (see
+    `LogicalTableSource.h` above); one such untyped arm is enough to make `datatype()` refuse for a
+    predicate whose other arms are typed, since the arms are combined by a meet. Note that whether a term-kind builtin throws is
     **optimizer-dependent** in a useful direction: filter pushdown re-renders a predicate against
     one union arm at a time, where the kind may be known even though the arms' meet is not — so
     `FILTER(isIRI(?x))` over disagreeing arms folds per arm instead of failing.

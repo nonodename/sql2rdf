@@ -14,7 +14,12 @@ namespace sparql2sql {
 /// information_schema/DESCRIBE and passes it in; when absent, the translator
 /// falls back to VARCHAR-cast joins (always correct, just not index-friendly).
 struct TypeCatalog {
-	/// logical table name -> (column name -> SQL type name, e.g. "BIGINT").
+	/// Logical-table identity -> (column name -> SQL type name, e.g. "BIGINT").
+	/// The key is what sparql2sql::logicalTableIdentity() returns for the
+	/// source: a base table's declared name, or "view:<rr:sqlQuery text>" for
+	/// an R2RML view (see sparql2sql/LogicalTableSource.h - a populator that
+	/// only reads information_schema types no view columns, which is what makes
+	/// DATATYPE() over a view-backed literal unanswerable).
 	std::map<std::string, std::map<std::string, std::string>> columnTypes;
 
 	/// Look up a column's SQL type; empty string if unknown.

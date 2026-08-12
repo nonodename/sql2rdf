@@ -226,6 +226,7 @@ set(SPARQL2SQL_SOURCES
   src/sparql2sql/SqlDialect.cpp
   src/sparql2sql/DuckDbDialect.cpp
   src/sparql2sql/DialectFactory.cpp
+  src/sparql2sql/LogicalTableSource.cpp
   src/sparql2sql/TemplateUtil.cpp
   src/sparql2sql/TermInference.cpp
   src/sparql2sql/TermInfo.cpp
@@ -259,12 +260,12 @@ target_link_libraries(sql2rdf_sparql2sql PUBLIC sql2rdf_r2rml sql2rdf_sparql)
 # plain, DuckDB-free test_runner target.
 # ----------------------------------------------------------------------------
 if(SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB))
-  add_library(sql2rdf_duckdb STATIC src/DuckDBConnection.cpp)
+  add_library(sql2rdf_duckdb STATIC src/DuckDBConnection.cpp src/TypeCatalogLoader.cpp)
   target_include_directories(sql2rdf_duckdb PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
   )
-  target_link_libraries(sql2rdf_duckdb PUBLIC sql2rdf_r2rml duckdb)
+  target_link_libraries(sql2rdf_duckdb PUBLIC sql2rdf_r2rml sql2rdf_sparql2sql duckdb)
 endif()
 
 # Specify main executable sources and link to the library (requires DuckDB)
