@@ -287,7 +287,7 @@ TEST_CASE("fold: VALUES joins the inline data table on the shared variable") {
 	CHECK(result.sql.find("'JONES'") != std::string::npos);
 }
 
-TEST_CASE("fold: a subquery element is joined in with its variables treated as optional") {
+TEST_CASE("fold: a subquery element's guaranteed-bound variables join with a plain equality, not a null-safe one") {
 	Parser parser;
 	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "emp_dept_subquery.rq");
 	R2RMLParser mappingParser;
@@ -297,10 +297,14 @@ TEST_CASE("fold: a subquery element is joined in with its variables treated as o
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
 	TranslatedPattern result = renderRelation(*fold(*q->where, ctx), ctx);
-	// ?e is independently guaranteed by the outer ex:name triple pattern, so it
-	// stays bound in spite of the subquery's own conservative optional-marking.
+	// ?e is a plain triple pattern inside the subquery (no OPTIONAL/UNION), so
+	// translateQueryPattern reports it as boundVars, not optionalVars; the outer
+	// join must reuse that instead of over-approximating it as nullable, which
+	// would otherwise force a non-sargable "OR ... IS NULL" join predicate.
 	CHECK(result.boundVars.count("e") == 1);
 	CHECK(result.sql.find("INNER JOIN") != std::string::npos);
+	CHECK(result.sql.find("IS NULL") == std::string::npos);
+	CHECK(result.sql.find("COALESCE") == std::string::npos);
 }
 
 TEST_CASE("fold: GRAPH throws a clear TranslationError (no named-graph support)") {

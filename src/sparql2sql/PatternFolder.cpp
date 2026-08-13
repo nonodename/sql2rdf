@@ -346,19 +346,18 @@ RelNodePtr fold(const sparql::ast::GroupGraphPattern &pattern, TranslationContex
 		case ElementKind::SubSelect: {
 			const auto &sub = static_cast<const SubSelectElement &>(el);
 			TranslatedPattern nested = translateQueryPattern(*sub.query, ctx);
-			// Conservatively mark every projected variable as optional (proving
-			// non-nullability through an arbitrary nested query's modifiers is
-			// disproportionate; over-marking optional is always safe).
 			RelNodePtr node(new RawRelation());
 			RawRelation &raw = static_cast<RawRelation &>(*node);
 			raw.sql = nested.sql;
 			for (const auto &v : nested.allVars()) {
 				ColumnInfo col;
 				col.var = v;
-				col.nonNull = false;
-				// Optionality is deliberately over-approximated here (see above),
-				// but the term annotation is not: a subquery projects the same
-				// terms its own pattern produced, so it carries through exactly.
+				// translateQueryPattern already tracks which of the sub-select's
+				// projected variables are guaranteed bound (boundVars) vs. only
+				// sometimes bound (optionalVars, from OPTIONAL/UNION inside the
+				// sub-select) — reuse that instead of over-approximating every
+				// variable as optional, which would force a null-safe join below.
+				col.nonNull = nested.boundVars.count(v) != 0;
 				col.term = nested.termInfoOf(v);
 				raw.schema().push_back(col);
 			}
