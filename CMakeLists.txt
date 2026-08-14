@@ -252,6 +252,25 @@ target_include_directories(sql2rdf_sparql2sql PUBLIC
 target_link_libraries(sql2rdf_sparql2sql PUBLIC sql2rdf_r2rml sql2rdf_sparql)
 
 # ----------------------------------------------------------------------------
+# TypeCatalogLoader - fills a sparql2sql::TypeCatalog from a live
+# r2rml::SQLConnection (information_schema sweep + per-view DESCRIBE). Written
+# entirely against the abstract SQLConnection/SQLResultSet/SQLRow/SQLValue
+# interfaces, so - like sql2rdf_sparql2sql - it has no DuckDB dependency of
+# its own and is exposed unconditionally, not gated behind SQL2RDF_BUILD_CLI.
+# This lets any downstream consumer of sparql2sql::translateQuery() with its
+# own SQLConnection backend (e.g. a DuckDB extension using a live
+# ClientContext) link it directly instead of reaching into this project's
+# source tree.
+# ----------------------------------------------------------------------------
+add_library(sql2rdf_type_catalog_loader STATIC src/TypeCatalogLoader.cpp)
+add_library(sql2rdf::type_catalog_loader ALIAS sql2rdf_type_catalog_loader)
+target_include_directories(sql2rdf_type_catalog_loader PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(sql2rdf_type_catalog_loader PUBLIC sql2rdf_r2rml sql2rdf_sparql2sql)
+
+# ----------------------------------------------------------------------------
 # DuckDB-backed SQLConnection - a small static library (requires DuckDB) so
 # both the CLI and the DuckDB-execution validation test target (see below)
 # can link a real SQLConnection without compiling DuckDBConnection.cpp
@@ -260,12 +279,12 @@ target_link_libraries(sql2rdf_sparql2sql PUBLIC sql2rdf_r2rml sql2rdf_sparql)
 # plain, DuckDB-free test_runner target.
 # ----------------------------------------------------------------------------
 if(SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_DUCKDB))
-  add_library(sql2rdf_duckdb STATIC src/DuckDBConnection.cpp src/TypeCatalogLoader.cpp)
+  add_library(sql2rdf_duckdb STATIC src/DuckDBConnection.cpp)
   target_include_directories(sql2rdf_duckdb PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
   )
-  target_link_libraries(sql2rdf_duckdb PUBLIC sql2rdf_r2rml sql2rdf_sparql2sql duckdb)
+  target_link_libraries(sql2rdf_duckdb PUBLIC sql2rdf_r2rml sql2rdf_sparql2sql sql2rdf_type_catalog_loader duckdb)
 endif()
 
 # Specify main executable sources and link to the library (requires DuckDB)

@@ -28,7 +28,6 @@
 #endif
 
 #include "DuckDBConnection.h"
-#include "TypeCatalogLoader.h"
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/R2RMLParser.h"
 #include "r2rml/SQLResultSet.h"
@@ -40,6 +39,7 @@
 #include "sparql2sql/TranslationError.h"
 #include "sparql2sql/Translator.h"
 #include "sparql2sql/TypeCatalog.h"
+#include "sql2rdf/TypeCatalogLoader.h"
 
 using r2rml::DuckDBConnection;
 using r2rml::R2RMLMapping;

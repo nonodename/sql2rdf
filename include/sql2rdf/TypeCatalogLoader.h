@@ -31,11 +31,15 @@ namespace sql2rdf {
 /// Describing a query binds it without executing it, so this costs a plan per
 /// view and reads no rows.
 ///
-/// Deliberately lives in the CLI layer, not in sql2rdf_sparql2sql: it issues
-/// SQL of its own (information_schema / DESCRIBE), which is backend-specific,
-/// whereas the core library never touches a connection. The core's
-/// contribution is sparql2sql::mappingViewSources(), which says *which*
-/// queries to describe and under which catalog key to file the answers.
+/// Lives in its own target (sql2rdf_type_catalog_loader), separate from
+/// sql2rdf_sparql2sql: it issues SQL of its own (information_schema /
+/// DESCRIBE) against a live r2rml::SQLConnection, whereas the core library
+/// never touches a connection. It has no DuckDB dependency of its own -
+/// `conn` can be any r2rml::SQLConnection implementation - which is what lets
+/// FetchContent consumers with their own backend link it directly. The
+/// core's contribution is sparql2sql::mappingViewSources(), which says
+/// *which* queries to describe and under which catalog key to file the
+/// answers.
 ///
 /// `mapping` may be null, in which case only base-table types are read.
 /// Throws whatever the connection throws on the information_schema sweep (the

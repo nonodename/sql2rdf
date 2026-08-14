@@ -526,9 +526,12 @@ common case of a mapping where some `skos:prefLabel`s come from tables and some 
 caller holding a connection walks `mappingViewSources()`, asks the backend for each query's result
 schema — in DuckDB `DESCRIBE SELECT * FROM (<sql>) AS v`, which binds the query without executing
 it, so it costs a plan and reads no rows — and files the answers under `identity`. The core library
-stays connection-free: it only says which queries to describe. The CLI's own implementation is
-`sql2rdf::loadTypeCatalog()` (`src/TypeCatalogLoader.h`, DuckDB layer), which does both halves:
-the `information_schema` sweep for base tables and a `DESCRIBE` per view.
+stays connection-free: it only says which queries to describe. `sql2rdf::loadTypeCatalog()`
+(`include/sql2rdf/TypeCatalogLoader.h`, backed by the `sql2rdf_type_catalog_loader` target) does
+both halves: the `information_schema` sweep for base tables and a `DESCRIBE` per view. It has no
+DuckDB dependency of its own — it's written against the abstract `r2rml::SQLConnection` — so it's
+exposed unconditionally for any downstream consumer with its own `SQLConnection` backend, not
+just the DuckDB-backed CLI.
 
 ```cpp
 #include "sparql2sql/DialectFactory.h"
@@ -806,6 +809,7 @@ in `createDialect()` (`src/sparql2sql/DialectFactory.cpp`).
 | `sql2rdf_yarrrml` | static library | No | YARRRML→R2RML translator (links yaml-cpp privately) |
 | `sql2rdf_sparql` | static library | No | Standalone SPARQL 1.1 Query grammar parser |
 | `sql2rdf_sparql2sql` | static library | No | SPARQL-to-SQL translator (see below) |
+| `sql2rdf_type_catalog_loader` | static library | No | Fills a `TypeCatalog` from a live `SQLConnection` (see above) |
 | `SQL2RDF++` | executable | Yes | CLI application |
 | `test_runner` | executable | No | Catch2 unit tests |
 | `sparql2sql_duckdb_tests` | executable | Yes | SPARQL-to-SQL real-DuckDB execution validation tests (`tests/duckdb/`) |

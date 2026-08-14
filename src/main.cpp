@@ -11,7 +11,6 @@
 #include <serd/serd.h>
 
 #include "DuckDBConnection.h"
-#include "TypeCatalogLoader.h"
 #include "r2rml/MappingParser.h"
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/SQLResultSet.h"
@@ -23,6 +22,7 @@
 #include "sparql2sql/DialectFactory.h"
 #include "sparql2sql/Translator.h"
 #include "sparql2sql/TypeCatalog.h"
+#include "sql2rdf/TypeCatalogLoader.h"
 #include "yarrrml/YARRRMLParser.h"
 
 static void printHelp(const char *programName) {
