@@ -1,4 +1,4 @@
-#include "TypeCatalogLoader.h"
+#include "sql2rdf/TypeCatalogLoader.h"
 
 #include <cctype>
 #include <cstring>
