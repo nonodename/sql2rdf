@@ -298,6 +298,39 @@ TEST_CASE("DISTINCT includes the tag so differently-typed equal lexical forms st
 	CHECK(contains(sql, "\"d_v\""));
 }
 
+TEST_CASE("ORDER BY outside a sub-select sees an undetermined projected variable's tag need in time",
+          "[sparql2sql][dynamic-types]") {
+	// ?y's dimension is undetermined (ex:mixed) and it is projected bare out of
+	// the sub-select, so the enclosing ORDER BY's demand has to reach the
+	// sub-select's own SELECT list before that SQL text is frozen - otherwise
+	// producedTag() has nothing to give the outer ORDER BY and translation
+	// throws instead of building the Section 15.1 layered key.
+	const std::string sql =
+	    translate("SELECT ?y WHERE { { SELECT ?y WHERE { ?m ex:mixed ?x . BIND(?x AS ?y) } } } ORDER BY ?y");
+	CHECK(contains(sql, "\"d_y\""));
+}
+
+TEST_CASE("DISTINCT outside a sub-select sees an undetermined projected variable's tag need in time",
+          "[sparql2sql][dynamic-types]") {
+	const std::string sql = translate("SELECT DISTINCT ?v WHERE { { SELECT ?v WHERE { ?m ex:mixeddt ?v } } }");
+	CHECK(contains(sql, "\"d_v\""));
+}
+
+TEST_CASE("a determined variable projected out of a sub-select still orders by a single typed key",
+          "[sparql2sql][dynamic-types]") {
+	// Guards against the pre-fold pass over-marking: ?a's dimension is fully
+	// determined (ex:amount), so wrapping it in a sub-select and ordering by it
+	// outside must still produce the plain single-key ORDER BY, not the layered
+	// Section 15.1 comparison. The pre-fold pass has no schema yet to check
+	// isFullyDetermined against, so an inner, unreferenced "d_a" column may
+	// still appear deep in the sub-select's own SQL - the documented
+	// "over-marking costs one unused column" trade-off - but that must not
+	// reach the outer projection or degrade its ORDER BY.
+	const std::string sql = translate("SELECT ?a WHERE { { SELECT ?a WHERE { ?m ex:amount ?a } } } ORDER BY ?a");
+	CHECK(contains(sql, "ORDER BY TRY_CAST"));
+	CHECK_FALSE(contains(sql, "THEN 1 WHEN"));
+}
+
 TEST_CASE("STRDT accepts a non-constant datatype argument", "[sparql2sql][dynamic-types]") {
 	// Previously refused outright: the dimension had to be a translation-time
 	// constant. It is now simply a computed tag.

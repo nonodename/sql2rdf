@@ -307,6 +307,13 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 
 	const SqlDialect &dialect = ctx.dialect();
 
+	// Must run before fold(): a nested `{ SELECT ... }` sub-select inside
+	// query.where folds (and renders its final SQL text) as one step of
+	// building this query's own tree, so this query's own ORDER BY/HAVING/
+	// SELECT-list/DISTINCT demand for a tag has to be visible to it *before*
+	// that happens - see markPreFoldTagNeeds's doc comment.
+	markPreFoldTagNeeds(query, ctx);
+
 	RelNodePtr rootNode = query.where ? fold(*query.where, ctx) : identityRelation(ctx);
 	if (query.valuesClause) {
 		rootNode = innerJoin(std::move(rootNode), translateInlineData(*query.valuesClause, ctx), ctx);
@@ -429,6 +436,7 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 
 	TranslatedPattern result;
 	result.sql = sql;
+	result.providedTagVars = tagCols;
 	if (query.selectStar) {
 		for (const auto &v : source.boundVars) {
 			if (!ctx.isInternal(v)) {

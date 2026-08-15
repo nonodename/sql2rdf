@@ -1,9 +1,11 @@
 #include "sparql2sql/TagDemand.h"
 
+#include <set>
 #include <string>
 #include <vector>
 
 #include "sparql-parser/ast/Expression.h"
+#include "sparql-parser/ast/GraphPattern.h"
 #include "sparql-parser/ast/Query.h"
 #include "sparql2sql/ExprAnalysis.h"
 #include "sparql2sql/TermInfo.h"
@@ -20,12 +22,21 @@ using sparql::ast::BinaryExpr;
 using sparql::ast::BinaryOp;
 using sparql::ast::BuiltInCallExpr;
 using sparql::ast::BuiltinFunction;
+using sparql::ast::ElementKind;
 using sparql::ast::Expression;
 using sparql::ast::ExprKind;
 using sparql::ast::FunctionCallExpr;
+using sparql::ast::GraphGraphPattern;
+using sparql::ast::GroupElement;
+using sparql::ast::GroupGraphPattern;
 using sparql::ast::InExpr;
+using sparql::ast::MinusGraphPattern;
+using sparql::ast::OptionalGraphPattern;
+using sparql::ast::ServiceGraphPattern;
+using sparql::ast::SubSelectElement;
 using sparql::ast::UnaryExpr;
 using sparql::ast::UnaryOp;
+using sparql::ast::UnionGraphPattern;
 
 // Mark every variable `expr` reads whose dimension the schema does not settle.
 //
@@ -346,6 +357,77 @@ void markQueryLevelNeeds(const RelNode &root, const sparql::ast::Query *query, T
 	}
 }
 
+// Mark every variable `expr` references that is in `eligible`, without the
+// isFullyDetermined() gate markVarsIn applies - see markPreFoldTagNeeds's doc
+// comment for why no scope is available yet to check that gate here, and why
+// `eligible` exists to make up for it.
+void markAllVarsIn(const Expression &expr, const std::set<std::string> &eligible, TranslationContext &ctx) {
+	std::vector<std::string> refs;
+	collectVarRefs(expr, refs);
+	for (const auto &name : refs) {
+		if (eligible.count(name) != 0) {
+			ctx.markNeedsTag(name);
+		}
+	}
+}
+
+void collectSubSelectProjectedVars(const GroupGraphPattern &pattern, std::set<std::string> &out);
+
+// Recurse through every combinator that can nest a `{ SELECT ... }` without
+// crossing into a query boundary of its own (a further-nested sub-select's
+// interior is that sub-select's own concern, handled when translateQueryPattern
+// recurses into it and runs this same pre-scan again - see the header comment).
+void collectSubSelectProjectedVars(const GroupElement &el, std::set<std::string> &out) {
+	switch (el.kind()) {
+	case ElementKind::GroupGraphPattern:
+		collectSubSelectProjectedVars(static_cast<const GroupGraphPattern &>(el), out);
+		return;
+	case ElementKind::UnionGraphPattern:
+		for (const auto &branch : static_cast<const UnionGraphPattern &>(el).branches) {
+			collectSubSelectProjectedVars(*branch, out);
+		}
+		return;
+	case ElementKind::OptionalGraphPattern:
+		collectSubSelectProjectedVars(*static_cast<const OptionalGraphPattern &>(el).pattern, out);
+		return;
+	case ElementKind::MinusGraphPattern:
+		collectSubSelectProjectedVars(*static_cast<const MinusGraphPattern &>(el).pattern, out);
+		return;
+	case ElementKind::GraphGraphPattern:
+		collectSubSelectProjectedVars(*static_cast<const GraphGraphPattern &>(el).pattern, out);
+		return;
+	case ElementKind::ServiceGraphPattern:
+		collectSubSelectProjectedVars(*static_cast<const ServiceGraphPattern &>(el).pattern, out);
+		return;
+	case ElementKind::SubSelect: {
+		const auto &sub = static_cast<const SubSelectElement &>(el);
+		// A `SELECT *` sub-select's projected variables are only known once it
+		// folds, which is exactly what this pre-scan runs ahead of - left
+		// unfixed for that shape, matching this pass's documented scope (bare
+		// explicit projections only).
+		if (sub.query != nullptr && !sub.query->selectStar) {
+			for (const auto &item : sub.query->selectItems) {
+				if (!item.expr) {
+					out.insert(item.var->name);
+				}
+			}
+		}
+		return;
+	}
+	case ElementKind::BasicGraphPattern:
+	case ElementKind::Filter:
+	case ElementKind::Bind:
+	case ElementKind::InlineData:
+		return;
+	}
+}
+
+void collectSubSelectProjectedVars(const GroupGraphPattern &pattern, std::set<std::string> &out) {
+	for (const auto &el : pattern.elements) {
+		collectSubSelectProjectedVars(*el, out);
+	}
+}
+
 } // namespace
 
 void markJoinKeyTagNeeds(const RelNode &root, TranslationContext &ctx) {
@@ -361,6 +443,58 @@ void markExpressionTagNeeds(const RelNode &root, const sparql::ast::Query *query
 	markQueryLevelNeeds(root, query, ctx);
 	ExpressionVisitor visitor {&ctx};
 	walkNodes(root, visitor);
+}
+
+void markPreFoldTagNeeds(const sparql::ast::Query &query, TranslationContext &ctx) {
+	if (query.where == nullptr) {
+		return;
+	}
+	// Restrict marking to variables a nested sub-select could actually supply
+	// bare: this pass runs before fold(), so unlike markQueryLevelNeeds it has
+	// no schema to gate on isFullyDetermined(), and marking unconditionally
+	// would materialise unwanted tag columns even on an ordinary top-level
+	// query whose types the mapping pins down (no sub-select in sight) -
+	// regressing the very "well-typed mapping generates the same SQL as
+	// before" property markJoinKeyTagNeeds/markExpressionTagNeeds preserve.
+	// Restricting to this set costs nothing when it's empty (no sub-select:
+	// the whole pre-scan below becomes a no-op, unchanged from before this
+	// pass existed) and is exactly the set this pass exists to help with when
+	// it isn't.
+	std::set<std::string> eligible;
+	collectSubSelectProjectedVars(*query.where, eligible);
+	if (eligible.empty()) {
+		return;
+	}
+
+	for (const auto &item : query.selectItems) {
+		if (item.expr) {
+			markAllVarsIn(*item.expr, eligible, ctx);
+		}
+	}
+	for (const auto &gc : query.solutionModifier.groupBy) {
+		if (gc.expr) {
+			markAllVarsIn(*gc.expr, eligible, ctx);
+		}
+	}
+	for (const auto &h : query.solutionModifier.having) {
+		markAllVarsIn(*h, eligible, ctx);
+	}
+	for (const auto &oc : query.solutionModifier.orderBy) {
+		if (oc.expr) {
+			markAllVarsIn(*oc.expr, eligible, ctx);
+		}
+	}
+	// DISTINCT/REDUCED's dedup key is every projected variable - see
+	// markQueryLevelNeeds's identical rationale. SELECT * is skipped: which
+	// variables that projects is only known once query.where has folded, which
+	// is exactly what this pass runs ahead of.
+	if ((query.distinct || query.reduced) && !query.selectStar) {
+		for (const auto &item : query.selectItems) {
+			if (!item.expr && eligible.count(item.var->name) != 0) {
+				ctx.markNeedsTag(item.var->name);
+			}
+		}
+	}
 }
 
 } // namespace sparql2sql
