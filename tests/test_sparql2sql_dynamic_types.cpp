@@ -145,6 +145,24 @@ TEST_CASE("tags: a predicate filter pushdown can resolve per arm still needs non
 	CHECK(contains(sql, "(TRUE)"));
 }
 
+TEST_CASE("LANG/DATATYPE over a pushed-down IRI arm fold to NULL rather than refusing", "[sparql2sql][dynamic-types]") {
+	// The regression this guards: ex:mixed is an IRI in one union arm and a
+	// literal in the other, so overall the kind is undetermined ("Unknown") -
+	// but filter pushdown re-renders lang(?x)/datatype(?x) against each arm on
+	// its own, where the kind IS statically known. Reaching the IRI arm used to
+	// throw a TranslationError outright instead of folding to the SPARQL
+	// type-error answer (NULL), which made an ordinary, un-BIND-guarded query
+	// like `?s ?p ?o . FILTER(lang(?o) = "en")` fail to translate whenever any
+	// candidate predicate had a mix of IRI- and literal-typed arms.
+	const std::string langSql = translate("SELECT ?x WHERE { ?m ex:mixed ?x . FILTER(lang(?x) = \"en\") }");
+	CHECK_FALSE(hasAnyTagColumn(langSql));
+	CHECK(contains(langSql, "CAST(NULL AS VARCHAR)"));
+
+	const std::string dtSql = translate("SELECT ?x WHERE { ?m ex:mixed ?x . FILTER(datatype(?x) = xsd:string) }");
+	CHECK_FALSE(hasAnyTagColumn(dtSql));
+	CHECK(contains(dtSql, "CAST(NULL AS VARCHAR)"));
+}
+
 TEST_CASE("tags: only the variables that need one get one", "[sparql2sql][dynamic-types]") {
 	// ?x's dimension is undetermined and inspected; ?a's is determined and also
 	// inspected. Exactly one tag column should exist.

@@ -156,9 +156,10 @@ TEST_CASE("FILTER: term-kind builtins fold against a mapping that determines the
 	// A literal with no rr:language has the empty tag - a known answer.
 	CHECK(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(lang(?n) = \"\") }", mapping).find("''") !=
 	      std::string::npos);
-	// lang() on a statically-IRI argument is a type error, not an unknown.
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(lang(?e) = \"\") }", mapping),
-	                TranslationError);
+	// lang() on a statically-IRI argument is a type error - it folds to SQL NULL
+	// rather than refusing to translate the query.
+	CHECK(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(lang(?e) = \"\") }", mapping)
+	          .find("CAST(NULL AS VARCHAR)") != std::string::npos);
 }
 
 TEST_CASE("BIND: NOW() stamps a single literal, reused for every call in the query") {

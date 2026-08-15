@@ -140,7 +140,10 @@ TEST_CASE("LANG: a literal with no rr:language folds to the empty string", "[spa
 }
 
 TEST_CASE("LANG: an IRI-valued argument is a static type error", "[sparql2sql]") {
-	CHECK_THROWS_AS(translate("SELECT ?m WHERE { ?m ex:amount ?a . FILTER(lang(?m) = \"\") }"), TranslationError);
+	// SPARQL treats this as a type error, not a translation failure: it folds to
+	// SQL NULL, which a FILTER drops (matching "error in FILTER is false").
+	CHECK(
+	    contains(translate("SELECT ?m WHERE { ?m ex:amount ?a . FILTER(lang(?m) = \"\") }"), "CAST(NULL AS VARCHAR)"));
 }
 
 TEST_CASE("LANG: candidate arms tagged with different rr:language values are resolved per row", "[sparql2sql]") {

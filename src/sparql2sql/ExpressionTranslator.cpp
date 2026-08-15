@@ -583,8 +583,14 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 		const TermInfo &info = arg.staticInfo;
 		if (isFullyDetermined(info)) {
 			if (info.kind != RdfTermKind::Literal) {
-				throw TranslationError(
-				    "lang(): the argument is statically an IRI or blank node, which has no language tag");
+				// SPARQL says lang() of a non-literal is a type error, not a
+				// translation-time failure: a FILTER drops the row, a BIND leaves
+				// the variable unbound. Folding to NULL - rather than throwing -
+				// is also what keeps a per-arm-static-but-overall-dynamic variable
+				// (one union arm always an IRI, another always a literal) from
+				// blowing up when filter pushdown re-renders this expression
+				// against that single, fully-typed arm.
+				return "CAST(NULL AS VARCHAR)";
 			}
 			// A literal with no rr:language at all has the empty tag - which is a
 			// known answer, not an unknown one.
@@ -595,16 +601,12 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 	case BuiltinFunction::Datatype: {
 		const TermSql arg = trTerm(*args.at(0), scope, alias, ctx);
 		const TermInfo &info = arg.staticInfo;
-		if (isFullyDetermined(info) && !info.datatypeIri.empty()) {
-			if (info.kind != RdfTermKind::Literal) {
-				throw TranslationError(
-				    "datatype(): the argument is statically an IRI or blank node, which has no datatype");
-			}
-			return foldedString(info.datatypeIri, arg.value, mayBeUnbound(*args[0], scope), dialect);
-		}
 		if (isFullyDetermined(info) && info.kind != RdfTermKind::Literal) {
-			throw TranslationError(
-			    "datatype(): the argument is statically an IRI or blank node, which has no datatype");
+			// See the identical reasoning in the Lang case above.
+			return "CAST(NULL AS VARCHAR)";
+		}
+		if (isFullyDetermined(info) && !info.datatypeIri.empty()) {
+			return foldedString(info.datatypeIri, arg.value, mayBeUnbound(*args[0], scope), dialect);
 		}
 		// Either the datatype varies per row, or it is a literal the mapping does
 		// not type at all (a bare rr:column with no rr:datatype and no
