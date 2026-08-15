@@ -400,6 +400,17 @@ RelNodePtr fold(const sparql::ast::GroupGraphPattern &pattern, TranslationContex
 				// variable as optional, which would force a null-safe join below.
 				col.nonNull = nested.boundVars.count(v) != 0;
 				col.term = nested.termInfoOf(v);
+				// A fully-determined variable's tag is a constant the renderer can
+				// synthesise on demand later, exactly like every other producer
+				// (translateInlineData above, TriplePatternTranslator, ...) - so a
+				// consumer outside the sub-select (e.g. an enclosing ORDER BY) that
+				// discovers its need for the tag only after this SQL text was
+				// already frozen can still be satisfied. Only a genuinely
+				// undetermined variable is irrecoverable here, which is exactly what
+				// providedTagVars/producedTag's error is for.
+				if (raw.providedTagVars.count(v) == 0 && isFullyDetermined(col.term)) {
+					col.tagExpr = tagLiteral(col.term, ctx.dialect());
+				}
 				raw.schema().push_back(col);
 			}
 			acc = innerJoin(std::move(acc), std::move(node), ctx);
