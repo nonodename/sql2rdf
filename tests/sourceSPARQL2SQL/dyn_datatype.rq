@@ -1,0 +1,8 @@
+PREFIX ex: <http://example.com/ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# ex:mixeddt is xsd:integer over MEASURES.AMOUNT and xsd:string over NOTES.BODY.
+SELECT ?y (datatype(?y) AS ?dt)
+WHERE {
+  ?m ex:mixeddt ?v .
+  BIND(?v AS ?y)
+}

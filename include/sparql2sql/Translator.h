@@ -38,6 +38,16 @@ std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMa
 /// own projected variables) rather than a final wrapped string. Exposed
 /// here (not kept file-local to Translator.cpp) because PatternFolder's
 /// SubSelectElement handling must invoke it recursively.
-TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, TranslationContext &ctx);
+///
+/// `nested` distinguishes the recursive SubSelectElement call from the one
+/// top-level call, and controls one thing: a nested query additionally projects
+/// a runtime type-tag column for each projected variable whose annotation is
+/// **not** fully determined, recording them in the result's providedTagVars.
+/// Those tags cannot be reconstructed by the enclosing query - this SQL is
+/// spliced in as literal text and never re-rendered - whereas a determined one
+/// is a constant the outer renderer can synthesise on demand. The top-level call
+/// leaves them off so an ordinary query's result columns stay exactly the
+/// variables it projected.
+TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, TranslationContext &ctx, bool nested = false);
 
 } // namespace sparql2sql

@@ -125,6 +125,10 @@ std::string DuckDbDialect::anyValueAgg(const std::string &expr) const {
 	return "any_value(" + expr + ")";
 }
 
+std::string DuckDbDialect::argMinMaxBy(const std::string &expr, const std::string &orderBy, bool wantMax) const {
+	return std::string(wantMax ? "arg_max(" : "arg_min(") + expr + ", " + orderBy + ")";
+}
+
 std::string DuckDbDialect::combineByName(bool all, const std::vector<std::string> &armSqls) const {
 	std::string keyword = all ? " UNION ALL BY NAME " : " UNION BY NAME ";
 	std::string out;

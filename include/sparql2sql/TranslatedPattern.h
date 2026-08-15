@@ -49,6 +49,12 @@ struct TranslatedPattern {
 	/// same fillScopeFromSchema(), which is what keeps them in step.
 	std::map<std::string, TermInfo> termInfo;
 
+	/// Variables whose runtime type-tag column `sql` projects. Only ever
+	/// populated by translateQueryPattern's nested-subquery mode, for the
+	/// variables whose annotation is not fully determined - see
+	/// RawRelation::providedTagVars for why those specifically.
+	std::set<std::string> providedTagVars;
+
 	std::set<std::string> allVars() const {
 		std::set<std::string> out = boundVars;
 		out.insert(optionalVars.begin(), optionalVars.end());
@@ -122,6 +128,28 @@ public:
 		return internalVars_.count(varName) != 0;
 	}
 
+	/// Mark `varName` as needing a runtime type-tag column materialised
+	/// alongside its lexical-form column, because some consumer's static
+	/// TermInfo is not enough to answer what it asks about the term.
+	///
+	/// Deliberately keyed by variable *name* globally rather than per relation
+	/// node: a tag column has to exist on every node between its producer and
+	/// its consumer, and combineByName() pads a column missing from one arm with
+	/// NULL - which the "tag is NULL iff the value is NULL" invariant would read
+	/// as "unbound". One global flag makes every arm project it.
+	///
+	/// Set by markJoinKeyTagNeeds()/markExpressionTagNeeds() (TagDemand.h), which
+	/// run either side of optimize() so that filter pushdown's per-arm static
+	/// resolution gets first refusal - a query whose types the mapping pins down
+	/// materialises no tag columns at all.
+	void markNeedsTag(const std::string &varName) {
+		tagVars_.insert(varName);
+	}
+
+	bool needsTag(const std::string &varName) const {
+		return tagVars_.count(varName) != 0;
+	}
+
 	/// Mint a fresh CTE name ("cte1", "cte2", ...) - a distinct prefix and a
 	/// separate counter from nextAlias()'s "t"+N sequence, so the two can
 	/// never collide even though both are monotonic per-context counters.
@@ -174,6 +202,7 @@ private:
 	std::size_t aliasCounter_;
 	std::size_t internalVarCounter_ = 0;
 	std::set<std::string> internalVars_;
+	std::set<std::string> tagVars_;
 	std::string nowLiteral_;
 	std::size_t cteCounter_ = 0;
 	std::vector<CteDef> pendingCtes_;
@@ -183,5 +212,18 @@ private:
 /// (always quoted via the dialect, so case-sensitivity and any
 /// PN_CHARS/Unicode edge cases in the variable name are never an issue).
 std::string mangleVar(const std::string &sparqlVarName, const SqlDialect &dialect);
+
+/// Mangle a SPARQL variable name into the SQL column name of its runtime
+/// **type tag** - the companion VARCHAR carrying the RDF term's
+/// kind/datatype/language in encodeTag()'s encoding, so the term dimension can
+/// be evaluated per row rather than only at translation time.
+///
+/// A distinct prefix from mangleVar's "v_" and from the renderer's hidden
+/// native-join-key "k_" columns, so the three can never collide.
+///
+/// INVARIANT, relied on by the OPTIONAL join's paired COALESCE and by
+/// combineByName's NULL padding: this column is SQL NULL exactly when the
+/// matching "v_" column is.
+std::string mangleVarTag(const std::string &sparqlVarName, const SqlDialect &dialect);
 
 } // namespace sparql2sql

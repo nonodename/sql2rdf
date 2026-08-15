@@ -1,0 +1,9 @@
+PREFIX ex: <http://example.com/ns#>
+# "9"^^xsd:integer and "9"^^xsd:string are different terms, so they are different
+# groups - grouping on the lexical form alone would report one group of two.
+SELECT ?y (COUNT(*) AS ?c)
+WHERE {
+  ?m ex:mixeddt ?v .
+  BIND(?v AS ?y)
+}
+GROUP BY ?y

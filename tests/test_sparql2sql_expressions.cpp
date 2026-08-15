@@ -118,12 +118,6 @@ TEST_CASE("FILTER: deferred builtins throw a named TranslationError") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
 
-	// datatype(?n) is the term-kind builtin that still refuses under this
-	// mapping: ?n is a *known literal* (so isLITERAL() folds - see below), but
-	// its datatype is not declared and test_runner supplies no TypeCatalog, so
-	// there is genuinely nothing to report.
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(datatype(?n) = ex:foo) }", mapping),
-	                TranslationError);
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(SHA384(?n) = \"x\") }", mapping),
 	                TranslationError);
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(SHA512(?n) = \"x\") }", mapping),
@@ -131,11 +125,17 @@ TEST_CASE("FILTER: deferred builtins throw a named TranslationError") {
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(TIMEZONE(?n) = \"\") }", mapping),
 	                TranslationError);
 	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(TZ(?n) = \"\") }", mapping), TranslationError);
-	// Term construction is still out of scope: these mint new terms, which
-	// needs more than term *tracking*.
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(IRI(?n) = ex:foo) }", mapping),
-	                TranslationError);
-	CHECK_THROWS_AS(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(BNODE(?n) = ?e) }", mapping), TranslationError);
+	// TIMEZONE()/TZ() above are the only *permanently* deferred term builtins: a
+	// UTC offset is not part of a term's lexical form, so no amount of dimension
+	// tracking recovers one. SHA384/SHA512 are missing DuckDB scalar functions.
+	//
+	// Everything else that used to be listed here now translates. datatype(?n)
+	// over this mapping's undeclared rr:column literal yields the type error SQL
+	// NULL rather than refusing; IRI() and BNODE() are supported term
+	// constructors, since a runtime tag is exactly what they need to construct.
+	CHECK_NOTHROW(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(datatype(?n) = ex:foo) }", mapping));
+	CHECK_NOTHROW(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(IRI(?n) = ex:foo) }", mapping));
+	CHECK_NOTHROW(translate("SELECT ?e WHERE { ?e ex:name ?n . FILTER(BNODE(?n) = ?e) }", mapping));
 }
 
 // Coverage transferred from the case above: isIRI/isBLANK/isLITERAL/lang used

@@ -230,6 +230,8 @@ set(SPARQL2SQL_SOURCES
   src/sparql2sql/TemplateUtil.cpp
   src/sparql2sql/TermInference.cpp
   src/sparql2sql/TermInfo.cpp
+  src/sparql2sql/TagSql.cpp
+  src/sparql2sql/TagDemand.cpp
   src/sparql2sql/TermMapSql.cpp
   src/sparql2sql/TranslatedPattern.cpp
   src/sparql2sql/TriplePatternTranslator.cpp

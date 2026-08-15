@@ -2,10 +2,22 @@
 @prefix ex:  <http://example.com/ns#>.
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#>.
 
-# Toy mapping for the SPARQL-to-SQL translator's static RDF term dimension.
-# Every term map here pins one point of the TermInfo lattice, so a query that
-# binds a variable through one of these predicates has a known, *specific*
-# annotation to assert on:
+# Toy mapping for the SPARQL-to-SQL translator's RDF term dimension.
+#
+# Read as two halves. The single-arm predicates below each pin one point of the
+# TermInfo lattice, so a query binding a variable through one of them has a
+# known, *specific* static annotation to assert on - and generates SQL with no
+# runtime type tag anywhere, because nothing needs deciding per row.
+#
+# The multi-arm predicates at the bottom (ex:mixed, ex:desc, ex:mixedtag,
+# ex:mixeddt) are produced by BOTH triples maps with DIFFERENT dimensions, over
+# different tables. Their meet is degraded, so nothing can be folded - and since
+# the two arms are unioned, a single query over one of them really does return
+# rows whose term dimension differs from row to row. That is what the runtime
+# type-tag column (mangleVarTag / TagSql.h) exists for, and these four are the
+# only fixtures in the suite that exercise it.
+#
+# Single-arm predicates:
 #
 #   subject      -> IRI, via rr:template
 #   ex:amount    -> Literal, xsd:integer  (declared rr:datatype)
@@ -21,22 +33,31 @@
 #                   pins that a declared datatype that the data contradicts
 #                   yields NULL (row dropped) rather than a runtime error
 #
-# ex:mixed is produced by BOTH triples maps with DIFFERENT term kinds (an IRI
-# from <#Measure>, a literal from <#Note>), so its meet is Unknown - the case
-# where the term-kind builtins must still refuse to fold.
+# Multi-arm predicates - the per-row cases:
 #
-# ex:desc is produced by BOTH triples maps as a literal in each arm, but with
-# DIFFERENT rr:language values ("en" vs "fr"), so its meet is a literal known
-# to be rdf:langString whose specific tag is not statically known - the case
-# where LANG() must still refuse to fold, the same way DATATYPE() refuses when
-# only the kind (not the datatype) is known.
+# ex:mixed differs in term KIND (an IRI from <#Measure>, a literal from
+#   <#Note>), so its meet is Unknown: isIRI()/isLITERAL() cannot fold and must
+#   test the tag instead.
 #
-# ex:mixedtag is produced by BOTH triples maps as a literal, but ONE arm is
-# rr:language "en" (rdf:langString) and the OTHER has no rr:language/rr:datatype
-# at all - so unlike ex:desc, the two arms' datatypeIri also disagree
-# ("rdf:langString" vs unknown), and meet() degrades datatypeIri to "" as well
-# as lang. That is the case that must not be confused with "no rr:language
-# anywhere" (ex:plain): the mapping DOES prove one arm is language-tagged.
+# ex:desc is a literal in each arm but with DIFFERENT rr:language values ("en"
+#   vs "fr"), so the kind and rdf:langString survive the meet while the specific
+#   tag does not: LANG() cannot fold and must read the tag.
+#
+# ex:mixedtag is a literal in each arm, but ONE arm is rr:language "en"
+#   (rdf:langString) and the OTHER declares nothing at all - so unlike ex:desc
+#   the arms' datatypeIri disagree too, and meet() degrades that as well. This is
+#   the case that must never be confused with "no rr:language anywhere"
+#   (ex:plain): the mapping DOES prove one arm is language-tagged, so LANG() must
+#   not answer "" - and after the tag lowering, must not tag it "L" either.
+#
+# ex:mixeddt differs only in DATATYPE (xsd:integer over MEASURES.AMOUNT vs
+#   xsd:string over NOTES.BODY). Textually indistinguishable from ex:plain in the
+#   meet's three fields - both come out "a literal with no datatype" - which is
+#   precisely why TermInfo carries `degraded`: ex:plain lowers to the "L" tag
+#   ("the mapping cannot determine this datatype"), while ex:mixeddt must not,
+#   because every row of it has a perfectly good datatype that just is not the
+#   same one. It is also the fixture for value-space dispatch: comparing an
+#   xsd:integer row against an xsd:string row is a type error, not a false.
 
 <#Measure>
     rr:logicalTable [ rr:tableName "MEASURES" ];
@@ -62,7 +83,9 @@
     rr:predicateObjectMap [ rr:predicate ex:desc;
         rr:objectMap [ rr:column "TITLE"; rr:language "en" ] ];
     rr:predicateObjectMap [ rr:predicate ex:mixedtag;
-        rr:objectMap [ rr:column "TITLE"; rr:language "en" ] ].
+        rr:objectMap [ rr:column "TITLE"; rr:language "en" ] ];
+    rr:predicateObjectMap [ rr:predicate ex:mixeddt;
+        rr:objectMap [ rr:column "AMOUNT"; rr:datatype xsd:integer ] ].
 
 # A blank-node subject map - only reachable since buildSubjectMap started
 # honouring rr:termType (see tests/sourceR2RML/subject_blanknode.ttl).
@@ -76,4 +99,6 @@
     rr:predicateObjectMap [ rr:predicate ex:desc;
         rr:objectMap [ rr:column "BODY"; rr:language "fr" ] ];
     rr:predicateObjectMap [ rr:predicate ex:mixedtag;
-        rr:objectMap [ rr:column "BODY" ] ].
+        rr:objectMap [ rr:column "BODY" ] ];
+    rr:predicateObjectMap [ rr:predicate ex:mixeddt;
+        rr:objectMap [ rr:column "BODY"; rr:datatype xsd:string ] ].

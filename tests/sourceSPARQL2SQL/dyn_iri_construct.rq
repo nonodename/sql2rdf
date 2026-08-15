@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.com/ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# IRI() re-tags a literal's lexical form as an IRI term.
+SELECT ?h (isIRI(IRI(?h)) AS ?ii) (isLITERAL(?h) AS ?il)
+WHERE {
+  ?m ex:plain ?h .
+}

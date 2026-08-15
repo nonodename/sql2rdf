@@ -7,6 +7,7 @@
 #include "sparql-parser/ast/Term.h"
 #include "sparql2sql/PatternFolder.h"
 #include "sparql2sql/SqlDialect.h"
+#include "sparql2sql/TagSql.h"
 #include "sparql2sql/TermMapSql.h"
 #include "sparql2sql/TranslationError.h"
 #include "sparql2sql/ir/RelNode.h"
@@ -31,6 +32,7 @@ RelNodePtr singleTermRelation(const std::string &varName, const sparql::ast::Ter
 	col.var = varName;
 	col.nonNull = true;
 	col.term = termInfoOfTerm(term);
+	col.tagExpr = tagLiteral(col.term, dialect);
 	raw.schema().push_back(col);
 	return node;
 }
@@ -142,6 +144,7 @@ RelNodePtr translateOneOrMore(const sparql::ast::PropertyPathExpr &child, const 
 		col.var = object.varName;
 		col.nonNull = true;
 		col.term = toCol != nullptr ? toCol->term : TermInfo();
+		col.tagExpr = tagLiteral(col.term, dialect);
 		tc.schema().push_back(col);
 	} else if (!object.isVar) {
 		tc.mode = TransitiveClosureNode::Mode::BackwardFromObject;
@@ -150,6 +153,7 @@ RelNodePtr translateOneOrMore(const sparql::ast::PropertyPathExpr &child, const 
 		col.var = subject.varName;
 		col.nonNull = true;
 		col.term = fromCol != nullptr ? fromCol->term : TermInfo();
+		col.tagExpr = tagLiteral(col.term, dialect);
 		tc.schema().push_back(col);
 	} else {
 		tc.mode = TransitiveClosureNode::Mode::BothVars;
@@ -157,12 +161,14 @@ RelNodePtr translateOneOrMore(const sparql::ast::PropertyPathExpr &child, const 
 		s.var = subject.varName;
 		s.nonNull = true;
 		s.term = fromCol != nullptr ? fromCol->term : TermInfo();
+		s.tagExpr = tagLiteral(s.term, dialect);
 		tc.schema().push_back(s);
 		if (object.varName != subject.varName) {
 			ColumnInfo o;
 			o.var = object.varName;
 			o.nonNull = true;
 			o.term = toCol != nullptr ? toCol->term : TermInfo();
+			o.tagExpr = tagLiteral(o.term, dialect);
 			tc.schema().push_back(o);
 		}
 	}

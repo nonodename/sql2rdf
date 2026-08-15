@@ -7,6 +7,8 @@
 
 #include "sparql2sql/ExpressionTranslator.h"
 #include "sparql2sql/SqlDialect.h"
+#include "sparql2sql/TagSql.h"
+#include "sparql2sql/TranslationError.h"
 #include "sparql2sql/ir/NativeKey.h"
 #include "sparql2sql/ir/RelNode.h"
 
@@ -23,6 +25,48 @@ TranslatedPattern scopeOf(const RelNode &node) {
 	TranslatedPattern tp;
 	fillScopeFromSchema(tp, node.schema());
 	return tp;
+}
+
+// The SQL expression producing `col`'s runtime type tag from within the owning
+// node's own FROM scope - i.e. the constant the producer minted.
+//
+// Throws rather than substituting NULL when there is no such constant, because
+// NULL is this representation's spelling of *unbound*: emitting one for a term
+// that is bound would make isLITERAL() answer "error" for a perfectly good
+// literal. The only shapes that reach here without a constant are a transitive
+// closure whose step relation's endpoint term maps disagree, and a Raw leaf
+// whose producer had no constant either - both of which threw at translation
+// time before tags existed too, so this is not a new refusal, only a
+// better-explained one.
+std::string producedTag(const ColumnInfo &col, const char *nodeDescription) {
+	if (col.tagExpr.empty()) {
+		throw TranslationError(
+		    std::string("unsupported: the RDF term dimension of ?") + col.var +
+		    " is needed at run "
+		    "time, but " +
+		    nodeDescription +
+		    " cannot supply one - its contributing term maps "
+		    "disagree and it is not re-rendered late enough to carry a per-row tag column. Declare a "
+		    "consistent rr:datatype/rr:termType across the contributing term maps, or avoid asking "
+		    "about this variable's type.");
+	}
+	return col.tagExpr;
+}
+
+// ", <tag> AS d_<var>" for one transitive-closure endpoint column, or "" when
+// no tag is wanted.
+//
+// The closure's own recursive CTE deliberately carries only the endpoint node
+// text: threading a tag column through it would change what the terminating
+// UNION deduplicates on. That is sound because the step relation's endpoint term
+// maps determine the tag statically in every mapping shape that reaches here -
+// and where they disagree, producedTag says so rather than guessing.
+std::string closureTagProjection(const ColumnInfo &col, TranslationContext &ctx) {
+	if (!ctx.needsTag(col.var)) {
+		return std::string();
+	}
+	return ", " + producedTag(col, "a transitive-closure (`+`/`*`) path") + " AS " +
+	       mangleVarTag(col.var, ctx.dialect());
 }
 
 // Render one equi-key comparison across a derived-table boundary (where only
@@ -71,6 +115,9 @@ std::string renderSpj(const SpjRelation &rel, TranslationContext &ctx, const Ext
 			sql += first ? "" : ", ";
 			first = false;
 			sql += c.renderedExpr + " AS " + mangleVar(c.var, dialect);
+			if (ctx.needsTag(c.var)) {
+				sql += ", " + producedTag(c, "this select-project-join block") + " AS " + mangleVarTag(c.var, dialect);
+			}
 		}
 		if (extra != nullptr) {
 			for (const auto &e : *extra) {
@@ -181,6 +228,16 @@ std::string renderJoin(const JoinNode &join, TranslationContext &ctx) {
 		} else {
 			projectExprs.push_back(lcol + " AS " + mangleVar(k.var, dialect));
 		}
+		if (ctx.needsTag(k.var)) {
+			const std::string ltag = leftAlias + "." + mangleVarTag(k.var, dialect);
+			const std::string rtag = rightAlias + "." + mangleVarTag(k.var, dialect);
+			// A plain COALESCE of the two *columns* is exactly right here, unlike
+			// the constant-tag case in mergeInner: a child's tag column is NULL
+			// precisely when its value column is, so COALESCE picks the tag from
+			// the same side the value came from.
+			projectExprs.push_back((k.nullSafe ? ("COALESCE(" + ltag + ", " + rtag + ")") : ltag) + " AS " +
+			                       mangleVarTag(k.var, dialect));
+		}
 	}
 	onConditions.insert(onConditions.end(), nativeConds.begin(), nativeConds.end());
 	for (const auto &v : join.left->allVars()) {
@@ -188,12 +245,18 @@ std::string renderJoin(const JoinNode &join, TranslationContext &ctx) {
 			continue;
 		}
 		projectExprs.push_back(leftAlias + "." + mangleVar(v, dialect) + " AS " + mangleVar(v, dialect));
+		if (ctx.needsTag(v)) {
+			projectExprs.push_back(leftAlias + "." + mangleVarTag(v, dialect) + " AS " + mangleVarTag(v, dialect));
+		}
 	}
 	for (const auto &v : join.right->allVars()) {
 		if (shared.count(v)) {
 			continue;
 		}
 		projectExprs.push_back(rightAlias + "." + mangleVar(v, dialect) + " AS " + mangleVar(v, dialect));
+		if (ctx.needsTag(v)) {
+			projectExprs.push_back(rightAlias + "." + mangleVarTag(v, dialect) + " AS " + mangleVarTag(v, dialect));
+		}
 	}
 
 	std::string sql = "SELECT ";
@@ -260,6 +323,9 @@ std::string renderAntiJoin(const AntiJoinNode &anti, TranslationContext &ctx) {
 	for (const auto &c : anti.schema()) {
 		projection += (projection.empty() ? "" : ", ");
 		projection += leftAlias + "." + mangleVar(c.var, dialect) + " AS " + mangleVar(c.var, dialect);
+		if (ctx.needsTag(c.var)) {
+			projection += ", " + leftAlias + "." + mangleVarTag(c.var, dialect) + " AS " + mangleVarTag(c.var, dialect);
+		}
 	}
 	if (projection.empty()) {
 		projection = "1 AS " + dialect.quoteIdentifier("_dummy");
@@ -289,9 +355,18 @@ std::string renderBind(const BindNode &b, TranslationContext &ctx) {
 	std::string alias = ctx.nextAlias();
 	std::string childSql = renderNode(*b.child, ctx);
 	TranslatedPattern scope = scopeOf(*b.child);
-	std::string exprSql = translateExpression(*b.expr, scope, alias, ctx);
-	return "SELECT *, (" + exprSql + ") AS " + mangleVar(b.outVar, ctx.dialect()) + " FROM (" + childSql + ") AS " +
-	       alias;
+	TermSql bound = translateTerm(*b.expr, scope, alias, ctx);
+	std::string extra;
+	if (ctx.needsTag(b.outVar)) {
+		if (bound.tag.empty()) {
+			throw TranslationError("unsupported: the RDF term dimension of the BIND-ed variable ?" + b.outVar +
+			                       " is needed at run time, but neither the mapping nor this translator can derive it "
+			                       "from the defining expression.");
+		}
+		extra = ", (" + bound.tag + ") AS " + mangleVarTag(b.outVar, ctx.dialect());
+	}
+	return "SELECT *, (" + bound.value + ") AS " + mangleVar(b.outVar, ctx.dialect()) + extra + " FROM (" + childSql +
+	       ") AS " + alias;
 }
 
 // E+ closure rendering. Registers two CTEs on `ctx` (the one-hop step
@@ -341,11 +416,14 @@ std::string renderTransitiveClosure(const TransitiveClosureNode &tc, Translation
 		if (tc.schema().size() == 1) {
 			// Subject and object share one variable (`?x p+ ?x`): only the
 			// diagonal of the pairs closure satisfies the pattern.
-			return "SELECT " + c + "." + cteFrom + " AS " + mangleVar(tc.schema()[0].var, dialect) + " FROM " +
-			       closureCte + " AS " + c + " WHERE " + c + "." + cteFrom + " = " + c + "." + cteTo;
+			return "SELECT " + c + "." + cteFrom + " AS " + mangleVar(tc.schema()[0].var, dialect) +
+			       closureTagProjection(tc.schema()[0], ctx) + " FROM " + closureCte + " AS " + c + " WHERE " + c +
+			       "." + cteFrom + " = " + c + "." + cteTo;
 		}
-		return "SELECT " + c + "." + cteFrom + " AS " + mangleVar(tc.schema()[0].var, dialect) + ", " + c + "." +
-		       cteTo + " AS " + mangleVar(tc.schema()[1].var, dialect) + " FROM " + closureCte + " AS " + c;
+		return "SELECT " + c + "." + cteFrom + " AS " + mangleVar(tc.schema()[0].var, dialect) +
+		       closureTagProjection(tc.schema()[0], ctx) + ", " + c + "." + cteTo + " AS " +
+		       mangleVar(tc.schema()[1].var, dialect) + closureTagProjection(tc.schema()[1], ctx) + " FROM " +
+		       closureCte + " AS " + c;
 	}
 
 	// Unary reachable-set: ForwardFromSubject/BackwardFromObject walk the
@@ -376,8 +454,29 @@ std::string renderTransitiveClosure(const TransitiveClosureNode &tc, Translation
 	}
 
 	std::string c = ctx.nextAlias();
-	return "SELECT " + c + "." + cteNode + " AS " + mangleVar(tc.schema()[0].var, dialect) + " FROM " + closureCte +
-	       " AS " + c;
+	return "SELECT " + c + "." + cteNode + " AS " + mangleVar(tc.schema()[0].var, dialect) +
+	       closureTagProjection(tc.schema()[0], ctx) + " FROM " + closureCte + " AS " + c;
+}
+
+// A Raw leaf's SQL was built during folding, before any tag was demanded, so it
+// only carries the tag columns its producer could not have reconstructed later
+// (providedTagVars). Every other demanded tag is a constant, so it is added here
+// by wrapping - which costs nothing when nothing is demanded, the overwhelmingly
+// common case, where this returns the pre-rendered SQL verbatim as it always
+// did.
+std::string renderRaw(const RawRelation &raw, TranslationContext &ctx) {
+	const SqlDialect &dialect = ctx.dialect();
+	std::string added;
+	for (const auto &c : raw.schema()) {
+		if (!ctx.needsTag(c.var) || raw.providedTagVars.count(c.var) != 0) {
+			continue;
+		}
+		added += ", " + producedTag(c, "this inline-data or subquery relation") + " AS " + mangleVarTag(c.var, dialect);
+	}
+	if (added.empty()) {
+		return raw.sql;
+	}
+	return "SELECT *" + added + " FROM (" + raw.sql + ") AS " + ctx.nextAlias();
 }
 
 std::string renderEmpty(const EmptyNode &e, TranslationContext &ctx) {
@@ -391,6 +490,11 @@ std::string renderEmpty(const EmptyNode &e, TranslationContext &ctx) {
 			sql += ", ";
 		}
 		sql += "CAST(NULL AS VARCHAR) AS " + mangleVar(e.schema()[i].var, dialect);
+		if (ctx.needsTag(e.schema()[i].var)) {
+			// No rows, so no term: a NULL tag beside the NULL value is both the
+			// only honest answer and the one the invariant requires.
+			sql += ", CAST(NULL AS VARCHAR) AS " + mangleVarTag(e.schema()[i].var, dialect);
+		}
 	}
 	sql += " WHERE FALSE";
 	return sql;
@@ -411,7 +515,7 @@ std::string renderNode(const RelNode &node, TranslationContext &ctx) {
 	case RelKind::Bind:
 		return renderBind(static_cast<const BindNode &>(node), ctx);
 	case RelKind::Raw:
-		return static_cast<const RawRelation &>(node).sql;
+		return renderRaw(static_cast<const RawRelation &>(node), ctx);
 	case RelKind::SingleRow:
 		return "SELECT 1 AS " + ctx.dialect().quoteIdentifier("_dummy");
 	case RelKind::Empty:

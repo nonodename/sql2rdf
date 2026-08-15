@@ -1,0 +1,8 @@
+PREFIX ex: <http://example.com/ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# A per-row datatype IRI: previously rejected outright.
+SELECT ?p (datatype(STRDT(?p, ?h)) AS ?dt)
+WHERE {
+  ?m ex:plain ?p .
+  ?m ex:homepage ?h .
+}

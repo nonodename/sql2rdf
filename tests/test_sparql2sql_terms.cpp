@@ -92,16 +92,27 @@ TEST_CASE("isIRI: a nullable known-IRI variable is NULL-guarded, not folded to a
 	CHECK(contains(sql, "IS NULL THEN NULL"));
 }
 
-TEST_CASE("term builtins: a genuinely unknown term kind still throws", "[sparql2sql]") {
+TEST_CASE("term builtins: a genuinely unknown term kind is resolved per row", "[sparql2sql]") {
 	// COALESCE of an IRI-valued and a literal-valued variable meets to Unknown,
-	// and a FILTER on a BIND's own output variable cannot be pushed below the
-	// BIND that defines it - so this throw does not depend on optimizer choices.
+	// and a FILTER on a BIND's own output variable cannot be pushed below the BIND
+	// that defines it - so nothing static can rescue this.
+	//
+	// This used to be the suite's canonical "still throws" case. It no longer
+	// throws: the BIND projects a tag chosen per row by the same CASE that decides
+	// which COALESCE arm won, and each builtin tests that. See
+	// test_sparql2sql_dynamic_types.cpp for the shape assertions; what matters here
+	// is only that a genuinely-unknown kind is no longer a refusal.
 	const std::string q = "SELECT ?x WHERE { ?m ex:homepage ?h . ?m ex:plain ?p . BIND(COALESCE(?h, ?p) AS ?x) ";
-	CHECK_THROWS_AS(translate(q + "FILTER(isIRI(?x)) }"), TranslationError);
-	CHECK_THROWS_AS(translate(q + "FILTER(isBLANK(?x)) }"), TranslationError);
-	CHECK_THROWS_AS(translate(q + "FILTER(isLITERAL(?x)) }"), TranslationError);
-	CHECK_THROWS_AS(translate(q + "FILTER(lang(?x) = \"\") }"), TranslationError);
-	CHECK_THROWS_AS(translate(q + "FILTER(datatype(?x) = xsd:string) }"), TranslationError);
+	CHECK_NOTHROW(translate(q + "FILTER(isIRI(?x)) }"));
+	CHECK_NOTHROW(translate(q + "FILTER(isBLANK(?x)) }"));
+	CHECK_NOTHROW(translate(q + "FILTER(isLITERAL(?x)) }"));
+	CHECK_NOTHROW(translate(q + "FILTER(lang(?x) = \"\") }"));
+	CHECK_NOTHROW(translate(q + "FILTER(datatype(?x) = xsd:string) }"));
+	// The tag really is consulted rather than guessed: 'I' for the IRI arm, 'L'
+	// for the untyped-literal arm.
+	const std::string sql = translate(q + "FILTER(isIRI(?x)) }");
+	CHECK(contains(sql, "'I'"));
+	CHECK(contains(sql, "'L'"));
 }
 
 TEST_CASE("term builtins: disagreeing candidate arms are resolved per arm by pushdown", "[sparql2sql]") {
@@ -132,16 +143,19 @@ TEST_CASE("LANG: an IRI-valued argument is a static type error", "[sparql2sql]")
 	CHECK_THROWS_AS(translate("SELECT ?m WHERE { ?m ex:amount ?a . FILTER(lang(?m) = \"\") }"), TranslationError);
 }
 
-TEST_CASE("LANG: candidate arms tagged with different rr:language values still throw", "[sparql2sql]") {
+TEST_CASE("LANG: candidate arms tagged with different rr:language values are resolved per row", "[sparql2sql]") {
 	// ex:desc is a literal in both <#Measure> ("en") and <#Note> ("fr"), so the
 	// meet at the union knows the kind AND the datatype (rdf:langString in both
 	// arms) but not the specific tag - meet() degrades disagreeing langs to "".
-	// Folding that empty string in would silently answer lang(?d) = "" for a
-	// row that is actually @en or @fr, so this must throw instead - same
-	// rationale as DATATYPE() refusing when only the kind is known. The BIND
-	// makes this pushdown-proof, mirroring the Unknown-kind case above.
-	const std::string q = "SELECT ?x WHERE { ?m ex:desc ?d . BIND(?d AS ?x) ";
-	CHECK_THROWS_AS(translate(q + "FILTER(lang(?x) = \"\") }"), TranslationError);
+	// Folding that empty string in would silently answer lang(?d) = "" for a row
+	// that is actually @en or @fr, which is why this used to throw. The tag now
+	// carries the specific language per row, so each arm's own '@en'/'@fr' reaches
+	// the comparison. The BIND makes this pushdown-proof.
+	const std::string sql = translate("SELECT ?x WHERE { ?m ex:desc ?d . BIND(?d AS ?x) FILTER(lang(?x) = \"\") }");
+	CHECK(contains(sql, "'@en'"));
+	CHECK(contains(sql, "'@fr'"));
+	// ...and the empty tag is never folded in as the answer.
+	CHECK(contains(sql, "SUBSTR("));
 }
 
 TEST_CASE("LANG: disagreeing rr:language candidate arms are resolved per arm by pushdown", "[sparql2sql]") {
@@ -160,15 +174,16 @@ TEST_CASE("LANG: an rr:language arm meeting an untagged arm must not fold to the
 	// lang, so meet() degrades BOTH to "" - indistinguishable, by field value
 	// alone, from ex:plain's "no rr:language anywhere" case.
 	//
-	// Bug reproduced here: the LANG() guard only fires when the merged
-	// datatypeIri still reads rdf:langString, so this mixed case slips past it
-	// and folds lang(?x) to '' unconditionally. That silently discards the
-	// "en" tag on every row from the <#Measure> arm: FILTER(lang(?x) = "en")
-	// always evaluates false (the row that really is @en never matches), which
-	// is exactly the reported "@en tags are silently dropped" bug. The BIND
-	// makes this pushdown-proof, mirroring the ex:desc LANG throw test above.
-	const std::string q = "SELECT ?x WHERE { ?m ex:mixedtag ?d . BIND(?d AS ?x) ";
-	CHECK_THROWS_AS(translate(q + "FILTER(lang(?x) = \"en\") }"), TranslationError);
+	// The original bug: folding lang(?x) to '' unconditionally here silently
+	// discarded the "en" tag on every row from the <#Measure> arm, so
+	// FILTER(lang(?x) = "en") never matched the row that really is @en.
+	// TermInfo::maybeLangTagged was added to turn that into a refusal; the tag
+	// column now answers it properly instead, projecting '@en' for the tagged arm
+	// and 'L' for the untagged one. The BIND makes this pushdown-proof.
+	const std::string sql = translate("SELECT ?x WHERE { ?m ex:mixedtag ?d . BIND(?d AS ?x) "
+	                                  "FILTER(lang(?x) = \"en\") }");
+	CHECK(contains(sql, "'@en'"));
+	CHECK(contains(sql, "'L'"));
 }
 
 TEST_CASE("DATATYPE: a declared rr:datatype folds to that IRI", "[sparql2sql]") {
@@ -183,12 +198,15 @@ TEST_CASE("DATATYPE: an rr:language literal folds to rdf:langString", "[sparql2s
 	               "'http://www.w3.org/1999/02/22-rdf-syntax-ns#langString'"));
 }
 
-TEST_CASE("DATATYPE: a literal with no declared datatype and no catalog still throws", "[sparql2sql]") {
-	// Guessing xsd:string here would contradict R2RML's own natural mapping,
-	// which derives a datatype from the column's SQL type. This is the case
-	// that keeps a meaningful negative alive after the feature lands.
-	CHECK_THROWS_AS(translate("SELECT ?p WHERE { ?m ex:plain ?p . FILTER(datatype(?p) = xsd:string) }"),
-	                TranslationError);
+TEST_CASE("DATATYPE: a literal with no declared datatype and no catalog yields a type error", "[sparql2sql]") {
+	// Guessing xsd:string here would contradict R2RML's own natural mapping, which
+	// derives a datatype from the column's SQL type - so DATATYPE() still has no
+	// answer. What changed is how it says so: the "L" tag ("the mapping cannot
+	// determine this datatype") decodes to SQL NULL, which a FILTER drops and a
+	// BIND leaves unbound - SPARQL's own treat-an-error-as-unbound behaviour -
+	// rather than refusing to translate the whole query.
+	const std::string sql = translate("SELECT ?p WHERE { ?m ex:plain ?p . FILTER(datatype(?p) = xsd:string) }");
+	CHECK(contains(sql, "ELSE NULL END"));
 }
 
 TEST_CASE("DATATYPE: a TypeCatalog supplies the Section 10.2 natural-mapping datatype", "[sparql2sql]") {
@@ -199,9 +217,10 @@ TEST_CASE("DATATYPE: a TypeCatalog supplies the Section 10.2 natural-mapping dat
 	catalog.columnTypes["MEASURES"]["AMOUNT"] = "INTEGER";
 	CHECK(contains(translate("SELECT ?r WHERE { ?m ex:rawamount ?r . FILTER(datatype(?r) = xsd:integer) }", &catalog),
 	               "'http://www.w3.org/2001/XMLSchema#integer'"));
-	// ...and without one it still refuses.
-	CHECK_THROWS_AS(translate("SELECT ?r WHERE { ?m ex:rawamount ?r . FILTER(datatype(?r) = xsd:integer) }"),
-	                TranslationError);
+	// ...and without one it still has no datatype to name, now spelled as the
+	// type error SQL NULL rather than a refusal to translate.
+	CHECK(contains(translate("SELECT ?r WHERE { ?m ex:rawamount ?r . FILTER(datatype(?r) = xsd:integer) }"),
+	               "ELSE NULL END"));
 }
 
 // --- langMatches ---
@@ -295,9 +314,14 @@ TEST_CASE("STRDT: a constant datatype IRI translates as a lexical pass-through",
 	CHECK(contains(sql, "50"));
 }
 
-TEST_CASE("STRDT: a non-constant datatype argument throws", "[sparql2sql]") {
-	CHECK_THROWS_AS(translate("SELECT ?m WHERE { ?m ex:plain ?p . ?m ex:homepage ?h . FILTER(STRDT(?p, ?h) = \"x\") }"),
-	                TranslationError);
+TEST_CASE("STRDT: a non-constant datatype argument builds the tag per row", "[sparql2sql]") {
+	// Previously refused: the constructed term's dimension had to be a
+	// translation-time constant. STRDT now *constructs* a tag, so a per-row
+	// datatype IRI is simply concatenated onto the "D" prefix.
+	const std::string sql =
+	    translate("SELECT ?m WHERE { ?m ex:plain ?p . ?m ex:homepage ?h . FILTER(STRDT(?p, ?h) = \"x\") }");
+	CHECK(contains(sql, "'D'"));
+	CHECK(contains(sql, "\"HOMEPAGE\""));
 }
 
 TEST_CASE("STRLANG: a constant tag types the result so LANG() folds to it", "[sparql2sql]") {
@@ -306,7 +330,8 @@ TEST_CASE("STRLANG: a constant tag types the result so LANG() folds to it", "[sp
 	CHECK(contains(sql, "'fr'"));
 }
 
-TEST_CASE("STRLANG: a non-constant language argument throws", "[sparql2sql]") {
-	CHECK_THROWS_AS(translate("SELECT ?m WHERE { ?m ex:plain ?p . ?m ex:title ?t . FILTER(STRLANG(?p, ?t) = \"x\") }"),
-	                TranslationError);
+TEST_CASE("STRLANG: a non-constant language argument builds the tag per row", "[sparql2sql]") {
+	const std::string sql =
+	    translate("SELECT ?m WHERE { ?m ex:plain ?p . ?m ex:title ?t . FILTER(STRLANG(?p, ?t) = \"x\") }");
+	CHECK(contains(sql, "'@'"));
 }

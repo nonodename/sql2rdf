@@ -22,6 +22,7 @@
 #include "sparql2sql/LogicalTableSource.h"
 #include "sparql2sql/PropertyPathTranslator.h"
 #include "sparql2sql/SqlDialect.h"
+#include "sparql2sql/TagSql.h"
 #include "sparql2sql/TemplateUtil.h"
 #include "sparql2sql/TermMapSql.h"
 #include "sparql2sql/ir/RelNode.h"
@@ -220,6 +221,7 @@ void fillColumnFromResolved(ColumnInfo &col, const Resolved &r, const SqlDialect
 	}
 	col.nonNull = true;
 	col.term = r.term;
+	col.tagExpr = tagLiteral(r.term, dialect);
 }
 
 // One arm of the term universe: a single-source SpjRelation projecting one
@@ -277,6 +279,7 @@ void addConstantTermArm(std::vector<RelNodePtr> &arms, const std::string &value,
 		col.nonNull = true;
 		// This arm only ever carries an rr:class IRI (see the caller).
 		col.term.kind = RdfTermKind::Iri;
+		col.tagExpr = tagLiteral(col.term, dialect);
 		raw.schema().push_back(col);
 	}
 	arms.push_back(std::move(node));

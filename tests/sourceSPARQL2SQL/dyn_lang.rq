@@ -1,0 +1,9 @@
+PREFIX ex: <http://example.com/ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# ex:mixedtag is @en in one arm and untagged in the other: the case where folding
+# the empty tag in silently discarded the @en rows.
+SELECT ?y (lang(?y) AS ?lg)
+WHERE {
+  ?m ex:mixedtag ?g .
+  BIND(?g AS ?y)
+}

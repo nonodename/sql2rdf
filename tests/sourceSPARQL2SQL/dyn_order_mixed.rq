@@ -1,0 +1,10 @@
+PREFIX ex: <http://example.com/ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# Section 15.1 orders across term kinds before ordering within one: every blank
+# node sorts before every IRI, which sorts before every literal.
+SELECT ?y
+WHERE {
+  ?m ex:mixed ?x .
+  BIND(?x AS ?y)
+}
+ORDER BY ?y

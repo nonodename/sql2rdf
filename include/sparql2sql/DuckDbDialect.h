@@ -26,6 +26,7 @@ public:
 	                       bool negated) const override;
 	std::string stringAgg(const std::string &expr, const std::string &separatorLiteral, bool distinct) const override;
 	std::string anyValueAgg(const std::string &expr) const override;
+	std::string argMinMaxBy(const std::string &expr, const std::string &orderBy, bool wantMax) const override;
 	std::string combineByName(bool all, const std::vector<std::string> &armSqls) const override;
 };
 

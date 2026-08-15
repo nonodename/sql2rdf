@@ -1,0 +1,9 @@
+PREFIX ex: <http://example.com/ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# MIN over terms whose dimension varies per row: the reported datatype must be
+# the winning row's own, not either arm's picked at translation time.
+SELECT (MIN(?y) AS ?lo) (datatype(MIN(?y)) AS ?lodt)
+WHERE {
+  ?m ex:mixeddt ?v .
+  BIND(?v AS ?y)
+}

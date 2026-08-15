@@ -175,17 +175,23 @@ TEST_CASE("stripTrailingSemicolon: trims one terminator and is idempotent", "[sp
 
 // --- What typing the views unlocks ---
 
-TEST_CASE("DATATYPE over a view-backed literal refuses without the view's types", "[sparql2sql]") {
+TEST_CASE("DATATYPE over a view-backed literal has no answer without the view's types", "[sparql2sql]") {
+	// Still no datatype to name - but now spelled as the type error SQL NULL,
+	// which a FILTER drops, rather than a refusal to translate the query. The
+	// distinction matters in practice: a query that merely *mentions* an untyped
+	// arm no longer fails outright.
 	const std::string query = "SELECT ?l WHERE { ?s ex:label ?l . FILTER(datatype(?l) = xsd:string) }";
-
-	// No catalog at all: the pre-existing behaviour.
-	CHECK_THROWS_AS(translate(query), TranslationError);
+	CHECK(contains(translate(query), "ELSE NULL END"));
 
 	// The reported bug: a catalog read purely from information_schema types the
-	// EMP.ENAME arm but not the view's DNAME arm, and meet() degrades the pair
-	// to unknown - so one view arm poisons a predicate whose other arm is typed.
+	// EMP.ENAME arm but not the view's DNAME arm. Each arm is separately
+	// determined, so filter pushdown resolves them per arm - the typed arm folds
+	// to its constant IRI while the untyped one yields NULL - instead of one view
+	// arm poisoning the whole predicate.
 	TypeCatalog baseOnly = baseTablesOnlyCatalog();
-	CHECK_THROWS_AS(translate(query, &baseOnly), TranslationError);
+	const std::string sql = translate(query, &baseOnly);
+	CHECK(contains(sql, "'http://www.w3.org/2001/XMLSchema#string'"));
+	CHECK(contains(sql, "ELSE NULL END"));
 }
 
 TEST_CASE("DATATYPE over a view-backed literal folds once the view is described", "[sparql2sql]") {
@@ -215,8 +221,8 @@ TEST_CASE("DATATYPE over a computed view column folds to the described type", "[
 	    translate("SELECT ?n WHERE { ?s ex:namelen ?n . FILTER(datatype(?n) = xsd:integer) }", &catalog);
 	CHECK(contains(sql, "'http://www.w3.org/2001/XMLSchema#integer'"));
 
-	// And the same query without the described type still refuses, so the fold
-	// above really is the catalog's doing.
-	CHECK_THROWS_AS(translate("SELECT ?n WHERE { ?s ex:namelen ?n . FILTER(datatype(?n) = xsd:integer) }"),
-	                TranslationError);
+	// And the same query without the described type still has no datatype to name,
+	// so the fold above really is the catalog's doing.
+	CHECK(contains(translate("SELECT ?n WHERE { ?s ex:namelen ?n . FILTER(datatype(?n) = xsd:integer) }"),
+	               "ELSE NULL END"));
 }

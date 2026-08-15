@@ -1,0 +1,9 @@
+PREFIX ex: <http://example.com/ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# ex:mixed is an IRI in one triples map and a literal in the other, and the BIND
+# puts the FILTER out of pushdown's reach - so the kind really is decided per row.
+SELECT ?y (isIRI(?y) AS ?ii) (isLITERAL(?y) AS ?il)
+WHERE {
+  ?m ex:mixed ?x .
+  BIND(?x AS ?y)
+}

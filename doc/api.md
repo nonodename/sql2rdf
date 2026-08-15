@@ -651,77 +651,141 @@ and joins use the VARCHAR-cast fallback.
 - **No `SERVICE`** (federated query): always throws, matching `sql2rdf_sparql`'s own "no
   federated-query execution semantics" stance.
 - **Every SPARQL variable is a plain SQL `VARCHAR`** holding the RDF term's lexical string form
-  (IRI string / literal lexical form / blank node label). The *value* representation is unchanged,
-  but the translator additionally tracks a **static term dimension** alongside it: for each column
-  it derives, from the R2RML mapping, whether the term is an IRI, a blank node or a literal, and
-  for a literal its datatype IRI and language tag. That comes from `rr:termType`, `rr:datatype` and
-  `rr:language` on the contributing term maps or — when no `rr:datatype` is declared and a
-  `TypeCatalog` is supplied — from R2RML §10.2's natural mapping of the underlying SQL column type.
-  It is combined across everything that can produce one variable (the several candidate term maps
-  of a single triple pattern, a `UNION`'s arms, an `OPTIONAL`'s `COALESCE`d column) by a **meet**:
-  any disagreement degrades to *unknown*, and unknown always means "behave exactly as this
-  translator did before term tracking existed". Nothing is ever guessed. Consequences:
-  - `isIRI()`/`isURI()`/`isBLANK()`/`isLITERAL()`/`lang()`/`datatype()`/`langMatches()` are resolved
-    **at translation time** from the mapping and fold to a SQL constant — NULL-guarded for a
-    variable that may be unbound, so an unbound term yields SQL `NULL`, which a `FILTER` drops and a
-    `BIND` leaves unbound (matching SPARQL's treat-an-error-as-unbound). When the mapping does not
-    determine the answer they still throw `TranslationError` naming the function and why.
-    `datatype()` in particular still throws for a bare `rr:column` literal with no `rr:datatype` and
-    no `TypeCatalog`: the datatype is genuinely not known, and defaulting to `xsd:string` would
-    contradict R2RML's own natural mapping. For a literal sourced from an `rr:sqlQuery` view, the
-    catalog only knows the column if its populator described the view (see
-    `LogicalTableSource.h` above); one such untyped arm is enough to make `datatype()` refuse for a
-    predicate whose other arms are typed, since the arms are combined by a meet. Note that whether a term-kind builtin throws is
-    **optimizer-dependent** in a useful direction: filter pushdown re-renders a predicate against
-    one union arm at a time, where the kind may be known even though the arms' meet is not — so
-    `FILTER(isIRI(?x))` over disagreeing arms folds per arm instead of failing.
-  - `STRDT()`/`STRLANG()` are supported **only with a constant datatype IRI / language tag**, and
-    are then a lexical pass-through that re-tags the expression's static term dimension. They emit
-    no SQL of their own; the value is that a downstream `FILTER`/`ORDER BY` becomes numeric or
-    temporal — the escape hatch for mappings that declare no `rr:datatype`. A per-row
-    datatype/language argument throws. `STRDT()` does not validate the lexical form against the
-    datatype (SPARQL permits an ill-formed literal), and a non-literal first argument is a type
-    error that is not detected.
-  - `IRI()`/`URI()`/`BNODE()` still throw: they mint *new* terms, which needs term construction, not
-    term tracking.
-  - `sameTerm()` is still string equality, but tightened: two terms of statically different kinds
-    (or statically different declared datatypes/languages) compare `FALSE` without touching data.
+  (IRI string / literal lexical form / blank node label). That representation is unchanged, and it
+  is still all most queries carry. Alongside it the translator tracks the term's **dimension** — is
+  it an IRI, a blank node or a literal, and for a literal what datatype IRI and language tag —
+  derived from `rr:termType`, `rr:datatype` and `rr:language` on the contributing term maps, or,
+  when no `rr:datatype` is declared and a `TypeCatalog` is supplied, from R2RML §10.2's natural
+  mapping of the underlying SQL column type.
+
+  The dimension is resolved **statically wherever the mapping determines it**, and folded into a SQL
+  constant — so a query over a well-typed mapping generates exactly the SQL it generated before any
+  of this machinery existed. Where the mapping does *not* determine it — the several candidate term
+  maps of one triple pattern disagree, a `UNION` mixes arms, an `OPTIONAL`'s `COALESCE`d column
+  could come from either side — the dimension is instead carried **into the generated SQL** as a
+  companion `VARCHAR` column and evaluated per row.
+
+  That companion column is named `d_<var>` beside the value's `v_<var>`, and holds a single
+  discriminated tag:
+
+  | Tag | Meaning |
+  |---|---|
+  | `I` | an IRI |
+  | `B` | a blank node |
+  | `L` | a literal whose datatype the mapping cannot determine |
+  | `D<iri>` | a literal with datatype `<iri>` |
+  | `@<tag>` | a language-tagged literal (datatype is implicitly `rdf:langString`) |
+  | `NULL` | unbound |
+
+  Two properties are load-bearing. First, the tag column is SQL `NULL` **exactly** when its value
+  column is, which is what lets an `OPTIONAL` join's paired `COALESCE` take value and tag from the
+  same side and lets a schema-extending union's `NULL` padding agree between the two. Second, `L` is
+  a *definite* fact ("the mapping does not pin this datatype down"), not an error state, and every
+  consumer treats it as "degrade to the untyped behaviour" — so `FILTER(?price > 10)` over a bare
+  `rr:column` with no `rr:datatype` keeps working exactly as it always has.
+
+  Tags are **materialised only on demand**: a variable gets one only when some construct inspects
+  its dimension *and* the static answer is insufficient. Demand is computed in two passes — join
+  keys before optimization (a merged inner join fixes its key comparison text there), expressions
+  after it, so filter pushdown gets first refusal. That second ordering matters in practice: pushdown
+  re-renders a predicate against one union arm at a time, where the dimension is often statically
+  known even though the arms' meet is not, so `FILTER(isIRI(?x))` over disagreeing arms still folds
+  per arm and materialises nothing at all. Consequences:
+  - `isIRI()`/`isURI()`/`isBLANK()`/`isLITERAL()`/`lang()`/`datatype()` fold to a SQL constant when
+    the mapping determines the dimension — NULL-guarded for a variable that may be unbound, so an
+    unbound term yields SQL `NULL`, which a `FILTER` drops and a `BIND` leaves unbound (matching
+    SPARQL's treat-an-error-as-unbound). Otherwise they test the runtime tag. They no longer throw
+    for a dimension the mapping cannot decide.
+  - `datatype()` over a literal whose datatype is genuinely unknown (a bare `rr:column` with no
+    `rr:datatype` and no `TypeCatalog`, or a literal from an `rr:sqlQuery` view the catalog's
+    populator did not describe) has no IRI to name, and yields SQL `NULL` — a type error, which a
+    `FILTER` drops and a `BIND` leaves unbound. Defaulting to `xsd:string` would contradict R2RML's
+    own natural mapping. Note this is per *row*: a predicate with one typed arm and one untyped arm
+    reports the datatype for the typed arm's rows and an error for the other's, rather than refusing
+    the whole query.
+  - `lang()` over a literal returns `''` when there is genuinely no language tag, and the row's own
+    tag when there is. A predicate that is `rr:language "en"` in one arm and untagged in another
+    reports `en` and `''` respectively — the case that used to be indistinguishable from "no
+    `rr:language` anywhere" and had to be refused.
+  - `STRDT()`/`STRLANG()` are lexical pass-throughs that *construct* a dimension, so the datatype IRI
+    or language tag may now be a **per-row value** rather than only a constant. `STRDT()` does not
+    validate the lexical form against the datatype (SPARQL permits an ill-formed literal), and a
+    non-literal first argument is a type error that is not detected.
+  - `IRI()`/`URI()` are supported: the lexical form of an IRI term *is* its IRI string, so they are
+    pass-throughs whose whole effect is the tag. No relative-IRI resolution against a base is
+    performed. `BNODE()` is supported and mints a label per solution (deterministically from its
+    argument when given one, so equal arguments give the same blank node, as the spec requires).
+  - `sameTerm()` is RDF term identity: same lexical form **and** same dimension. Two terms of
+    statically different kinds (or different declared datatypes/languages) compare `FALSE` without
+    touching data; where the mapping proves the dimensions agree it stays plain string equality with
+    no change to the SQL; otherwise the tags are compared too. This fixes a real false positive —
+    string equality alone matches an IRI against a literal whose text happens to equal it, and
+    `"9"^^xsd:integer` against `"9"^^xsd:string`.
   - Comparisons drop their string-fallback `CASE WHEN` when both operands' datatypes are statically
     known and compatible: both numeric compare as `DOUBLE`, both `xsd:date`/`xsd:dateTime` as
     `DATE`/`TIMESTAMP` (which also fixes lexicographic comparison of non-canonical or offset-bearing
-    dateTimes), both `xsd:string` as bare `VARCHAR`. Additionally, `=`/`<>` between two statically
-    *different term kinds* folds to a constant, since no IRI is ever equal to a literal; `<`/`>` are
-    deliberately not folded, because a cross-kind ordering comparison is a genuine type error rather
-    than a false one. Every typed branch keeps `TRY_CAST`, so a value contradicting its declared
-    datatype yields `NULL` (row dropped) rather than a runtime error. When either side is unknown,
-    the `TRY_CAST(... AS DOUBLE)` + `CASE WHEN` fallback below is used exactly as before, so
-    `FILTER(?name < "M")` still works.
+    dateTimes), both `xsd:string` as bare `VARCHAR`. `=`/`<>` between two statically *different term
+    kinds* folds to a constant, since no IRI is ever equal to a literal.
+
+    When the dimensions are not statically known but both operands carry a tag, the comparison
+    dispatches on both operands' **value spaces** per row (numeric / `xsd:string` / `xsd:boolean` /
+    `date`-`dateTime` / `rdf:langString` / IRI / blank node). Within one space the comparison is by
+    value, so `"1"^^xsd:integer = "1.0"^^xsd:decimal` is true. Across two known spaces, `=`/`<>` is a
+    definite `FALSE`/`TRUE` by RDF term inequality, while `<`/`>`/`<=`/`>=` is a **type error**
+    (SQL `NULL`, so the row is dropped) — §17.3's operator table defines the ordering comparisons
+    only within the numeric, `xsd:string`, `xsd:boolean` and `date`/`dateTime` spaces, so two IRIs or
+    two language-tagged literals are an error for those operators too. If either operand's datatype
+    is undeterminable (`L`), the whole thing degrades to the untyped
+    `TRY_CAST(... AS DOUBLE)` + `CASE WHEN` fallback exactly as before, so `FILTER(?name < "M")`
+    still works. Every typed branch keeps `TRY_CAST`, so a value contradicting its declared datatype
+    yields `NULL` (row dropped) rather than a runtime error.
+  - An equi-**join** on a shared variable is RDF term equality, so where the two sides' dimensions
+    are statically known *and different*, the join additionally compares them — two rows with the
+    same lexical form but different datatypes do not join. Where they are statically equal the
+    conjunct is trivially true and is not emitted, so an ordinary single-mapping join is byte-for-byte
+    unchanged. Where either side's dimension is undeterminable there is nothing to compare and the
+    join stays lexical-only.
   - Arithmetic over two statically integral operands (`xsd:integer` and its narrower aliases) stays
     integral via `TRY_CAST(... AS BIGINT)`, so `?a + 1` renders `"10"` rather than `"10.0"`. The same
-    applies to `SUM()`. Division, and any operand of unknown or non-integral type, still goes
-    through `DOUBLE`.
-  - `ORDER BY` and `MIN()`/`MAX()` sort and aggregate **in the key's static type** when it is known
-    numeric or temporal, and lexicographically otherwise (the previous behaviour). Three caveats: a
-    value failing the `TRY_CAST` sorts as `NULL` (last, for `ASC`) rather than raising; a typed
-    `MIN()`/`MAX()` returns the SQL engine's canonical rendering of the value, so `MIN()` over
-    `xsd:integer` values `"007"` and `"42"` returns `"7"`, not `"007"`; and an `ORDER BY` key that
-    exists only as a SELECT-list alias (e.g. `ORDER BY ?cnt` over `(COUNT(?x) AS ?cnt)`) is typed
-    from the expression that defines it — previously it was emitted bare and sorted as text.
+    applies to `SUM()`, and to `ABS()`/`CEIL()`/`FLOOR()`/`ROUND()`. Division, and any operand of
+    unknown or non-integral type, still goes through `DOUBLE`; integrality known only at run time is
+    not exploited, so such an expression renders as a double.
+  - `ORDER BY` sorts **in the key's static type** when it is known numeric or temporal, and
+    lexicographically otherwise. When the key's dimension varies per row the single key expands into
+    SPARQL §15.1's own layered order: term kind first (unbound < blank node < IRI < literal), then
+    value space so comparable literals sort together, then the value read as each orderable type,
+    then the raw lexical form. Three caveats: a value failing the `TRY_CAST` sorts as `NULL` (last,
+    for `ASC`) rather than raising; a typed `MIN()`/`MAX()` returns the SQL engine's canonical
+    rendering of the value, so `MIN()` over `xsd:integer` values `"007"` and `"42"` returns `"7"`, not
+    `"007"`; and an `ORDER BY` key that exists only as a SELECT-list alias (e.g. `ORDER BY ?cnt` over
+    `(COUNT(?x) AS ?cnt)`) is typed from the expression that defines it, which reaches only the
+    single-key path.
+  - A bare `GROUP BY ?x` partitions by RDF *term*, so it includes `?x`'s tag as a second grouping key
+    when the dimension is not statically determined — grouping on the lexical form alone would merge
+    `"9"^^xsd:integer` and `"9"^^xsd:string` into one group.
+  - `DISTINCT`/`REDUCED` include a projected variable's tag in the dedup key when its dimension is
+    not statically determined, because two terms with the same lexical form and different dimensions
+    are two different solutions. Those queries therefore also expose the `d_<var>` column in their
+    result set — the only case where a top-level query's output columns are not exactly the variables
+    it projected.
+  - `MIN()`/`MAX()` over an argument whose dimension varies per row still order **lexicographically**
+    (§15.1's full cross-kind ordering is not used for these), but the datatype they report is the
+    winning row's own: the tag is aggregated with `arg_min`/`arg_max` over the same key as the value,
+    never by an independent `MIN()` that could pick a different row.
   - Where the SQL this translator emits is lossier than SPARQL's abstract semantics, the tracked
     datatype follows the **SQL**, not the spec: `SECONDS()` is reported `xsd:integer` (not
     `xsd:decimal`) because `EXTRACT(SECOND ...)` yields a whole number, and integer division is
     reported `xsd:double` (not `xsd:decimal`). Otherwise `datatype()` would name a datatype whose
     canonical lexical form is not the text actually in the column.
-  - Two gaps worth knowing. A `{ SELECT ... }` subquery's columns carry their annotations through,
-    but a variable bound only through a computed expression the inference cannot analyse is
-    unknown. And an unconstrained pattern like `?s ?p ?o` unions one arm per (triples map ×
-    predicate-object map), which genuinely disagree — so the annotation pays off where a bound
-    predicate prunes the union, not on wildcard patterns.
-  - The equi-**join** key optimization is unchanged: with a `TypeCatalog`, a join between two pure
-    base columns — or between two same-invertible-template terms — of comparable declared type is
-    compared on the native (uncast) columns (see the `translateQuery` `catalog` parameter above).
-    This changes only the join condition, not the VARCHAR representation of any projected
-    variable.
+  - Two places a per-row tag cannot be reconstructed, and are therefore emitted eagerly by their
+    producer instead: a `VALUES` column whose cells disagree, and a `{ SELECT ... }` subquery
+    projecting a variable its own arms disagree about. Both build their SQL during folding and are
+    never re-rendered.
+  - Two remaining refusals, both narrow. A `+`/`*` transitive-closure path whose step relation's
+    endpoint term maps disagree cannot carry a tag: threading one through the recursive CTE would
+    change what its terminating `UNION` deduplicates on, so a query asking about such a variable's
+    dimension throws with a message saying so. And a variable bound only through a computed
+    expression whose dimension the inference cannot analyse has no tag to offer either.
 - **Deferred builtin functions** (throw `TranslationError`): the timezone accessors
   `TIMEZONE()`/`TZ()`; `SHA384()`/`SHA512()` (DuckDB has no built-in scalar function for either);
   any non-builtin (IRI-named) function call except the twelve XSD constructor casts described
@@ -729,7 +793,9 @@ and joins use the VARCHAR-cast fallback.
   the UTC offset is present in the literal's lexical form and could in principle be recovered, but
   only by lexically parsing the `Z`/`±hh:mm` suffix, since `TRY_CAST(... AS TIMESTAMP)` discards it.
   That parse — plus `TIMEZONE()`'s `xsd:dayTimeDuration` return type, which has no place in the
-  current term model — is deliberately not implemented.
+  current term model — is deliberately not implemented. Note this is now the *only* permanently
+  deferred term-related builtin: `IRI()`/`URI()`/`BNODE()` are supported, and the term-kind
+  builtins no longer refuse a dimension the mapping cannot decide.
   `NOW()`/`RAND()`/`UUID()`/`STRUUID()` **are** implemented: `NOW()` is stamped once per translation
   into a fixed `xsd:dateTime` string literal (SPARQL 1.1 §17.4.1.7's same-value-per-query
   requirement) rather than emitted as a per-row `current_timestamp`; `RAND()`/`UUID()`/`STRUUID()`

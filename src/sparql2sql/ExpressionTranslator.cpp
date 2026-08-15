@@ -8,6 +8,8 @@
 #include "sparql2sql/ExprAnalysis.h"
 #include "sparql2sql/PatternFolder.h"
 #include "sparql2sql/SqlDialect.h"
+#include "sparql2sql/TagDemand.h"
+#include "sparql2sql/TagSql.h"
 #include "sparql2sql/TermInference.h"
 #include "sparql2sql/TermInfo.h"
 #include "sparql2sql/TranslationError.h"
@@ -38,6 +40,35 @@ using sparql::ast::VarExpr;
 
 std::string tr(const Expression &e, const TranslatedPattern &scope, const std::string &alias, TranslationContext &ctx) {
 	return translateExpression(e, scope, alias, ctx);
+}
+
+TermSql trTerm(const Expression &e, const TranslatedPattern &scope, const std::string &alias, TranslationContext &ctx) {
+	return translateTerm(e, scope, alias, ctx);
+}
+
+// The tag of a term-kind builtin's single argument, or a TranslationError
+// explaining that neither the mapping nor a materialised tag column can answer.
+// The error is the same refusal this translator has always made for these
+// builtins; what changed is that it is now the last resort rather than the only
+// outcome.
+std::string requireTag(const TermSql &arg, const char *what) {
+	if (arg.tag.empty()) {
+		throw TranslationError(std::string("unsupported: ") + what +
+		                       " - the RDF term dimension of its argument is neither determined by the R2RML mapping "
+		                       "nor available as a runtime tag (the argument is a computed expression whose dimension "
+		                       "this translator cannot derive).");
+	}
+	return arg.tag;
+}
+
+// Pair a constant tag with a value that may evaluate to SQL NULL.
+//
+// Required by TermSql's invariant: a computed value goes through TRY_CAST in
+// most of this file, so it can be NULL even where the *type* it would have had
+// is statically certain. Leaving a non-NULL tag beside a NULL value would make
+// the term read as "bound, and of this type" when it is unbound.
+std::string nullGuardedTag(const std::string &valueSql, const std::string &tagSql) {
+	return "(CASE WHEN " + valueSql + " IS NULL THEN NULL ELSE " + tagSql + " END)";
 }
 
 // Whether an expression can evaluate to SQL NULL, i.e. can be unbound. Only a
@@ -71,18 +102,6 @@ std::string foldedConstantTwoOperand(bool value, const std::string &leftSql, boo
 	return "(CASE WHEN " + guard + " THEN NULL ELSE " + dialect.booleanLiteral(value) + " END)";
 }
 
-// The fallback comparison, used whenever the operands' datatypes are not both
-// statically known: compare as DOUBLE when both TRY_CAST successfully, else as
-// plain VARCHAR. This is what lets `FILTER(?price > 10)` (numeric) and
-// `FILTER(?name < "M")` (lexicographic) both work with no type information.
-std::string numericAwareComparison(const std::string &left, const std::string &right, const std::string &op,
-                                   const SqlDialect &dialect) {
-	std::string leftNum = dialect.tryCastToDouble(left);
-	std::string rightNum = dialect.tryCastToDouble(right);
-	return "(CASE WHEN " + leftNum + " IS NOT NULL AND " + rightNum + " IS NOT NULL THEN (" + leftNum + " " + op + " " +
-	       rightNum + ") ELSE (" + left + " " + op + " " + right + ") END)";
-}
-
 // A comparison specialised by whatever the R2RML mapping statically proves
 // about the two operands. First match wins:
 //
@@ -98,14 +117,22 @@ std::string numericAwareComparison(const std::string &left, const std::string &r
 //   4. Both stringy and identically typed -> bare VARCHAR comparison, dropping
 //      both the cast and the wrapper. This is the very common
 //      `FILTER(?name = "SMITH")`.
-//   5. Otherwise -> the untyped fallback, exactly as before.
+//   5. Otherwise, if both operands carry a runtime tag -> dispatch on the two
+//      tags per row (TagSql.h's dynamicEquality/dynamicOrdering), which is the
+//      only branch that can answer correctly when the operands' dimensions vary
+//      from row to row. Its own last resort for a term whose datatype the
+//      mapping cannot determine is (6), so nothing regresses.
+//   6. Otherwise -> the untyped fallback, exactly as before.
 //
 // Every typed branch keeps TRY_CAST rather than CAST: a declared rr:datatype
 // can lie about a dirty column, and a hard cast error would kill the whole
 // query where TRY_CAST yields NULL and merely drops the row.
-std::string comparison(const std::string &left, const TermInfo &leftInfo, const std::string &right,
-                       const TermInfo &rightInfo, const std::string &op, const SqlDialect &dialect, bool leftNullable,
-                       bool rightNullable) {
+std::string comparison(const TermSql &lhs, const TermSql &rhs, const std::string &op, const SqlDialect &dialect,
+                       bool leftNullable, bool rightNullable) {
+	const std::string &left = lhs.value;
+	const std::string &right = rhs.value;
+	const TermInfo &leftInfo = lhs.staticInfo;
+	const TermInfo &rightInfo = rhs.staticInfo;
 	const bool equality = (op == "=" || op == "<>");
 	if (equality && leftInfo.kindKnown() && rightInfo.kindKnown() && leftInfo.kind != rightInfo.kind) {
 		return foldedConstantTwoOperand(op == "<>", left, leftNullable, right, rightNullable, dialect);
@@ -123,7 +150,12 @@ std::string comparison(const std::string &left, const TermInfo &leftInfo, const 
 	    leftInfo.lang == rightInfo.lang) {
 		return "(" + left + " " + op + " " + right + ")";
 	}
-	return numericAwareComparison(left, right, op, dialect);
+	std::string fallback = untypedComparison(left, right, op, dialect);
+	if (!lhs.tag.empty() && !rhs.tag.empty()) {
+		return equality ? dynamicEquality(left, lhs.tag, right, rhs.tag, op == "<>", fallback, dialect)
+		                : dynamicOrdering(left, lhs.tag, right, rhs.tag, op, fallback, dialect);
+	}
+	return fallback;
 }
 
 // Arithmetic, staying integral when the mapping proves both operands are.
@@ -148,10 +180,12 @@ std::string arithmetic(const std::string &left, const TermInfo &leftInfo, const 
 std::string translateBinary(const BinaryExpr &b, const TranslatedPattern &scope, const std::string &alias,
                             TranslationContext &ctx) {
 	const SqlDialect &dialect = ctx.dialect();
-	std::string l = tr(*b.left, scope, alias, ctx);
-	std::string r = tr(*b.right, scope, alias, ctx);
-	const TermInfo li = inferExprTermInfo(*b.left, scope);
-	const TermInfo ri = inferExprTermInfo(*b.right, scope);
+	const TermSql lhs = trTerm(*b.left, scope, alias, ctx);
+	const TermSql rhs = trTerm(*b.right, scope, alias, ctx);
+	const std::string &l = lhs.value;
+	const std::string &r = rhs.value;
+	const TermInfo &li = lhs.staticInfo;
+	const TermInfo &ri = rhs.staticInfo;
 	const bool leftNullable = mayBeUnbound(*b.left, scope);
 	const bool rightNullable = mayBeUnbound(*b.right, scope);
 	switch (b.op) {
@@ -160,17 +194,17 @@ std::string translateBinary(const BinaryExpr &b, const TranslatedPattern &scope,
 	case BinaryOp::And:
 		return "(" + l + " AND " + r + ")";
 	case BinaryOp::Eq:
-		return comparison(l, li, r, ri, "=", dialect, leftNullable, rightNullable);
+		return comparison(lhs, rhs, "=", dialect, leftNullable, rightNullable);
 	case BinaryOp::Ne:
-		return comparison(l, li, r, ri, "<>", dialect, leftNullable, rightNullable);
+		return comparison(lhs, rhs, "<>", dialect, leftNullable, rightNullable);
 	case BinaryOp::Lt:
-		return comparison(l, li, r, ri, "<", dialect, leftNullable, rightNullable);
+		return comparison(lhs, rhs, "<", dialect, leftNullable, rightNullable);
 	case BinaryOp::Gt:
-		return comparison(l, li, r, ri, ">", dialect, leftNullable, rightNullable);
+		return comparison(lhs, rhs, ">", dialect, leftNullable, rightNullable);
 	case BinaryOp::Le:
-		return comparison(l, li, r, ri, "<=", dialect, leftNullable, rightNullable);
+		return comparison(lhs, rhs, "<=", dialect, leftNullable, rightNullable);
 	case BinaryOp::Ge:
-		return comparison(l, li, r, ri, ">=", dialect, leftNullable, rightNullable);
+		return comparison(lhs, rhs, ">=", dialect, leftNullable, rightNullable);
 	case BinaryOp::Add:
 		return arithmetic(l, li, r, ri, "+", dialect);
 	case BinaryOp::Sub:
@@ -236,11 +270,15 @@ std::string translateExists(const ExistsExpr &ex, const TranslatedPattern &scope
 	// row and the DISTINCT was load-bearing - stripping it there cost ~2.2x on a
 	// 10M-row body. Do not reintroduce an OR'd correlation without revisiting
 	// this flag.
+	// The EXISTS body is its own algebra tree with its own FILTERs, so it gets
+	// its own tag-demand passes, in the same order as the top level's.
+	markJoinKeyTagNeeds(*nestedNode, ctx);
 	OptimizerOptions opts;
 	opts.topLevelDistinct = true;
 	opts.catalog = ctx.catalog();
 	opts.ctx = &ctx;
 	nestedNode = optimize(std::move(nestedNode), opts);
+	markExpressionTagNeeds(*nestedNode, nullptr, ctx);
 	TranslatedPattern nested = renderRelation(*nestedNode, ctx);
 	std::set<std::string> shared = setIntersect(scope.allVars(), nested.allVars());
 	std::string innerAlias = ctx.nextAlias();
@@ -428,13 +466,25 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 		return dialect.regexMatch(text, pattern, flags, /*negated=*/false);
 	}
 	case BuiltinFunction::Abs:
-		return "CAST(ABS(" + dialect.tryCastToDouble(argSql(0)) + ") AS VARCHAR)";
 	case BuiltinFunction::Ceil:
-		return "CAST(CEIL(" + dialect.tryCastToDouble(argSql(0)) + ") AS VARCHAR)";
 	case BuiltinFunction::Floor:
-		return "CAST(FLOOR(" + dialect.tryCastToDouble(argSql(0)) + ") AS VARCHAR)";
-	case BuiltinFunction::Round:
-		return "CAST(ROUND(" + dialect.tryCastToDouble(argSql(0)) + ") AS VARCHAR)";
+	case BuiltinFunction::Round: {
+		// Integral in, integral out, matching arithmetic() and SUM(). Without
+		// this, ABS(?n) over an xsd:integer column renders "10.0" while
+		// inferExprTermInfo reports xsd:integer for it - a datatype whose
+		// canonical lexical form is not the text in the column, which is the one
+		// thing the term dimension must never claim. ABS is the only one that
+		// changes anything numerically; CEIL/FLOOR/ROUND of an integer are the
+		// integer, so for them this only fixes the rendering.
+		const char *fn = call.fn == BuiltinFunction::Abs     ? "ABS("
+		                 : call.fn == BuiltinFunction::Ceil  ? "CEIL("
+		                 : call.fn == BuiltinFunction::Floor ? "FLOOR("
+		                                                     : "ROUND(";
+		if (inferExprTermInfo(*args.at(0), scope).isIntegral()) {
+			return "CAST(" + std::string(fn) + dialect.tryCastToBigInt(argSql(0)) + ") AS VARCHAR)";
+		}
+		return "CAST(" + std::string(fn) + dialect.tryCastToDouble(argSql(0)) + ") AS VARCHAR)";
+	}
 	case BuiltinFunction::Coalesce: {
 		std::string sql = "COALESCE(";
 		for (std::size_t i = 0; i < args.size(); ++i) {
@@ -449,26 +499,56 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 	case BuiltinFunction::If:
 		return "(CASE WHEN " + argSql(0) + " THEN " + argSql(1) + " ELSE " + argSql(2) + " END)";
 	case BuiltinFunction::SameTerm: {
-		// String equality is the right identity for two terms of the same kind
-		// under this representation. What it wrongly accepts is a cross-kind or
-		// cross-datatype match ("1"^^xsd:integer vs "1"^^xsd:string, or an IRI
-		// whose text equals a literal's); where the mapping proves that, fold to
-		// FALSE instead of comparing.
-		const TermInfo a = inferExprTermInfo(*args.at(0), scope);
-		const TermInfo b = inferExprTermInfo(*args.at(1), scope);
+		// RDF term identity: same lexical form AND same dimension. String equality
+		// alone wrongly accepts a cross-kind or cross-datatype match
+		// ("1"^^xsd:integer vs "1"^^xsd:string, or an IRI whose text equals a
+		// literal's). Where the mapping proves the dimensions differ, fold to
+		// FALSE; where it proves they agree, string equality is exactly right and
+		// the SQL is unchanged; otherwise compare the runtime tags too.
+		const TermSql lhs = trTerm(*args.at(0), scope, alias, ctx);
+		const TermSql rhs = trTerm(*args.at(1), scope, alias, ctx);
+		const TermInfo &a = lhs.staticInfo;
+		const TermInfo &b = rhs.staticInfo;
 		const bool kindsDiffer = a.kindKnown() && b.kindKnown() && a.kind != b.kind;
 		const bool datatypesDiffer = a.isKnownLiteral() && b.isKnownLiteral() && !a.datatypeIri.empty() &&
 		                             !b.datatypeIri.empty() && a.datatypeIri != b.datatypeIri;
 		const bool langsDiffer =
 		    a.isKnownLiteral() && b.isKnownLiteral() && !a.lang.empty() && !b.lang.empty() && a.lang != b.lang;
 		if (kindsDiffer || datatypesDiffer || langsDiffer) {
-			return foldedConstantTwoOperand(false, argSql(0), mayBeUnbound(*args[0], scope), argSql(1),
+			return foldedConstantTwoOperand(false, lhs.value, mayBeUnbound(*args[0], scope), rhs.value,
 			                                mayBeUnbound(*args[1], scope), dialect);
 		}
-		return "(" + argSql(0) + " = " + argSql(1) + ")";
+		const bool dimensionsAgreeStatically =
+		    isFullyDetermined(a) && isFullyDetermined(b) && encodeTag(a) == encodeTag(b);
+		if (!dimensionsAgreeStatically && !lhs.tag.empty() && !rhs.tag.empty()) {
+			return "(" + lhs.value + " = " + rhs.value + " AND " + lhs.tag + " = " + rhs.tag + ")";
+		}
+		return "(" + lhs.value + " = " + rhs.value + ")";
 	}
-	case BuiltinFunction::IsNumeric:
-		return "(" + dialect.tryCastToDouble(argSql(0)) + " IS NOT NULL)";
+	case BuiltinFunction::IsNumeric: {
+		// Two conditions, both required: the term must be a literal in the numeric
+		// value space, and its lexical form must actually parse. The tag settles
+		// the first when it varies per row; without one, the cast test alone is
+		// what this translator has always done.
+		const TermSql arg = trTerm(*args.at(0), scope, alias, ctx);
+		std::string parses = "(" + dialect.tryCastToDouble(arg.value) + " IS NOT NULL)";
+		if (arg.staticInfo.isNumeric()) {
+			return parses;
+		}
+		if (isFullyDetermined(arg.staticInfo) && encodeTag(arg.staticInfo) != kTagLiteralUntyped) {
+			// Known to be an IRI, a blank node, or a literal of a known
+			// non-numeric datatype - none of which is numeric however its lexical
+			// form happens to parse.
+			return foldedConstant(false, arg.value, mayBeUnbound(*args[0], scope), dialect);
+		}
+		if (!arg.tag.empty()) {
+			return "(" + tagIsNumeric(arg.tag, dialect) + " AND " + parses + ")";
+		}
+		// kTagLiteralUntyped with no tag column: the mapping does not say what
+		// this literal's datatype is, so the cast test alone - what this
+		// translator has always emitted - remains the best available answer.
+		return parses;
+	}
 	case BuiltinFunction::Md5:
 		return "md5(" + argSql(0) + ")";
 	case BuiltinFunction::Sha1:
@@ -483,88 +563,85 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 	case BuiltinFunction::IsUri:
 	case BuiltinFunction::IsBlank:
 	case BuiltinFunction::IsLiteral: {
-		const TermInfo info = inferExprTermInfo(*args.at(0), scope);
-		if (!info.kindKnown()) {
-			throw unknownTermKind(call.fn);
-		}
 		RdfTermKind wanted = RdfTermKind::Iri;
 		if (call.fn == BuiltinFunction::IsBlank) {
 			wanted = RdfTermKind::BlankNode;
 		} else if (call.fn == BuiltinFunction::IsLiteral) {
 			wanted = RdfTermKind::Literal;
 		}
-		return foldedConstant(info.kind == wanted, argSql(0), mayBeUnbound(*args[0], scope), dialect);
+		const TermSql arg = trTerm(*args.at(0), scope, alias, ctx);
+		if (arg.staticInfo.kindKnown()) {
+			// The mapping settles it: fold, exactly as before tags existed.
+			return foldedConstant(arg.staticInfo.kind == wanted, arg.value, mayBeUnbound(*args[0], scope), dialect);
+		}
+		// The kind varies from row to row (candidate term maps disagree, or a
+		// UNION mixes arms). Test the runtime tag instead of refusing.
+		return tagIsKind(requireTag(arg, builtinName(call.fn)), wanted, dialect);
 	}
 	case BuiltinFunction::Lang: {
-		const TermInfo info = inferExprTermInfo(*args.at(0), scope);
-		if (!info.kindKnown()) {
-			throw unknownTermKind(call.fn);
+		const TermSql arg = trTerm(*args.at(0), scope, alias, ctx);
+		const TermInfo &info = arg.staticInfo;
+		if (isFullyDetermined(info)) {
+			if (info.kind != RdfTermKind::Literal) {
+				throw TranslationError(
+				    "lang(): the argument is statically an IRI or blank node, which has no language tag");
+			}
+			// A literal with no rr:language at all has the empty tag - which is a
+			// known answer, not an unknown one.
+			return foldedString(info.lang, arg.value, mayBeUnbound(*args[0], scope), dialect);
 		}
-		if (info.kind != RdfTermKind::Literal) {
-			throw TranslationError(
-			    "lang(): the argument is statically an IRI or blank node, which has no language tag");
-		}
-		if (info.maybeLangTagged && info.lang.empty()) {
-			// Known to be language-tagged in at least one contributing term map,
-			// but the specific tag isn't statically known - either because two
-			// arms disagree on rr:language (both tagged, meet() degrades
-			// datatypeIri/lang but maybeLangTagged stays set), or because one arm
-			// is tagged and a sibling arm isn't (datatypeIri/lang both degrade to
-			// "", indistinguishable from "no rr:language anywhere" without this
-			// flag). Folding the empty tag in here would silently answer "" for a
-			// literal that is actually tagged - same rationale as the
-			// datatypeIri.empty() guard below.
-			throw TranslationError(
-			    "unsupported: lang() - the argument is known to be language-tagged, but the specific language is "
-			    "not statically known (its contributing term maps declare different rr:language values)");
-		}
-		// A literal with no rr:language at all has the empty tag - which is a
-		// known answer, not an unknown one.
-		return foldedString(info.lang, argSql(0), mayBeUnbound(*args[0], scope), dialect);
+		return tagLang(requireTag(arg, "lang()"), dialect);
 	}
 	case BuiltinFunction::Datatype: {
-		const TermInfo info = inferExprTermInfo(*args.at(0), scope);
-		if (!info.kindKnown()) {
-			throw unknownTermKind(call.fn);
+		const TermSql arg = trTerm(*args.at(0), scope, alias, ctx);
+		const TermInfo &info = arg.staticInfo;
+		if (isFullyDetermined(info) && !info.datatypeIri.empty()) {
+			if (info.kind != RdfTermKind::Literal) {
+				throw TranslationError(
+				    "datatype(): the argument is statically an IRI or blank node, which has no datatype");
+			}
+			return foldedString(info.datatypeIri, arg.value, mayBeUnbound(*args[0], scope), dialect);
 		}
-		if (info.kind != RdfTermKind::Literal) {
+		if (isFullyDetermined(info) && info.kind != RdfTermKind::Literal) {
 			throw TranslationError(
 			    "datatype(): the argument is statically an IRI or blank node, which has no datatype");
 		}
-		if (info.datatypeIri.empty()) {
-			// Known to be a literal, but the mapping does not pin the datatype
-			// down. Guessing xsd:string would contradict R2RML's own natural
-			// mapping, which derives one from the column's SQL type.
-			throw TranslationError(
-			    "unsupported: datatype() - the argument is known to be a literal, but its datatype is not declared by "
-			    "the mapping (no rr:datatype) and no TypeCatalog was supplied to infer it via R2RML Section 10.2's "
-			    "natural mapping of the column's SQL type");
-		}
-		return foldedString(info.datatypeIri, argSql(0), mayBeUnbound(*args[0], scope), dialect);
+		// Either the datatype varies per row, or it is a literal the mapping does
+		// not type at all (a bare rr:column with no rr:datatype and no
+		// TypeCatalog). tagDatatypeIri answers the first and yields SQL NULL - a
+		// type error, which a FILTER drops and a BIND leaves unbound - for the
+		// second, which is strictly better than refusing to translate the query.
+		return tagDatatypeIri(requireTag(arg, "datatype()"), dialect);
 	}
 	case BuiltinFunction::LangMatches: {
 		const std::string range = literalTextOrThrow(*args.at(1), "langMatches() language range");
 		return langMatchesSql(argSql(0), range, dialect);
 	}
 	case BuiltinFunction::Strdt:
-	case BuiltinFunction::Strlang: {
+	case BuiltinFunction::Strlang:
 		// Pure lexical pass-throughs: the physical representation already *is*
-		// the lexical form, so no SQL changes. The value is that
-		// inferExprTermInfo now reports a known datatype/language for the
-		// expression, which types every downstream FILTER/ORDER BY over it -
-		// the escape hatch for mappings that declare no rr:datatype.
-		if (inferExprTermInfo(call, scope).kindKnown()) {
-			return "(" + argSql(0) + ")";
-		}
-		throw TranslationError(
-		    "unsupported: STRDT()/STRLANG() with a non-constant datatype/language argument - this translator tracks "
-		    "the term dimension statically, so a constructed term's datatype or language must be a constant IRI or "
-		    "string literal, not a per-row value");
-	}
+		// the lexical form, so the value never changes. All the work is in the
+		// tag (see dynamicTagOf), which is what types every downstream
+		// FILTER/ORDER BY over the result - the escape hatch for mappings that
+		// declare no rr:datatype. A non-constant datatype/language argument used
+		// to be rejected here; it now simply produces a computed tag.
+		return "(" + argSql(0) + ")";
 	case BuiltinFunction::IriFn:
 	case BuiltinFunction::UriFn:
-	case BuiltinFunction::Bnode:
-		throw TranslationError("unsupported: RDF term-construction functions (IRI()/URI()/BNODE()) are not supported");
+		// The lexical form of an IRI term IS its IRI string, so this is another
+		// pass-through; only the tag changes (to kTagIri). No relative-IRI
+		// resolution against a base is performed - see doc/api.md.
+		return "(" + argSql(0) + ")";
+	case BuiltinFunction::Bnode: {
+		// A fresh blank node per solution. With an argument, SPARQL requires the
+		// same label for equal argument values within one evaluation, which a
+		// deterministic function of the argument gives directly; without one,
+		// every call must differ, which uuid() gives.
+		if (args.empty()) {
+			return dialect.concat({dialect.stringLiteral("b"), "CAST(uuid() AS VARCHAR)"});
+		}
+		return dialect.concat({dialect.stringLiteral("b"), "md5(" + argSql(0) + ")"});
+	}
 	case BuiltinFunction::EncodeForUri:
 		return dialect.percentEncode(argSql(0));
 	case BuiltinFunction::Year:
@@ -701,7 +778,125 @@ std::string translateAggregate(const AggregateExpr &agg, const TranslatedPattern
 	throw std::logic_error("translateAggregate: unhandled AggregateKind");
 }
 
+// The runtime tag of an expression whose dimension the mapping does NOT settle.
+// Empty when none can be produced, which every caller degrades on.
+//
+// Deliberately short: for all but a handful of constructs the dimension IS
+// statically determined (inferExprTermInfo already knows STR() is xsd:string,
+// STRLEN() xsd:integer, a cast its target IRI, ...), and translateTerm lowers
+// that to a constant without coming here at all. What is left is exactly the
+// constructs whose dimension can genuinely vary per row.
+std::string dynamicTagOf(const Expression &expr, const TranslatedPattern &scope, const std::string &alias,
+                         TranslationContext &ctx) {
+	const SqlDialect &dialect = ctx.dialect();
+	switch (expr.kind()) {
+	case ExprKind::VarRef: {
+		// The one true runtime source. Present only if the tag-demand pass asked
+		// for this variable's tag column to be materialised.
+		const std::string &name = static_cast<const VarExpr &>(expr).var->name;
+		return ctx.needsTag(name) ? (alias + "." + mangleVarTag(name, dialect)) : std::string();
+	}
+	case ExprKind::BuiltInCall: {
+		const auto &call = static_cast<const BuiltInCallExpr &>(expr);
+		switch (call.fn) {
+		case BuiltinFunction::Strdt:
+		case BuiltinFunction::Strlang: {
+			// The whole point of these two: they *construct* a dimension, so a
+			// per-row datatype IRI or language tag is now expressible.
+			if (call.args.size() < 2) {
+				return std::string();
+			}
+			const TermSql dimension = trTerm(*call.args[1], scope, alias, ctx);
+			const char prefix = call.fn == BuiltinFunction::Strdt ? kTagDatatypePrefix : kTagLangPrefix;
+			return dialect.concat({dialect.stringLiteral(std::string(1, prefix)), dimension.value});
+		}
+		case BuiltinFunction::Coalesce: {
+			// The tag has to follow whichever argument COALESCE actually returned.
+			std::string sql = "(CASE";
+			for (const auto &arg : call.args) {
+				const TermSql a = trTerm(*arg, scope, alias, ctx);
+				if (a.tag.empty()) {
+					return std::string();
+				}
+				sql += " WHEN " + a.value + " IS NOT NULL THEN " + a.tag;
+			}
+			return sql + " ELSE NULL END)";
+		}
+		case BuiltinFunction::If: {
+			if (call.args.size() < 3) {
+				return std::string();
+			}
+			const TermSql t = trTerm(*call.args[1], scope, alias, ctx);
+			const TermSql f = trTerm(*call.args[2], scope, alias, ctx);
+			if (t.tag.empty() || f.tag.empty()) {
+				return std::string();
+			}
+			return "(CASE WHEN " + tr(*call.args[0], scope, alias, ctx) + " THEN " + t.tag + " ELSE " + f.tag + " END)";
+		}
+		default:
+			return std::string();
+		}
+	}
+	case ExprKind::Aggregate: {
+		const auto &agg = static_cast<const AggregateExpr &>(expr);
+		// MIN/MAX/SAMPLE return one of their input terms verbatim, so the result's
+		// dimension is that term's - but *which* row won is only known at run
+		// time, so the tag has to be aggregated alongside the value rather than
+		// picked statically. Every other aggregate has a fixed result type that
+		// inferExprTermInfo already reports.
+		if (agg.star || !agg.arg) {
+			return std::string();
+		}
+		if (agg.aggKind != AggregateKind::Min && agg.aggKind != AggregateKind::Max &&
+		    agg.aggKind != AggregateKind::Sample) {
+			return std::string();
+		}
+		const TermSql a = trTerm(*agg.arg, scope, alias, ctx);
+		if (a.tag.empty()) {
+			return std::string();
+		}
+		if (agg.aggKind == AggregateKind::Sample) {
+			return dialect.anyValueAgg(a.tag);
+		}
+		// Ordered by the same key the value aggregate uses (the raw lexical form -
+		// this branch is only reached when the dimension is not statically known,
+		// which is exactly when translateAggregate falls back to a lexicographic
+		// MIN/MAX), so the tag returned is the winning row's own.
+		return dialect.argMinMaxBy(a.tag, a.value, agg.aggKind == AggregateKind::Max);
+	}
+	default:
+		return std::string();
+	}
+}
+
 } // namespace
+
+TermSql translateTerm(const sparql::ast::Expression &expr, const TranslatedPattern &scope,
+                      const std::string &scopeAlias, TranslationContext &ctx) {
+	TermSql out;
+	out.value = translateExpression(expr, scope, scopeAlias, ctx);
+	out.staticInfo = inferExprTermInfo(expr, scope);
+	if (!isFullyDetermined(out.staticInfo)) {
+		out.tag = dynamicTagOf(expr, scope, scopeAlias, ctx);
+		return out;
+	}
+	// The mapping settles the dimension, so the tag is a constant - but it still
+	// has to be NULL wherever the value is, or an unbound term would read as
+	// bound. A materialised tag column already satisfies that; a constant beside
+	// a computed value (or an optional variable) has to be guarded explicitly.
+	const std::string constant = tagLiteral(out.staticInfo, ctx.dialect());
+	if (expr.kind() == ExprKind::VarRef) {
+		const std::string &name = static_cast<const VarExpr &>(expr).var->name;
+		out.tag = ctx.needsTag(name) ? (scopeAlias + "." + mangleVarTag(name, ctx.dialect()))
+		                             : nullGuardedTag(out.value, constant);
+		return out;
+	}
+	// A literal or IRI written out in the query text is never NULL, so it needs
+	// no guard - and skipping it keeps constant folding readable.
+	const bool neverNull = expr.kind() == ExprKind::Literal || expr.kind() == ExprKind::IriRef;
+	out.tag = neverNull ? constant : nullGuardedTag(out.value, constant);
+	return out;
+}
 
 std::string translateExpression(const sparql::ast::Expression &expr, const TranslatedPattern &scope,
                                 const std::string &scopeAlias, TranslationContext &ctx) {

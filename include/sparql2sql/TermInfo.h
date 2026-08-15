@@ -49,6 +49,20 @@ struct TermInfo {
 	/// silently to "" instead of refusing an answer it cannot prove.
 	bool maybeLangTagged = false;
 
+	/// Set by meet() whenever any field actually disagreed, and sticky
+	/// thereafter. Distinguishes "the mapping declares nothing here" from "the
+	/// contributing term maps declare different things", which the three fields
+	/// above cannot: meet({Literal, integer}, {Literal, string}) leaves exactly
+	/// the same kind/datatype/language as a bare rr:column with no rr:datatype.
+	///
+	/// Only the runtime lowering needs the difference, and it needs it badly. The
+	/// first case has no single honest tag - the datatype varies per row, so the
+	/// tag must come from a tag column - whereas the second has one: "L", meaning
+	/// "the mapping genuinely does not determine this datatype". Encoding the
+	/// first as "L" would tell DATATYPE() to answer "no datatype" for a term that
+	/// has a perfectly good one in every row. See isFullyDetermined().
+	bool degraded = false;
+
 	bool kindKnown() const {
 		return kind != RdfTermKind::Unknown;
 	}
@@ -68,6 +82,51 @@ struct TermInfo {
 	/// for which a bare VARCHAR comparison is exactly right.
 	bool isStringy() const;
 };
+
+/// Whether this annotation pins the term's dimension down completely enough to
+/// be lowered to a single runtime tag by encodeTag().
+///
+/// False for an Unknown kind, and for the two Literal shapes that record
+/// *partial* knowledge rather than a definite answer: rdf:langString with no
+/// specific tag (two arms disagreed on rr:language), and no datatype at all but
+/// maybeLangTagged set (a tagged arm met an untagged one). Both of those must
+/// stay dynamic - a tag column decides them per row - whereas a bare literal
+/// with no rr:language anywhere IS fully determined: its tag is kLiteralUntyped,
+/// meaning "the mapping genuinely does not know this datatype", which is a
+/// definite fact about the mapping and not a partial one.
+///
+/// Also false for anything `degraded`, which is what makes this safe to call on
+/// a meet result rather than only on a single term map's own annotation.
+bool isFullyDetermined(const TermInfo &info);
+
+/// Lowering of a fully-determined TermInfo to the single-VARCHAR runtime tag the
+/// generated SQL carries beside a variable's lexical form (see mangleVarTag).
+/// The encoding is discriminated by the first character:
+///
+///     "I"        an IRI
+///     "B"        a blank node
+///     "L"        a literal whose datatype the mapping cannot determine
+///     "D<iri>"   a literal with datatype <iri>
+///     "@<tag>"   a language-tagged literal (datatype is implicitly rdf:langString)
+///
+/// SQL NULL - never produced here - is the sixth case, "unbound".
+///
+/// Returns the empty string when !isFullyDetermined(info): there is no single
+/// constant that would be honest, and the caller must obtain the tag from a
+/// contributing arm's own tag column instead.
+std::string encodeTag(const TermInfo &info);
+
+/// Inverse of encodeTag. An unrecognised or empty tag yields a default
+/// (Unknown) TermInfo. Round-trips every fully-determined annotation.
+TermInfo decodeTag(const std::string &tag);
+
+/// The three single-character tags, named so no consumer spells them inline.
+extern const char *const kTagIri;
+extern const char *const kTagBlankNode;
+extern const char *const kTagLiteralUntyped;
+/// Prefix characters of the two parameterised tags.
+extern const char kTagDatatypePrefix;
+extern const char kTagLangPrefix;
 
 /// Greatest lower bound of two term annotations. Identical infos meet to
 /// themselves; disagreement degrades field by field and never guesses:

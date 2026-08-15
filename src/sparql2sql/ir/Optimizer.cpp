@@ -9,6 +9,8 @@
 #include "sparql2sql/ExprAnalysis.h"
 #include "sparql2sql/ExpressionTranslator.h"
 #include "sparql2sql/SqlDialect.h"
+#include "sparql2sql/TagSql.h"
+#include "sparql2sql/TranslationError.h"
 #include "sparql2sql/TranslatedPattern.h"
 #include "sparql2sql/TypeCatalog.h"
 #include "sparql2sql/ir/NativeKey.h"
@@ -18,6 +20,24 @@
 namespace sparql2sql {
 
 namespace {
+
+// An equi-join on a shared variable is RDF *term* equality, so two terms with
+// the same lexical form but different dimensions - `"1"^^xsd:integer` from one
+// triples map and `"1"^^xsd:string` from another - must not join.
+//
+// Inside a merged SPJ block both sides' tags are ordinary in-scope expressions
+// (a producer's constant, or mergeInner's null-tolerant CASE), so the check
+// costs nothing to add and needs no tag *column*: textually identical tags are
+// trivially equal and contribute no conjunct at all, which is why an ordinary
+// single-mapping self-join is unaffected. An empty tag means the mapping does
+// not determine the dimension here, and there is nothing better to do than
+// today's lexical-only comparison.
+std::string termDimensionEquality(const ColumnInfo &lc, const ColumnInfo &rc) {
+	if (lc.tagExpr.empty() || rc.tagExpr.empty() || lc.tagExpr == rc.tagExpr) {
+		return std::string();
+	}
+	return "(" + lc.tagExpr + ") = (" + rc.tagExpr + ")";
+}
 
 // The SQL for one shared-variable equi-join key, folded into a flattened
 // SpjRelation's WHERE clause.
@@ -84,6 +104,16 @@ RelNodePtr mergeInner(JoinNode &join, const TypeCatalog *catalog) {
 		const ColumnInfo *rc = right.column(k.var);
 		if (lc != nullptr && rc != nullptr) {
 			out.whereConds.push_back(joinEquality(*lc, *rc, k.nullSafe, catalog));
+			// Not folded into joinEquality itself: that function has a native-key
+			// fast path returning early, and the dimension check applies to every
+			// form of the key equally.
+			const std::string dimension = termDimensionEquality(*lc, *rc);
+			if (!dimension.empty() && !k.nullSafe) {
+				// A null-tolerant key is vacuous when either side is unbound, so the
+				// dimension check would have to be guarded the same way; leaving it
+				// off keeps OPTIONAL's compatibility semantics exactly as they were.
+				out.whereConds.push_back(dimension);
+			}
 		}
 		const ColumnInfo *jc = join.column(k.var);
 		ColumnInfo col;
@@ -97,6 +127,9 @@ RelNodePtr mergeInner(JoinNode &join, const TypeCatalog *catalog) {
 			// below copy one side wholesale, which carries its annotation with
 			// it - only that side's value ever reaches the output.)
 			col.term = meetColumns({lc, rc});
+			if (!lc->tagExpr.empty() && !rc->tagExpr.empty()) {
+				col.tagExpr = coalescedTag(lc->renderedExpr, lc->tagExpr, rc->renderedExpr, rc->tagExpr);
+			}
 		} else if (lc != nullptr) {
 			col = *lc;
 			col.nonNull = jc != nullptr ? jc->nonNull : lc->nonNull;
@@ -263,6 +296,10 @@ void eliminateSelfJoinsInSpj(SpjRelation &spj) {
 	for (auto &c : spj.schema()) {
 		c.sourceAlias = renameAlias(c.sourceAlias, rename);
 		c.renderedExpr = applyRename(c.renderedExpr, rename);
+		// Usually a constant string literal with no alias in it at all, but
+		// mergeInner's null-tolerant form embeds both sides' renderedExpr to pick
+		// the tag COALESCE would have picked - so it has to be renamed too.
+		c.tagExpr = applyRename(c.tagExpr, rename);
 		c.nativeColumnRef = applyRename(c.nativeColumnRef, rename);
 		for (auto &ref : c.templateColumnRefs) {
 			ref = applyRename(ref, rename);
@@ -445,7 +482,18 @@ bool foldConjunctIntoSpj(SpjRelation &spj, const sparql::ast::Expression &pred, 
 	fillScopeFromSchema(scope, spj.schema());
 
 	std::string sentinel = ctx.nextAlias();
-	std::string sql = translateExpression(pred, scope, sentinel, ctx);
+	std::string sql;
+	try {
+		sql = translateExpression(pred, scope, sentinel, ctx);
+	} catch (const TranslationError &) {
+		// This block cannot render the predicate - most often because the term
+		// dimension it needs is not statically known here and no tag column has
+		// been materialised yet (tag demand for expressions is decided *after* this
+		// pass, precisely so pushdown gets first refusal - see TagDemand.h).
+		// Declining to push leaves the FilterNode in place, where the late renderer
+		// will translate it with the tag available, or raise the same error there.
+		return false;
+	}
 	for (const auto &c : spj.schema()) {
 		sql = replaceAll(sql, sentinel + "." + mangleVar(c.var, ctx.dialect()), "(" + c.renderedExpr + ")");
 	}

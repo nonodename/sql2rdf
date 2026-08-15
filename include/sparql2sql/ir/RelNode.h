@@ -73,6 +73,22 @@ struct ColumnInfo {
 	/// fields elsewhere; go through meet/meetColumns so the lattice stays the
 	/// single definition of how disagreement degrades.
 	TermInfo term;
+
+	/// A SQL scalar expression producing this column's runtime **type tag** (the
+	/// encodeTag() encoding), evaluated in the same scope as `renderedExpr`.
+	///
+	/// Set once, at the producer, from that single term map's own
+	/// fully-determined annotation - so it is always a constant string literal -
+	/// and then deliberately **not** degraded by `meet`. Where two term maps feed
+	/// one column of a single SPJ block their values are forced equal by a WHERE
+	/// conjunct, so either contributor's tag describes the row; picking the first
+	/// is honest, whereas degrading to "no tag" would throw away a fact the
+	/// mapping does supply.
+	///
+	/// Empty on any column a *node* combines from children (a union's arms, a
+	/// join's COALESCE): there the tag is projected from the child's own tag
+	/// column rather than recomputed, exactly as the value column is.
+	std::string tagExpr;
 };
 
 enum class RelKind {
@@ -253,6 +269,17 @@ public:
 	RawRelation() : RelNode(RelKind::Raw) {
 	}
 	std::string sql;
+
+	/// Variables whose runtime type-tag column `sql` already projects.
+	///
+	/// A Raw leaf's SQL is built during folding, before the tag-demand pass has
+	/// run, so it cannot consult needsTag(). Its producers instead unconditionally
+	/// emit a tag column for every variable whose static annotation is **not**
+	/// fully determined - a VALUES column mixing an IRI with a literal, or a
+	/// subquery projecting a variable its own arms disagree about - because those
+	/// are the only tags that cannot be reconstructed later. Every other tag is a
+	/// constant the renderer synthesises on demand by wrapping this relation.
+	std::set<std::string> providedTagVars;
 };
 
 class SingleRowNode : public RelNode {

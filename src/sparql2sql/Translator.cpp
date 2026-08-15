@@ -8,6 +8,8 @@
 #include "sparql2sql/ExpressionTranslator.h"
 #include "sparql2sql/PatternFolder.h"
 #include "sparql2sql/SqlDialect.h"
+#include "sparql2sql/TagSql.h"
+#include "sparql2sql/TagDemand.h"
 #include "sparql2sql/TermInference.h"
 #include "sparql2sql/TermInfo.h"
 #include "sparql2sql/TranslationError.h"
@@ -120,13 +122,20 @@ GroupByBuild buildGroupBy(const Query &query, const TranslatedPattern &source, c
                           TranslationContext &ctx) {
 	GroupByBuild result;
 	for (const auto &gc : query.solutionModifier.groupBy) {
-		std::string exprSql = translateExpression(*gc.expr, source, alias, ctx);
+		TermSql key = translateTerm(*gc.expr, source, alias, ctx);
 		if (gc.asVar) {
 			std::string colAlias = mangleVar(gc.asVar->name, ctx.dialect());
-			result.selectListPrefixCols.push_back("(" + exprSql + ") AS " + colAlias);
+			result.selectListPrefixCols.push_back("(" + key.value + ") AS " + colAlias);
 			result.groupByKeys.push_back(colAlias);
-		} else {
-			result.groupByKeys.push_back(exprSql);
+			continue;
+		}
+		result.groupByKeys.push_back(key.value);
+		// Group on the term, not just its text: two terms with the same lexical
+		// form and different dimensions are different terms, so they are different
+		// groups. Same rule as the DISTINCT key, and like it a no-op whenever the
+		// mapping determines the dimension.
+		if (!isFullyDetermined(key.staticInfo) && !key.tag.empty()) {
+			result.groupByKeys.push_back(key.tag);
 		}
 	}
 	return result;
@@ -191,6 +200,38 @@ std::string typedSortKey(const std::string &exprSql, const TermInfo &info, const
 	return exprSql;
 }
 
+// One ORDER BY key, as the comma-separated list of SQL sort keys it needs.
+//
+// When the mapping determines the term's dimension this is a single key, exactly
+// as before: typedSortKey casts it to the right SQL type so numbers sort
+// numerically and timestamps chronologically.
+//
+// When the dimension varies per row, one key cannot express SPARQL 1.1 Section
+// 15.1's ordering, which is defined *across* term kinds and value spaces before
+// it is defined within one. So the key expands into the section's own layered
+// order: term kind first (unbound < blank node < IRI < literal), then value
+// space so that comparable literals sort together, then the value itself read as
+// each of the two orderable types, and finally the raw lexical form - which is
+// both the answer for xsd:string and a stable tie-break everywhere else.
+//
+// A TRY_CAST failure sorts as NULL (last for ASC in DuckDB) rather than raising,
+// consistent with the null-tolerant idiom used throughout this translator.
+std::string sortKeys(const TermSql &key, const SqlDialect &dialect, bool descending) {
+	const char *direction = descending ? " DESC" : " ASC";
+	if (isFullyDetermined(key.staticInfo) || key.tag.empty()) {
+		return typedSortKey(key.value, key.staticInfo, dialect) + direction;
+	}
+	const std::vector<std::string> keys = {tagKindRank(key.tag, dialect), tagValueSpace(key.tag, dialect),
+	                                       dialect.tryCastToDouble(key.value), dialect.tryCastToTimestamp(key.value),
+	                                       key.value};
+	std::string sql;
+	for (std::size_t i = 0; i < keys.size(); ++i) {
+		sql += (i > 0 ? ", " : "");
+		sql += keys[i] + direction;
+	}
+	return sql;
+}
+
 std::string translateOrderBy(const Query &query, const TranslatedPattern &source, const std::string &alias,
                              const std::set<std::string> &selectListAliasNames, TranslationContext &ctx) {
 	if (query.solutionModifier.orderBy.empty()) {
@@ -202,6 +243,7 @@ std::string translateOrderBy(const Query &query, const TranslatedPattern &source
 			sql += ", ";
 		}
 		const OrderCondition &oc = query.solutionModifier.orderBy[i];
+		const bool descending = (oc.direction == OrderDirection::Desc);
 		if (oc.expr->kind() == ExprKind::VarRef) {
 			const std::string &name = static_cast<const VarExpr &>(*oc.expr).var->name;
 			if (selectListAliasNames.count(name) && !source.allVars().count(name)) {
@@ -211,18 +253,18 @@ std::string translateOrderBy(const Query &query, const TranslatedPattern &source
 				// referencing SELECT-list aliases directly. Its type comes from
 				// the expression that defines it, not from the bare reference.
 				const Expression *definition = aliasDefinition(query, name);
-				TermInfo info;
+				TermSql key;
+				key.value = mangleVar(name, ctx.dialect());
 				if (definition != nullptr) {
-					info = inferExprTermInfo(*definition, source);
+					key.staticInfo = inferExprTermInfo(*definition, source);
 				}
-				sql += typedSortKey(mangleVar(name, ctx.dialect()), info, ctx.dialect());
-				sql += (oc.direction == OrderDirection::Desc) ? " DESC" : " ASC";
+				// No tag is reachable through a bare alias reference, so this stays
+				// on the single-key path whatever the definition's dimension is.
+				sql += sortKeys(key, ctx.dialect(), descending);
 				continue;
 			}
 		}
-		sql += typedSortKey(translateExpression(*oc.expr, source, alias, ctx), inferExprTermInfo(*oc.expr, source),
-		                    ctx.dialect());
-		sql += (oc.direction == OrderDirection::Desc) ? " DESC" : " ASC";
+		sql += sortKeys(translateTerm(*oc.expr, source, alias, ctx), ctx.dialect(), descending);
 	}
 	return sql;
 }
@@ -256,7 +298,7 @@ std::string prependCtes(const TranslationContext &ctx, const std::string &body) 
 
 } // namespace
 
-TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, TranslationContext &ctx) {
+TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, TranslationContext &ctx, bool nested) {
 	if (query.form != QueryForm::Select) {
 		throw TranslationError(
 		    "translateQueryPattern: only SELECT queries produce a projected relation (subqueries and the top-level "
@@ -269,12 +311,18 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 	if (query.valuesClause) {
 		rootNode = innerJoin(std::move(rootNode), translateInlineData(*query.valuesClause, ctx), ctx);
 	}
+	// Join keys before optimize (mergeInner fixes their comparison text there),
+	// expressions after it (so filter pushdown gets first refusal at resolving a
+	// predicate per union arm, which needs no tag at all). See TagDemand.h.
+	markJoinKeyTagNeeds(*rootNode, ctx);
+
 	OptimizerOptions opts;
 	opts.topLevelDistinct =
 	    (query.distinct || query.reduced) && query.solutionModifier.groupBy.empty() && !queryHasAggregate(query);
 	opts.catalog = ctx.catalog();
 	opts.ctx = &ctx;
 	rootNode = optimize(std::move(rootNode), opts);
+	markExpressionTagNeeds(*rootNode, &query, ctx);
 	TranslatedPattern source = renderRelation(*rootNode, ctx);
 
 	std::string alias = ctx.nextAlias();
@@ -292,6 +340,22 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 		selectListAliasNames.insert(item.var->name);
 	}
 
+	// A projected variable's tag rides along in two situations, both of which
+	// need it to survive into this statement's own result columns:
+	//
+	//  - a nested sub-select, whose SQL is spliced into the enclosing tree as
+	//    text and never re-rendered, so an undetermined tag could not be
+	//    reconstructed later (see Translator.h);
+	//  - DISTINCT/REDUCED, where the tag is part of the dedup key: SQL dedups on
+	//    the select list, so without it "1"^^xsd:integer and "1"^^xsd:string -
+	//    two different RDF terms, and two different solutions - would collapse
+	//    into one row.
+	//
+	// Both are gated on the dimension not being statically determined, so an
+	// ordinary query's result columns stay exactly the variables it projected.
+	const bool dedup = query.distinct || query.reduced;
+	const bool wantTagCols = nested || dedup;
+	std::set<std::string> tagCols;
 	std::vector<std::string> selectCols = groupBy.selectListPrefixCols;
 	if (query.selectStar) {
 		// Internal variables - property path intermediates and blank-node
@@ -303,6 +367,10 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 				continue;
 			}
 			selectCols.push_back(alias + "." + mangleVar(v, dialect) + " AS " + mangleVar(v, dialect));
+			if (wantTagCols && ctx.needsTag(v) && !isFullyDetermined(source.termInfoOf(v))) {
+				selectCols.push_back(alias + "." + mangleVarTag(v, dialect) + " AS " + mangleVarTag(v, dialect));
+				tagCols.insert(v);
+			}
 		}
 	} else {
 		for (const auto &item : query.selectItems) {
@@ -316,6 +384,12 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 				exprSql = alias + "." + mangleVar(item.var->name, dialect);
 			}
 			selectCols.push_back("(" + exprSql + ") AS " + mangleVar(item.var->name, dialect));
+			const std::string &name = item.var->name;
+			if (wantTagCols && !item.expr && source.allVars().count(name) && ctx.needsTag(name) &&
+			    !isFullyDetermined(source.termInfoOf(name))) {
+				selectCols.push_back(alias + "." + mangleVarTag(name, dialect) + " AS " + mangleVarTag(name, dialect));
+				tagCols.insert(name);
+			}
 		}
 	}
 
@@ -404,11 +478,13 @@ std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMa
 		if (query.valuesClause) {
 			rootNode = innerJoin(std::move(rootNode), translateInlineData(*query.valuesClause, ctx), ctx);
 		}
+		markJoinKeyTagNeeds(*rootNode, ctx);
 		OptimizerOptions askOpts;
 		askOpts.topLevelDistinct = true; // ASK is an existence check: per-pattern DISTINCT is redundant.
 		askOpts.catalog = ctx.catalog();
 		askOpts.ctx = &ctx;
 		rootNode = optimize(std::move(rootNode), askOpts);
+		markExpressionTagNeeds(*rootNode, &query, ctx);
 		TranslatedPattern source = renderRelation(*rootNode, ctx);
 
 		std::string alias = ctx.nextAlias();

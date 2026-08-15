@@ -1,0 +1,12 @@
+PREFIX ex: <http://example.com/ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# An xsd:integer row compared with an xsd:string row is a type error, so the row
+# is dropped rather than answered - whereas two xsd:integer rows compare by value.
+SELECT ?p ?q
+WHERE {
+  ?m ex:mixeddt ?v .
+  ?n ex:amount ?a .
+  BIND(?v AS ?p)
+  BIND(?a AS ?q)
+  FILTER(?p < ?q)
+}

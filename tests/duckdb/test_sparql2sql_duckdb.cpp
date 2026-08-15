@@ -111,9 +111,20 @@ std::unique_ptr<DuckDBConnection> makeSeededDatabase() {
 	              "(1, 9,   2.50,  '2019-12-31T23:59:59', 'alpha', 'http://ex.org/a', 2), "
 	              "(2, 100, 10.00, '2020-06-01T12:00:00', 'beta',  'http://ex.org/b', 1)");
 
-	// Blank-node-subject fixture, and the literal-valued arm of ex:mixed.
+	// Blank-node-subject fixture, and the literal-valued arm of the four
+	// multi-arm predicates (ex:mixed / ex:desc / ex:mixedtag / ex:mixeddt).
+	//
+	// Two rows, not one, and both BODY values chosen deliberately:
+	//   'note one' has no numeric reading, so an xsd:string row really is
+	//              incomparable with an xsd:integer row from MEASURES.AMOUNT;
+	//   '9'        is numerically equal to MEASURES.AMOUNT's 9 and lexically equal
+	//              to its text, so a query that only compares lexical forms cannot
+	//              tell "9"^^xsd:integer from "9"^^xsd:string. That collision is
+	//              the whole point: it is what makes DISTINCT, sameTerm and RDF
+	//              term equality observably wrong without a runtime type tag, and
+	//              observably right with one.
 	conn->execute("CREATE TABLE NOTES (NID INTEGER, BODY VARCHAR)");
-	conn->execute("INSERT INTO NOTES VALUES (1, 'note one')");
+	conn->execute("INSERT INTO NOTES VALUES (1, 'note one'), (2, '9')");
 
 	// 11 'a' rows and 2 'b' rows: the group counts (11, 2) sort the wrong way
 	// round lexicographically, which is what pins the ORDER-BY-over-a-COUNT
@@ -897,8 +908,9 @@ TEST_CASE("sparql2sql_term_kinds.rq: term-kind builtins fold to per-term-map con
 TEST_CASE("sparql2sql_bnode_kind.rq: an rr:BlankNode subject satisfies isBLANK") {
 	auto conn = makeSeededDatabase();
 	auto rows = translateAndRun(*conn, "sparql2sql_bnode_kind.rq", "sparql2sql_terms.ttl");
-	REQUIRE(rows.size() == 1);
+	REQUIRE(rows.size() == 2);
 	CHECK(containsRow(rows, {{"V_B", "note one"}}));
+	CHECK(containsRow(rows, {{"V_B", "9"}}));
 }
 
 TEST_CASE("sparql2sql_term_lang.rq: langMatches against a static rr:language tag") {
@@ -973,9 +985,11 @@ TEST_CASE("sparql2sql_term_disagree.rq: a term-kind filter over disagreeing arms
 	auto conn = makeSeededDatabase();
 	auto rows = translateAndRun(*conn, "sparql2sql_term_disagree.rq", "sparql2sql_terms.ttl");
 	// ex:mixed is an IRI from <#Measure> and a literal from <#Note>. Pushdown
-	// folds the IRI arm away entirely, leaving only the NOTES row.
-	REQUIRE(rows.size() == 1);
+	// folds the IRI arm away entirely, leaving only the NOTES rows - so this is
+	// still resolved statically, per arm, and materialises no runtime tag at all.
+	REQUIRE(rows.size() == 2);
 	CHECK(containsRow(rows, {{"V_X", "note one"}}));
+	CHECK(containsRow(rows, {{"V_X", "9"}}));
 }
 
 TEST_CASE("sparql2sql_badtyped.rq: a mis-declared rr:datatype drops rows rather than raising") {
@@ -1007,14 +1021,30 @@ TEST_CASE("sparql2sql_view_types.rq: describing rr:sqlQuery views makes DATATYPE
 	REQUIRE(mapping.isValid());
 	DuckDbDialect dialect;
 
-	// The reported failure: a catalog read only from information_schema types
-	// EMP.ENAME but not the view's DNAME, and one untyped candidate arm degrades
-	// the meet, so DATATYPE() refuses even though both arms are really VARCHAR.
+	// The originally reported failure: a catalog read only from information_schema
+	// types EMP.ENAME but not the view's DNAME, and one untyped candidate arm
+	// degrades the meet, so DATATYPE() had no single static answer and refused.
+	//
+	// It no longer refuses. The two arms carry different runtime type tags, so
+	// DATATYPE() is decided per row: the typed EMP arm reports xsd:string and the
+	// still-untyped view arms report a type error (SQL NULL, hence an unbound ?dt),
+	// which is a strictly better outcome than failing the whole query.
 	auto query = parser.parseFile(SOURCE_SPARQL2SQL_DIR "sparql2sql_view_types.rq");
 	sparql2sql::TypeCatalog baseOnly = catalogOf(*conn);
 	REQUIRE_FALSE(baseOnly.typeOf("EMP", "ENAME").empty());
 	REQUIRE(baseOnly.typeOf("view:SELECT DEPTNO, DNAME FROM DEPT", "DNAME").empty());
-	CHECK_THROWS_AS(translateQuery(*query, mapping, dialect, &baseOnly), sparql2sql::TranslationError);
+	{
+		std::string partialSql = translateQuery(*query, mapping, dialect, &baseOnly);
+		INFO("SQL (base-only catalog): " << partialSql);
+		std::unique_ptr<r2rml::SQLResultSet> partialRs = conn->execute(partialSql);
+		auto partialRows = collectRows(*partialRs);
+		REQUIRE(partialRows.size() == 4);
+		CHECK(containsRow(partialRows, {{"V_S", "http://data.example.com/emp/7369"},
+		                                {"V_L", "SMITH"},
+		                                {"V_DT", "http://www.w3.org/2001/XMLSchema#string"}}));
+		CHECK(containsRow(partialRows,
+		                  {{"V_S", "http://data.example.com/dept/10"}, {"V_L", "APPSERVER"}, {"V_DT", kNull}}));
+	}
 
 	// The fix: loadTypeCatalog also describes each rr:sqlQuery view and files
 	// its result columns under the view's identity.
@@ -1058,4 +1088,196 @@ TEST_CASE("sparql2sql_view_types_computed.rq: a computed view column's datatype 
 	REQUIRE(rows.size() == 2);
 	CHECK(containsRow(rows, {{"V_S", "http://data.example.com/emp/7369"}, {"V_N", "5"}, {"V_DT", kXsdInteger}}));
 	CHECK(containsRow(rows, {{"V_S", "http://data.example.com/emp/7400"}, {"V_N", "5"}, {"V_DT", kXsdInteger}}));
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic RDF term dimension: the runtime type tag, proved on real rows.
+//
+// The static cases above cover everything the R2RML mapping determines. These
+// cover what it cannot: the four multi-arm predicates in sparql2sql_terms.ttl,
+// whose two triples maps produce terms of DIFFERENT dimensions over different
+// tables, so a single query really does return rows whose term kind / datatype /
+// language differ from row to row.
+//
+// Every query here routes the value through a BIND before inspecting it. That is
+// load-bearing, not stylistic: without it, filter pushdown distributes the
+// predicate into each union arm where the dimension IS statically known and folds
+// it, so nothing would be decided at run time and these tests would prove
+// nothing. (That per-arm resolution is itself asserted by
+// sparql2sql_term_disagree.rq above.)
+//
+// NOTES.BODY = '9' and MEASURES.AMOUNT = 9 are the crux: same lexical form,
+// different datatype. Any assertion below that distinguishes them is one a
+// lexical-form-only representation gets wrong.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("dyn_term_kinds.rq: isIRI/isLITERAL differ per row over a kind-disagreeing predicate") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dyn_term_kinds.rq", "sparql2sql_terms.ttl");
+	REQUIRE(rows.size() == 4);
+	// The <#Measure> arm builds an IRI from rr:template "http://ex.org/m/{REF}"...
+	CHECK(containsRow(rows, {{"V_Y", "http://ex.org/m/2"}, {"V_II", "true"}, {"V_IL", "false"}}));
+	CHECK(containsRow(rows, {{"V_Y", "http://ex.org/m/1"}, {"V_II", "true"}, {"V_IL", "false"}}));
+	// ...and the <#Note> arm a plain literal from NOTES.BODY. Same query, same
+	// column, opposite answers.
+	CHECK(containsRow(rows, {{"V_Y", "note one"}, {"V_II", "false"}, {"V_IL", "true"}}));
+	CHECK(containsRow(rows, {{"V_Y", "9"}, {"V_II", "false"}, {"V_IL", "true"}}));
+}
+
+TEST_CASE("dyn_datatype.rq: DATATYPE reports each row's own declared datatype") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dyn_datatype.rq", "sparql2sql_terms.ttl");
+	const char *const kInt = "http://www.w3.org/2001/XMLSchema#integer";
+	const char *const kStr = "http://www.w3.org/2001/XMLSchema#string";
+	REQUIRE(rows.size() == 4);
+	CHECK(containsRow(rows, {{"V_Y", "9"}, {"V_DT", kInt}}));   // MEASURES.AMOUNT
+	CHECK(containsRow(rows, {{"V_Y", "100"}, {"V_DT", kInt}})); // MEASURES.AMOUNT
+	CHECK(containsRow(rows, {{"V_Y", "note one"}, {"V_DT", kStr}}));
+	// The collision: identical lexical form, different datatype. Two rows.
+	CHECK(containsRow(rows, {{"V_Y", "9"}, {"V_DT", kStr}}));
+}
+
+TEST_CASE("dyn_lang.rq: LANG reports each row's own tag, and '' only where there really is none") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dyn_lang.rq", "sparql2sql_terms.ttl");
+	REQUIRE(rows.size() == 4);
+	// ex:mixedtag is rr:language "en" over MEASURES.TITLE...
+	CHECK(containsRow(rows, {{"V_Y", "alpha"}, {"V_LG", "en"}}));
+	CHECK(containsRow(rows, {{"V_Y", "beta"}, {"V_LG", "en"}}));
+	// ...and untagged over NOTES.BODY. This is the regression the old
+	// TermInfo::maybeLangTagged refusal was protecting: folding '' for every row
+	// would have silently dropped the two @en tags above.
+	CHECK(containsRow(rows, {{"V_Y", "note one"}, {"V_LG", ""}}));
+	CHECK(containsRow(rows, {{"V_Y", "9"}, {"V_LG", ""}}));
+}
+
+TEST_CASE("dyn_sameterm.rq: sameTerm rejects a lexical match across datatypes") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dyn_sameterm.rq", "sparql2sql_terms.ttl");
+	// One row pairs "9"^^xsd:string (NOTES.BODY) with "9"^^xsd:integer
+	// (MEASURES.AMOUNT). Plain string equality - what this translator did before
+	// the tag existed - answers true; RDF term equality must answer false.
+	bool sawTheCollision = false;
+	for (const auto &row : rows) {
+		auto p = row.find("V_P");
+		auto q = row.find("V_Q");
+		auto same = row.find("V_SAME");
+		REQUIRE(p != row.end());
+		REQUIRE(q != row.end());
+		REQUIRE(same != row.end());
+		if (p->second == "9" && q->second == "9") {
+			// Either both are the xsd:integer arm (genuinely the same term) or this
+			// is the cross-datatype pair. Only the former may be true.
+			sawTheCollision = sawTheCollision || same->second == "false";
+		}
+		// Different lexical forms are never the same term, whatever their tags.
+		if (p->second != q->second) {
+			CHECK(same->second == "false");
+		}
+	}
+	CHECK(sawTheCollision);
+}
+
+TEST_CASE("dyn_compare_incomparable.rq: an ordering comparison across value spaces drops the row") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dyn_compare_incomparable.rq", "sparql2sql_terms.ttl");
+	// Section 17.3 defines < only within a value space, so an xsd:string ?p
+	// against an xsd:integer ?q is a type error and the row is dropped. Only the
+	// xsd:integer rows of ex:mixeddt can survive, and only where 9 < 100.
+	for (const auto &row : rows) {
+		auto p = row.find("V_P");
+		auto q = row.find("V_Q");
+		REQUIRE(p != row.end());
+		REQUIRE(q != row.end());
+		INFO("surviving pair: " << p->second << " < " << q->second);
+		// Every surviving pair must be numerically ordered - which also rules out
+		// the lexicographic answer ('100' < '9' as text).
+		CHECK(std::stod(p->second) < std::stod(q->second));
+	}
+	CHECK(containsRow(rows, {{"V_P", "9"}, {"V_Q", "100"}}));
+	// 'note one' has no numeric reading and is an xsd:string besides, so it can
+	// never appear.
+	CHECK_FALSE(containsRow(rows, {{"V_P", "note one"}, {"V_Q", "9"}}));
+	CHECK_FALSE(containsRow(rows, {{"V_P", "note one"}, {"V_Q", "100"}}));
+}
+
+TEST_CASE("dyn_distinct_types.rq: DISTINCT keeps two terms with one lexical form but two datatypes") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dyn_distinct_types.rq", "sparql2sql_terms.ttl");
+	// Four distinct RDF terms: 9 and 100 as xsd:integer, 'note one' and 9 as
+	// xsd:string. Deduplicating on the lexical form alone would give three.
+	CHECK(rows.size() == 4);
+	int nines = 0;
+	for (const auto &row : rows) {
+		auto y = row.find("V_Y");
+		REQUIRE(y != row.end());
+		nines += (y->second == "9") ? 1 : 0;
+	}
+	CHECK(nines == 2);
+}
+
+TEST_CASE("dyn_order_mixed.rq: ORDER BY sorts blank nodes before IRIs before literals") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dyn_order_mixed.rq", "sparql2sql_terms.ttl");
+	REQUIRE(rows.size() == 4);
+	// Section 15.1's cross-kind order. ex:mixed yields two IRIs (from the
+	// rr:template arm) and two literals (from NOTES.BODY), so every IRI must come
+	// before every literal regardless of lexical text - which it would not, sorted
+	// as plain VARCHAR ('9' > 'http://...' is false, so '9' would lead).
+	const std::vector<std::string> order = columnSeq(rows, "V_Y");
+	INFO("order: " << order[0] << ", " << order[1] << ", " << order[2] << ", " << order[3]);
+	CHECK(order[0].compare(0, 7, "http://") == 0);
+	CHECK(order[1].compare(0, 7, "http://") == 0);
+	CHECK(order[2].compare(0, 7, "http://") != 0);
+	CHECK(order[3].compare(0, 7, "http://") != 0);
+}
+
+TEST_CASE("dyn_strdt_var.rq: STRDT with a per-row datatype IRI") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dyn_strdt_var.rq", "sparql2sql_terms.ttl");
+	// The datatype comes from MEASURES.HOMEPAGE, a column - so it differs per row
+	// and could not have been resolved at translation time.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_P", "alpha"}, {"V_DT", "http://ex.org/a"}}));
+	CHECK(containsRow(rows, {{"V_P", "beta"}, {"V_DT", "http://ex.org/b"}}));
+}
+
+TEST_CASE("dyn_minmax_mixed.rq: MIN reports the winning row's own datatype") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dyn_minmax_mixed.rq", "sparql2sql_terms.ttl");
+	REQUIRE(rows.size() == 1);
+	// The lexical MIN over {'9', '100', 'note one', '9'} is '100'. Its datatype
+	// must be the one that row actually carries (xsd:integer, from
+	// MEASURES.AMOUNT) rather than either arm's constant picked at translation
+	// time - which is why the tag is aggregated with arg_min over the same key as
+	// the value, not by an independent MIN.
+	auto lo = rows[0].find("V_LO");
+	auto dt = rows[0].find("V_LODT");
+	REQUIRE(lo != rows[0].end());
+	REQUIRE(dt != rows[0].end());
+	CHECK(lo->second == "100");
+	CHECK(dt->second == "http://www.w3.org/2001/XMLSchema#integer");
+}
+
+TEST_CASE("dyn_iri_construct.rq: IRI() re-tags a literal as an IRI term") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dyn_iri_construct.rq", "sparql2sql_terms.ttl");
+	REQUIRE(rows.size() == 2);
+	// The lexical form is untouched - the argument still reads as a literal - but
+	// the constructed term is an IRI.
+	CHECK(containsRow(rows, {{"V_H", "alpha"}, {"V_II", "true"}, {"V_IL", "true"}}));
+	CHECK(containsRow(rows, {{"V_H", "beta"}, {"V_II", "true"}, {"V_IL", "true"}}));
+}
+
+TEST_CASE("dyn_group_types.rq: GROUP BY keeps two terms with one lexical form but two datatypes apart") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dyn_group_types.rq", "sparql2sql_terms.ttl");
+	// Four terms, four groups of one each. Grouping on the lexical form alone
+	// would give three groups, one of them a count of 2.
+	REQUIRE(rows.size() == 4);
+	for (const auto &row : rows) {
+		auto c = row.find("V_C");
+		REQUIRE(c != row.end());
+		CHECK(c->second == "1");
+	}
 }

@@ -9,6 +9,7 @@
 #include "sparql2sql/ExprAnalysis.h"
 #include "sparql2sql/ExpressionTranslator.h"
 #include "sparql2sql/SqlDialect.h"
+#include "sparql2sql/TagSql.h"
 #include "sparql2sql/TermInference.h"
 #include "sparql2sql/TermMapSql.h"
 #include "sparql2sql/TranslationError.h"
@@ -78,13 +79,37 @@ RelNodePtr translateInlineData(const sparql::ast::InlineData &values, Translatio
 	}
 
 	std::set<std::string> undefVars;
-	std::vector<std::string> rowSqls;
 	// A VALUES column's terms live per *cell*, so its annotation is the meet
 	// down the column: one row may give an IRI and another a literal. An UNDEF
 	// cell contributes nothing at all (it is not a term), so it is skipped
 	// rather than met in as Unknown - which would wipe out every other row.
 	std::vector<TermInfo> columnTerms(varNames.size());
 	std::vector<bool> columnSeeded(varNames.size(), false);
+	for (const auto &row : values.rows) {
+		for (std::size_t i = 0; i < row.size(); ++i) {
+			if (!row[i]) {
+				undefVars.insert(varNames[i]);
+				continue;
+			}
+			TermInfo cell = termInfoOfTerm(*row[i]);
+			columnTerms[i] = columnSeeded[i] ? meet(columnTerms[i], cell) : cell;
+			columnSeeded[i] = true;
+		}
+	}
+
+	// A column whose cells disagree about their term dimension is one of the two
+	// places a not-statically-determined tag cannot be reconstructed later (the
+	// other being a subquery's projection), because this relation's SQL is built
+	// here and never re-rendered. So emit its tag per cell, unconditionally -
+	// there is no needsTag() to consult yet. Every other column's tag is a single
+	// constant the renderer synthesises on demand instead, which is why an
+	// ordinary VALUES clause still generates exactly the SQL it always did.
+	std::vector<bool> perCellTag(varNames.size(), false);
+	for (std::size_t i = 0; i < varNames.size(); ++i) {
+		perCellTag[i] = columnSeeded[i] && !isFullyDetermined(columnTerms[i]);
+	}
+
+	std::vector<std::string> rowSqls;
 	for (const auto &row : values.rows) {
 		std::string sql = "SELECT ";
 		for (std::size_t i = 0; i < row.size(); ++i) {
@@ -93,12 +118,17 @@ RelNodePtr translateInlineData(const sparql::ast::InlineData &values, Translatio
 			}
 			if (!row[i]) {
 				sql += "CAST(NULL AS VARCHAR) AS " + mangleVar(varNames[i], dialect);
-				undefVars.insert(varNames[i]);
-			} else {
-				sql += dialect.stringLiteral(termLexicalForm(*row[i])) + " AS " + mangleVar(varNames[i], dialect);
-				TermInfo cell = termInfoOfTerm(*row[i]);
-				columnTerms[i] = columnSeeded[i] ? meet(columnTerms[i], cell) : cell;
-				columnSeeded[i] = true;
+				if (perCellTag[i]) {
+					// NULL value, NULL tag: the two columns must agree on
+					// unboundedness (see mangleVarTag).
+					sql += ", CAST(NULL AS VARCHAR) AS " + mangleVarTag(varNames[i], dialect);
+				}
+				continue;
+			}
+			sql += dialect.stringLiteral(termLexicalForm(*row[i])) + " AS " + mangleVar(varNames[i], dialect);
+			if (perCellTag[i]) {
+				sql +=
+				    ", " + tagLiteral(termInfoOfTerm(*row[i]), dialect) + " AS " + mangleVarTag(varNames[i], dialect);
 			}
 		}
 		rowSqls.push_back(sql);
@@ -127,6 +157,16 @@ RelNodePtr translateInlineData(const sparql::ast::InlineData &values, Translatio
 		col.var = varNames[i];
 		col.nonNull = undefVars.count(varNames[i]) == 0;
 		col.term = columnTerms[i];
+		if (perCellTag[i]) {
+			raw.providedTagVars.insert(varNames[i]);
+		} else if (columnSeeded[i]) {
+			col.tagExpr = tagLiteral(columnTerms[i], dialect);
+		} else {
+			// An all-UNDEF column (or a VALUES with no rows at all) binds no term
+			// in any row, so its tag is unbound in every row too - a constant, and
+			// one that keeps the tag-NULL-iff-value-NULL invariant.
+			col.tagExpr = "CAST(NULL AS VARCHAR)";
+		}
 		raw.schema().push_back(col);
 	}
 	return node;
@@ -345,10 +385,11 @@ RelNodePtr fold(const sparql::ast::GroupGraphPattern &pattern, TranslationContex
 		}
 		case ElementKind::SubSelect: {
 			const auto &sub = static_cast<const SubSelectElement &>(el);
-			TranslatedPattern nested = translateQueryPattern(*sub.query, ctx);
+			TranslatedPattern nested = translateQueryPattern(*sub.query, ctx, /*nested=*/true);
 			RelNodePtr node(new RawRelation());
 			RawRelation &raw = static_cast<RawRelation &>(*node);
 			raw.sql = nested.sql;
+			raw.providedTagVars = nested.providedTagVars;
 			for (const auto &v : nested.allVars()) {
 				ColumnInfo col;
 				col.var = v;

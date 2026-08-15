@@ -1,0 +1,11 @@
+PREFIX ex: <http://example.com/ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# NOTES.BODY '9' and MEASURES.AMOUNT 9 have the same lexical form but different
+# datatypes, so string equality accepts a pair sameTerm must reject.
+SELECT ?p ?q (sameTerm(?p, ?q) AS ?same)
+WHERE {
+  ?m ex:mixeddt ?v .
+  ?n ex:amount ?a .
+  BIND(?v AS ?p)
+  BIND(?a AS ?q)
+}

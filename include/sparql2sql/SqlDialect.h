@@ -85,6 +85,15 @@ public:
 	/// Render a SAMPLE-style "pick any one value" aggregate.
 	virtual std::string anyValueAgg(const std::string &expr) const = 0;
 
+	/// Render "the value of `expr` in the row where `orderBy` is smallest
+	/// (`wantMax` false) or largest (true)".
+	///
+	/// Needed because a MIN()/MAX() over terms whose dimension varies per row has
+	/// to return the winning row's *tag* as well as its lexical form, and the two
+	/// must come from the same row - which a second independent MIN() would not
+	/// guarantee.
+	virtual std::string argMinMaxBy(const std::string &expr, const std::string &orderBy, bool wantMax) const = 0;
+
 	/// Combine several already-valid "SELECT ..." statements via a
 	/// name-matching (rather than positional) union, auto-padding any
 	/// column present in one arm but not another with NULL. DuckDB's

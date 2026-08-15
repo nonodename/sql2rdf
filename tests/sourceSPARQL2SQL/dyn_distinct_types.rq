@@ -1,0 +1,9 @@
+PREFIX ex: <http://example.com/ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# "9"^^xsd:integer and "9"^^xsd:string are different RDF terms, hence different
+# solutions: DISTINCT must not collapse them into one row.
+SELECT DISTINCT ?y
+WHERE {
+  ?m ex:mixeddt ?v .
+  BIND(?v AS ?y)
+}
