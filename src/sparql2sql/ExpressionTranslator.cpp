@@ -906,11 +906,16 @@ std::string translateExpression(const sparql::ast::Expression &expr, const Trans
 	case ExprKind::Literal:
 		return ctx.dialect().stringLiteral(static_cast<const LiteralExpr &>(expr).literal->lexicalForm);
 	case ExprKind::VarRef: {
-		const std::string &name = static_cast<const VarExpr &>(expr).var->name;
-		if (!scope.allVars().count(name)) {
-			throw TranslationError("FILTER/BIND/ORDER BY/HAVING reference to out-of-scope variable ?" + name);
+		const sparql::ast::Var &var = *static_cast<const VarExpr &>(expr).var;
+		if (!scope.allVars().count(var.name)) {
+			std::string where;
+			if (var.line != 0) {
+				where = " (line " + std::to_string(var.line) + ", column " + std::to_string(var.column) + ")";
+			}
+			throw TranslationError("FILTER/BIND/ORDER BY/HAVING reference to out-of-scope variable ?" + var.name +
+			                       where);
 		}
-		return scopeAlias + "." + mangleVar(name, ctx.dialect());
+		return scopeAlias + "." + mangleVar(var.name, ctx.dialect());
 	}
 	case ExprKind::IriRef:
 		return ctx.dialect().stringLiteral(static_cast<const IriExpr &>(expr).iri->value);

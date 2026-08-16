@@ -236,6 +236,8 @@ std::unique_ptr<Var> Parser::parseVar() {
 		error("expected a variable");
 	}
 	std::unique_ptr<Var> v(new Var(current_.text));
+	v->line = current_.line;
+	v->column = current_.column;
 	advance();
 	return v;
 }
@@ -252,7 +254,10 @@ std::unique_ptr<Term> Parser::cloneTerm(const Term &term) {
 	}
 	case TermKind::Var: {
 		const auto &v = static_cast<const Var &>(term);
-		return std::unique_ptr<Term>(new Var(v.name));
+		std::unique_ptr<Var> cloned(new Var(v.name));
+		cloned->line = v.line;
+		cloned->column = v.column;
+		return std::unique_ptr<Term>(cloned.release());
 	}
 	case TermKind::BlankNode: {
 		const auto &b = static_cast<const BlankNode &>(term);
@@ -279,7 +284,10 @@ std::unique_ptr<PropertyPathExpr> Parser::clonePath(const PropertyPathExpr &path
 	}
 	case PathKind::Variable: {
 		const auto &p = static_cast<const VariablePath &>(path);
-		return std::unique_ptr<PropertyPathExpr>(new VariablePath(std::unique_ptr<Var>(new Var(p.var->name))));
+		std::unique_ptr<Var> cloned(new Var(p.var->name));
+		cloned->line = p.var->line;
+		cloned->column = p.var->column;
+		return std::unique_ptr<PropertyPathExpr>(new VariablePath(std::move(cloned)));
 	}
 	case PathKind::Inverse: {
 		const auto &p = static_cast<const InversePath &>(path);

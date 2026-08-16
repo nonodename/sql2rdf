@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <string>
 
@@ -44,6 +45,13 @@ public:
 	}
 
 	std::string name;
+	// Source position of this variable occurrence, for error messages that
+	// point back at the query text (e.g. an out-of-scope reference in a
+	// FILTER/BIND/ORDER BY/HAVING expression). 0 means "unknown" - only the
+	// parser's own constructions set this; synthetic Vars built elsewhere
+	// leave it at the default.
+	std::size_t line = 0;
+	std::size_t column = 0;
 };
 
 class BlankNode : public Term {
