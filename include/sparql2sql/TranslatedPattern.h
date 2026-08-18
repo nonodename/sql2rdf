@@ -80,8 +80,8 @@ struct TranslatedPattern {
 class TranslationContext {
 public:
 	TranslationContext(const r2rml::R2RMLMapping &mapping, const SqlDialect &dialect,
-	                   const TypeCatalog *catalog = nullptr)
-	    : mapping_(mapping), dialect_(dialect), catalog_(catalog), aliasCounter_(0) {
+	                   const TypeCatalog *catalog = nullptr, bool prettyPrint = false)
+	    : mapping_(mapping), dialect_(dialect), catalog_(catalog), aliasCounter_(0), prettyPrint_(prettyPrint) {
 	}
 
 	const r2rml::R2RMLMapping &mapping() const {
@@ -96,6 +96,59 @@ public:
 	const TypeCatalog *catalog() const {
 		return catalog_;
 	}
+
+	/// Whether generated SQL should be laid out for human readability (newlines,
+	/// indentation, one-column-per-line) rather than the default single-line
+	/// form. A debug/readability aid only - every renderer reads this (and the
+	/// depth below) through nl()/indent()/clauseSep()/onSep() instead of
+	/// branching on it directly, so the "if pretty" test lives in one place
+	/// per formatting decision rather than at each of the many SQL-emitting
+	/// call sites.
+	bool pretty() const {
+		return prettyPrint_;
+	}
+
+	/// "\n" in pretty mode, "" in compact mode.
+	std::string nl() const {
+		return prettyPrint_ ? std::string("\n") : std::string();
+	}
+
+	/// `extraLevels` beyond the current subquery nesting depth (see
+	/// SubqueryDepthGuard), rendered as two spaces per level; always "" in
+	/// compact mode.
+	std::string indent(std::size_t extraLevels = 0) const {
+		return prettyPrint_ ? std::string((subqueryDepth_ + extraLevels) * 2, ' ') : std::string();
+	}
+
+	/// Separator introducing a major clause keyword (FROM/WHERE/GROUP BY/
+	/// HAVING/ORDER BY/JOIN/...): a newline at the current margin when pretty,
+	/// a single space (today's behaviour) when compact.
+	std::string clauseSep() const {
+		return prettyPrint_ ? (nl() + indent()) : std::string(" ");
+	}
+
+	/// Separator introducing a JOIN's ON keyword, indented one level deeper
+	/// than the JOIN itself.
+	std::string onSep() const {
+		return prettyPrint_ ? (nl() + indent(1)) : std::string(" ");
+	}
+
+	/// One more level of subquery nesting for as long as the guard is alive -
+	/// a no-op in compact mode, since indent() always returns "" there.
+	class SubqueryDepthGuard {
+	public:
+		explicit SubqueryDepthGuard(TranslationContext &ctx) : ctx_(ctx) {
+			++ctx_.subqueryDepth_;
+		}
+		~SubqueryDepthGuard() {
+			--ctx_.subqueryDepth_;
+		}
+		SubqueryDepthGuard(const SubqueryDepthGuard &) = delete;
+		SubqueryDepthGuard &operator=(const SubqueryDepthGuard &) = delete;
+
+	private:
+		TranslationContext &ctx_;
+	};
 
 	/// Produce a fresh, unique table alias ("t1", "t2", ...).
 	std::string nextAlias() {
@@ -206,6 +259,8 @@ private:
 	std::string nowLiteral_;
 	std::size_t cteCounter_ = 0;
 	std::vector<CteDef> pendingCtes_;
+	bool prettyPrint_;
+	std::size_t subqueryDepth_ = 0;
 };
 
 /// Mangle a SPARQL variable name into its projected SQL column name
@@ -225,5 +280,18 @@ std::string mangleVar(const std::string &sparqlVarName, const SqlDialect &dialec
 /// combineByName's NULL padding: this column is SQL NULL exactly when the
 /// matching "v_" column is.
 std::string mangleVarTag(const std::string &sparqlVarName, const SqlDialect &dialect);
+
+/// Join `items` as a SELECT/GROUP BY/ORDER BY-style list: in compact mode,
+/// ", "-separated on one line (the introducing keyword supplies its own
+/// trailing space); in pretty mode, one item per line indented one level
+/// under the keyword, with a leading comma before every item but the first.
+/// Returns "" for an empty list.
+std::string joinColumnList(const std::vector<std::string> &items, const TranslationContext &ctx);
+
+/// Join `items` as a WHERE/HAVING/ON-style boolean-AND list: " AND "-joined
+/// on one line in compact mode; one condition per line indented one level
+/// under the introducing keyword, each preceded by "AND ", in pretty mode.
+/// Returns "" for an empty list.
+std::string joinConditions(const std::vector<std::string> &items, const TranslationContext &ctx);
 
 } // namespace sparql2sql

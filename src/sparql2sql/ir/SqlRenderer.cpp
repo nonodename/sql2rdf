@@ -103,31 +103,28 @@ using ExtraProjections = std::vector<std::pair<std::string, std::string>>;
 
 std::string renderSpj(const SpjRelation &rel, TranslationContext &ctx, const ExtraProjections *extra) {
 	const SqlDialect &dialect = ctx.dialect();
-	std::string sql = "SELECT ";
+	std::string sql = "SELECT";
 	if (rel.distinct) {
-		sql += "DISTINCT ";
+		sql += " DISTINCT";
 	}
 	if (rel.schema().empty() && (extra == nullptr || extra->empty())) {
-		sql += "1 AS " + dialect.quoteIdentifier("_dummy");
+		sql += joinColumnList({"1 AS " + dialect.quoteIdentifier("_dummy")}, ctx);
 	} else {
-		bool first = true;
+		std::vector<std::string> cols;
 		for (const auto &c : rel.schema()) {
-			sql += first ? "" : ", ";
-			first = false;
-			sql += c.renderedExpr + " AS " + mangleVar(c.var, dialect);
+			cols.push_back(c.renderedExpr + " AS " + mangleVar(c.var, dialect));
 			if (ctx.needsTag(c.var)) {
-				sql += ", " + producedTag(c, "this select-project-join block") + " AS " + mangleVarTag(c.var, dialect);
+				cols.push_back(producedTag(c, "this select-project-join block") + " AS " + mangleVarTag(c.var, dialect));
 			}
 		}
 		if (extra != nullptr) {
 			for (const auto &e : *extra) {
-				sql += first ? "" : ", ";
-				first = false;
-				sql += e.second + " AS " + e.first;
+				cols.push_back(e.second + " AS " + e.first);
 			}
 		}
+		sql += joinColumnList(cols, ctx);
 	}
-	sql += " FROM ";
+	sql += ctx.clauseSep() + "FROM ";
 	for (std::size_t i = 0; i < rel.sources.size(); ++i) {
 		if (i > 0) {
 			// Multi-source (post-flatten) spine: cross-join sources; the
@@ -137,13 +134,11 @@ std::string renderSpj(const SpjRelation &rel, TranslationContext &ctx, const Ext
 		sql += rel.sources[i].sql;
 	}
 	if (!rel.whereConds.empty()) {
-		sql += " WHERE ";
-		for (std::size_t i = 0; i < rel.whereConds.size(); ++i) {
-			if (i > 0) {
-				sql += " AND ";
-			}
-			sql += "(" + rel.whereConds[i] + ")";
+		std::vector<std::string> conds;
+		for (const auto &c : rel.whereConds) {
+			conds.push_back("(" + c + ")");
 		}
+		sql += ctx.clauseSep() + "WHERE " + joinConditions(conds, ctx);
 	}
 	return sql;
 }
@@ -206,8 +201,13 @@ std::string renderJoin(const JoinNode &join, TranslationContext &ctx) {
 	planNativeKeys(join.keys, *join.left, *join.right, ctx, leftAlias, rightAlias, leftExtra, rightExtra, nativeConds,
 	               rewritten);
 
-	std::string leftSql = renderChild(*join.left, ctx, leftExtra);
-	std::string rightSql = renderChild(*join.right, ctx, rightExtra);
+	std::string leftSql;
+	std::string rightSql;
+	{
+		TranslationContext::SubqueryDepthGuard depthGuard(ctx);
+		leftSql = renderChild(*join.left, ctx, leftExtra);
+		rightSql = renderChild(*join.right, ctx, rightExtra);
+	}
 
 	std::set<std::string> shared;
 	for (const auto &k : join.keys) {
@@ -259,28 +259,20 @@ std::string renderJoin(const JoinNode &join, TranslationContext &ctx) {
 		}
 	}
 
-	std::string sql = "SELECT ";
+	std::string sql = "SELECT";
 	if (projectExprs.empty()) {
-		sql += "1 AS " + dialect.quoteIdentifier("_dummy");
+		sql += joinColumnList({"1 AS " + dialect.quoteIdentifier("_dummy")}, ctx);
 	} else {
-		for (std::size_t i = 0; i < projectExprs.size(); ++i) {
-			if (i > 0) {
-				sql += ", ";
-			}
-			sql += projectExprs[i];
-		}
+		sql += joinColumnList(projectExprs, ctx);
 	}
 	const char *keyword = join.joinKind == JoinKind::LeftOuter ? "LEFT OUTER JOIN" : "INNER JOIN";
-	sql += " FROM (" + leftSql + ") AS " + leftAlias + " " + keyword + " (" + rightSql + ") AS " + rightAlias + " ON ";
+	sql += ctx.clauseSep() + "FROM (" + leftSql + ") AS " + leftAlias;
+	sql += ctx.clauseSep() + keyword + " (" + rightSql + ") AS " + rightAlias;
+	sql += ctx.onSep() + "ON ";
 	if (onConditions.empty()) {
 		sql += dialect.booleanLiteral(true);
 	} else {
-		for (std::size_t i = 0; i < onConditions.size(); ++i) {
-			if (i > 0) {
-				sql += " AND ";
-			}
-			sql += onConditions[i];
-		}
+		sql += joinConditions(onConditions, ctx);
 	}
 	return sql;
 }
@@ -296,8 +288,13 @@ std::string renderAntiJoin(const AntiJoinNode &anti, TranslationContext &ctx) {
 	planNativeKeys(anti.keys, *anti.left, *anti.right, ctx, leftAlias, rightAlias, leftExtra, rightExtra, nativeConds,
 	               rewritten);
 
-	std::string leftSql = renderChild(*anti.left, ctx, leftExtra);
-	std::string rightSql = renderChild(*anti.right, ctx, rightExtra);
+	std::string leftSql;
+	std::string rightSql;
+	{
+		TranslationContext::SubqueryDepthGuard depthGuard(ctx);
+		leftSql = renderChild(*anti.left, ctx, leftExtra);
+		rightSql = renderChild(*anti.right, ctx, rightExtra);
+	}
 
 	std::vector<std::string> conds;
 	for (std::size_t i = 0; i < anti.keys.size(); ++i) {
@@ -309,29 +306,25 @@ std::string renderAntiJoin(const AntiJoinNode &anti, TranslationContext &ctx) {
 		                              rightAlias + "." + mangleVar(k.var, dialect)));
 	}
 	conds.insert(conds.end(), nativeConds.begin(), nativeConds.end());
-
-	std::string cond;
-	for (std::size_t i = 0; i < conds.size(); ++i) {
-		cond += (i > 0 ? " AND " : "");
-		cond += conds[i];
-	}
+	std::string cond = joinConditions(conds, ctx);
 
 	// Project MINUS's schema (which is the left operand's) explicitly rather
 	// than SELECT *: the left side may carry hidden native-key columns that must
 	// not escape into an enclosing UNION BY NAME.
-	std::string projection;
+	std::vector<std::string> projectionCols;
 	for (const auto &c : anti.schema()) {
-		projection += (projection.empty() ? "" : ", ");
-		projection += leftAlias + "." + mangleVar(c.var, dialect) + " AS " + mangleVar(c.var, dialect);
+		projectionCols.push_back(leftAlias + "." + mangleVar(c.var, dialect) + " AS " + mangleVar(c.var, dialect));
 		if (ctx.needsTag(c.var)) {
-			projection += ", " + leftAlias + "." + mangleVarTag(c.var, dialect) + " AS " + mangleVarTag(c.var, dialect);
+			projectionCols.push_back(leftAlias + "." + mangleVarTag(c.var, dialect) + " AS " +
+			                         mangleVarTag(c.var, dialect));
 		}
 	}
-	if (projection.empty()) {
-		projection = "1 AS " + dialect.quoteIdentifier("_dummy");
-	}
-	return "SELECT " + projection + " FROM (" + leftSql + ") AS " + leftAlias + " WHERE NOT EXISTS (SELECT 1 FROM (" +
-	       rightSql + ") AS " + rightAlias + " WHERE " + cond + ")";
+	std::string sql = "SELECT";
+	sql += projectionCols.empty() ? joinColumnList({"1 AS " + dialect.quoteIdentifier("_dummy")}, ctx)
+	                              : joinColumnList(projectionCols, ctx);
+	sql += ctx.clauseSep() + "FROM (" + leftSql + ") AS " + leftAlias + " WHERE NOT EXISTS (SELECT 1 FROM (" + rightSql +
+	       ") AS " + rightAlias + " WHERE " + cond + ")";
+	return sql;
 }
 
 std::string renderUnion(const UnionByNameNode &un, TranslationContext &ctx) {
@@ -345,15 +338,23 @@ std::string renderUnion(const UnionByNameNode &un, TranslationContext &ctx) {
 
 std::string renderFilter(const FilterNode &f, TranslationContext &ctx) {
 	std::string alias = ctx.nextAlias();
-	std::string childSql = renderNode(*f.child, ctx);
+	std::string childSql;
+	{
+		TranslationContext::SubqueryDepthGuard depthGuard(ctx);
+		childSql = renderNode(*f.child, ctx);
+	}
 	TranslatedPattern scope = scopeOf(*f.child);
 	std::string cond = translateExpression(*f.predicate, scope, alias, ctx);
-	return "SELECT * FROM (" + childSql + ") AS " + alias + " WHERE " + cond;
+	return "SELECT *" + ctx.clauseSep() + "FROM (" + childSql + ") AS " + alias + ctx.clauseSep() + "WHERE " + cond;
 }
 
 std::string renderBind(const BindNode &b, TranslationContext &ctx) {
 	std::string alias = ctx.nextAlias();
-	std::string childSql = renderNode(*b.child, ctx);
+	std::string childSql;
+	{
+		TranslationContext::SubqueryDepthGuard depthGuard(ctx);
+		childSql = renderNode(*b.child, ctx);
+	}
 	TranslatedPattern scope = scopeOf(*b.child);
 	TermSql bound = translateTerm(*b.expr, scope, alias, ctx);
 	std::string extra;
@@ -365,8 +366,8 @@ std::string renderBind(const BindNode &b, TranslationContext &ctx) {
 		}
 		extra = ", (" + bound.tag + ") AS " + mangleVarTag(b.outVar, ctx.dialect());
 	}
-	return "SELECT *, (" + bound.value + ") AS " + mangleVar(b.outVar, ctx.dialect()) + extra + " FROM (" + childSql +
-	       ") AS " + alias;
+	return "SELECT *, (" + bound.value + ") AS " + mangleVar(b.outVar, ctx.dialect()) + extra + ctx.clauseSep() +
+	       "FROM (" + childSql + ") AS " + alias;
 }
 
 // E+ closure rendering. Registers two CTEs on `ctx` (the one-hop step
@@ -476,28 +477,25 @@ std::string renderRaw(const RawRelation &raw, TranslationContext &ctx) {
 	if (added.empty()) {
 		return raw.sql;
 	}
-	return "SELECT *" + added + " FROM (" + raw.sql + ") AS " + ctx.nextAlias();
+	return "SELECT *" + added + ctx.clauseSep() + "FROM (" + raw.sql + ") AS " + ctx.nextAlias();
 }
 
 std::string renderEmpty(const EmptyNode &e, TranslationContext &ctx) {
 	const SqlDialect &dialect = ctx.dialect();
 	if (e.schema().empty()) {
-		return "SELECT 1 AS " + dialect.quoteIdentifier("_dummy") + " WHERE FALSE";
+		return "SELECT" + joinColumnList({"1 AS " + dialect.quoteIdentifier("_dummy")}, ctx) + ctx.clauseSep() +
+		       "WHERE FALSE";
 	}
-	std::string sql = "SELECT ";
-	for (std::size_t i = 0; i < e.schema().size(); ++i) {
-		if (i > 0) {
-			sql += ", ";
-		}
-		sql += "CAST(NULL AS VARCHAR) AS " + mangleVar(e.schema()[i].var, dialect);
-		if (ctx.needsTag(e.schema()[i].var)) {
+	std::vector<std::string> cols;
+	for (const auto &c : e.schema()) {
+		cols.push_back("CAST(NULL AS VARCHAR) AS " + mangleVar(c.var, dialect));
+		if (ctx.needsTag(c.var)) {
 			// No rows, so no term: a NULL tag beside the NULL value is both the
 			// only honest answer and the one the invariant requires.
-			sql += ", CAST(NULL AS VARCHAR) AS " + mangleVarTag(e.schema()[i].var, dialect);
+			cols.push_back("CAST(NULL AS VARCHAR) AS " + mangleVarTag(c.var, dialect));
 		}
 	}
-	sql += " WHERE FALSE";
-	return sql;
+	return "SELECT" + joinColumnList(cols, ctx) + ctx.clauseSep() + "WHERE FALSE";
 }
 
 std::string renderNode(const RelNode &node, TranslationContext &ctx) {

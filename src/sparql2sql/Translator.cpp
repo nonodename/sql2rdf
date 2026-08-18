@@ -143,15 +143,11 @@ GroupByBuild buildGroupBy(const Query &query, const TranslatedPattern &source, c
 
 std::string translateHaving(const Query &query, const TranslatedPattern &source, const std::string &alias,
                             TranslationContext &ctx) {
-	std::string havingSql;
+	std::vector<std::string> conds;
 	for (const auto &h : query.solutionModifier.having) {
-		std::string cond = translateExpression(*h, source, alias, ctx);
-		if (!havingSql.empty()) {
-			havingSql += " AND ";
-		}
-		havingSql += cond;
+		conds.push_back(translateExpression(*h, source, alias, ctx));
 	}
-	return havingSql;
+	return joinConditions(conds, ctx);
 }
 
 // The expression that *defines* a SELECT-list-only output alias: a
@@ -237,11 +233,8 @@ std::string translateOrderBy(const Query &query, const TranslatedPattern &source
 	if (query.solutionModifier.orderBy.empty()) {
 		return std::string();
 	}
-	std::string sql = " ORDER BY ";
+	std::vector<std::string> keys;
 	for (std::size_t i = 0; i < query.solutionModifier.orderBy.size(); ++i) {
-		if (i > 0) {
-			sql += ", ";
-		}
 		const OrderCondition &oc = query.solutionModifier.orderBy[i];
 		const bool descending = (oc.direction == OrderDirection::Desc);
 		if (oc.expr->kind() == ExprKind::VarRef) {
@@ -260,13 +253,13 @@ std::string translateOrderBy(const Query &query, const TranslatedPattern &source
 				}
 				// No tag is reachable through a bare alias reference, so this stays
 				// on the single-key path whatever the definition's dimension is.
-				sql += sortKeys(key, ctx.dialect(), descending);
+				keys.push_back(sortKeys(key, ctx.dialect(), descending));
 				continue;
 			}
 		}
-		sql += sortKeys(translateTerm(*oc.expr, source, alias, ctx), ctx.dialect(), descending);
+		keys.push_back(sortKeys(translateTerm(*oc.expr, source, alias, ctx), ctx.dialect(), descending));
 	}
-	return sql;
+	return ctx.clauseSep() + "ORDER BY" + joinColumnList(keys, ctx);
 }
 
 // Prepend the query's collected WITH-clause entries (registered by
@@ -286,14 +279,11 @@ std::string prependCtes(const TranslationContext &ctx, const std::string &body) 
 	if (ctx.pendingCtes().empty()) {
 		return body;
 	}
-	std::string sql = "WITH RECURSIVE ";
-	for (std::size_t i = 0; i < ctx.pendingCtes().size(); ++i) {
-		if (i > 0) {
-			sql += ", ";
-		}
-		sql += ctx.pendingCtes()[i].name + " AS (" + ctx.pendingCtes()[i].bodySql + ")";
+	std::vector<std::string> cteDefs;
+	for (const auto &cte : ctx.pendingCtes()) {
+		cteDefs.push_back(cte.name + " AS (" + cte.bodySql + ")");
 	}
-	return sql + " " + body;
+	return "WITH RECURSIVE" + joinColumnList(cteDefs, ctx) + ctx.clauseSep() + body;
 }
 
 } // namespace
@@ -330,7 +320,11 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 	opts.ctx = &ctx;
 	rootNode = optimize(std::move(rootNode), opts);
 	markExpressionTagNeeds(*rootNode, &query, ctx);
-	TranslatedPattern source = renderRelation(*rootNode, ctx);
+	TranslatedPattern source;
+	{
+		TranslationContext::SubqueryDepthGuard depthGuard(ctx);
+		source = renderRelation(*rootNode, ctx);
+	}
 
 	std::string alias = ctx.nextAlias();
 
@@ -403,32 +397,21 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 	std::string havingSql = translateHaving(query, source, alias, ctx);
 	std::string orderBySql = translateOrderBy(query, source, alias, selectListAliasNames, ctx);
 
-	std::string sql = "SELECT ";
+	std::string sql = "SELECT";
 	if (query.distinct || query.reduced) {
-		sql += "DISTINCT ";
+		sql += " DISTINCT";
 	}
 	if (selectCols.empty()) {
-		sql += "1 AS " + dialect.quoteIdentifier("_dummy");
+		sql += joinColumnList({"1 AS " + dialect.quoteIdentifier("_dummy")}, ctx);
 	} else {
-		for (std::size_t i = 0; i < selectCols.size(); ++i) {
-			if (i > 0) {
-				sql += ", ";
-			}
-			sql += selectCols[i];
-		}
+		sql += joinColumnList(selectCols, ctx);
 	}
-	sql += " FROM (" + source.sql + ") AS " + alias;
+	sql += ctx.clauseSep() + "FROM (" + source.sql + ") AS " + alias;
 	if (grouping && !groupBy.groupByKeys.empty()) {
-		sql += " GROUP BY ";
-		for (std::size_t i = 0; i < groupBy.groupByKeys.size(); ++i) {
-			if (i > 0) {
-				sql += ", ";
-			}
-			sql += groupBy.groupByKeys[i];
-		}
+		sql += ctx.clauseSep() + "GROUP BY" + joinColumnList(groupBy.groupByKeys, ctx);
 	}
 	if (!havingSql.empty()) {
-		sql += " HAVING " + havingSql;
+		sql += ctx.clauseSep() + "HAVING " + havingSql;
 	}
 	sql += orderBySql;
 	sql += dialect.limitOffsetClause(query.solutionModifier.hasLimit, query.solutionModifier.limit,
@@ -472,8 +455,8 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 }
 
 std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMapping &mapping,
-                           const SqlDialect &dialect, const TypeCatalog *catalog) {
-	TranslationContext ctx(mapping, dialect, catalog);
+                           const SqlDialect &dialect, const TypeCatalog *catalog, bool prettyPrint) {
+	TranslationContext ctx(mapping, dialect, catalog, prettyPrint);
 
 	if (!query.datasetClauses.empty()) {
 		throw TranslationError(
@@ -493,7 +476,11 @@ std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMa
 		askOpts.ctx = &ctx;
 		rootNode = optimize(std::move(rootNode), askOpts);
 		markExpressionTagNeeds(*rootNode, &query, ctx);
-		TranslatedPattern source = renderRelation(*rootNode, ctx);
+		TranslatedPattern source;
+		{
+			TranslationContext::SubqueryDepthGuard depthGuard(ctx);
+			source = renderRelation(*rootNode, ctx);
+		}
 
 		std::string alias = ctx.nextAlias();
 		bool grouping = !query.solutionModifier.groupBy.empty() || queryHasAggregate(query);
@@ -504,18 +491,12 @@ std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMa
 		for (const auto &c : groupBy.selectListPrefixCols) {
 			innerSql += ", " + c;
 		}
-		innerSql += " FROM (" + source.sql + ") AS " + alias;
+		innerSql += ctx.clauseSep() + "FROM (" + source.sql + ") AS " + alias;
 		if (grouping && !groupBy.groupByKeys.empty()) {
-			innerSql += " GROUP BY ";
-			for (std::size_t i = 0; i < groupBy.groupByKeys.size(); ++i) {
-				if (i > 0) {
-					innerSql += ", ";
-				}
-				innerSql += groupBy.groupByKeys[i];
-			}
+			innerSql += ctx.clauseSep() + "GROUP BY" + joinColumnList(groupBy.groupByKeys, ctx);
 		}
 		if (!havingSql.empty()) {
-			innerSql += " HAVING " + havingSql;
+			innerSql += ctx.clauseSep() + "HAVING " + havingSql;
 		}
 		// ORDER BY/LIMIT/OFFSET are intentionally ignored for ASK: they are
 		// semantically inert for an existence check.

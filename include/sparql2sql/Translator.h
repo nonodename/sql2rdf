@@ -28,8 +28,13 @@ struct TypeCatalog;
 /// columns are emitted natively (uncast) rather than as VARCHAR comparisons -
 /// index-friendly and materially faster on large tables. When null, all joins
 /// fall back to the always-correct VARCHAR-cast form.
+///
+/// `prettyPrint` is a debug/readability aid only: when true, the returned SQL
+/// is laid out with newlines, indentation and one-column-per-line formatting
+/// instead of the default single-line form. It has no effect on the SQL's
+/// meaning or on execution performance once handed to the engine.
 std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMapping &mapping,
-                           const SqlDialect &dialect, const TypeCatalog *catalog = nullptr);
+                           const SqlDialect &dialect, const TypeCatalog *catalog = nullptr, bool prettyPrint = false);
 
 /// Translate a Query (top-level or a `{ SELECT ... }` subquery) against an
 /// existing TranslationContext, applying its own SELECT projection/
