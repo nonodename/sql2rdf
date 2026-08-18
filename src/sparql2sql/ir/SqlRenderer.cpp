@@ -41,9 +41,7 @@ TranslatedPattern scopeOf(const RelNode &node) {
 std::string producedTag(const ColumnInfo &col, const char *nodeDescription) {
 	if (col.tagExpr.empty()) {
 		throw TranslationError(
-		    std::string("unsupported: the RDF term dimension of ?") + col.var +
-		    " is needed at run "
-		    "time, but " +
+		    std::string("unsupported: the RDF term dimension of ?") + col.var + " is needed at run time, but " +
 		    nodeDescription +
 		    " cannot supply one - its contributing term maps "
 		    "disagree and it is not re-rendered late enough to carry a per-row tag column. Declare a "
@@ -99,11 +97,15 @@ std::string keyComparison(const EquiKey &k, const std::string &lcol, const std::
 // Extra projected columns to append to an SpjRelation's SELECT list: the
 // (mangled name, SQL expression) pairs a join renderer needs exposed through
 // the derived-table boundary so it can compare native key columns.
+// Some magic numbers for the reserve call, try and allocate sufficient space
+// for the common case without over-allocating too much.
 using ExtraProjections = std::vector<std::pair<std::string, std::string>>;
 
 std::string renderSpj(const SpjRelation &rel, TranslationContext &ctx, const ExtraProjections *extra) {
 	const SqlDialect &dialect = ctx.dialect();
-	std::string sql = "SELECT";
+	std::string sql;
+	sql.reserve(256 + rel.schema().size() * 64 + rel.sources.size() * 128 + rel.whereConds.size() * 64);
+	sql = "SELECT";
 	if (rel.distinct) {
 		sql += " DISTINCT";
 	}
@@ -114,7 +116,8 @@ std::string renderSpj(const SpjRelation &rel, TranslationContext &ctx, const Ext
 		for (const auto &c : rel.schema()) {
 			cols.push_back(c.renderedExpr + " AS " + mangleVar(c.var, dialect));
 			if (ctx.needsTag(c.var)) {
-				cols.push_back(producedTag(c, "this select-project-join block") + " AS " + mangleVarTag(c.var, dialect));
+				cols.push_back(producedTag(c, "this select-project-join block") + " AS " +
+				               mangleVarTag(c.var, dialect));
 			}
 		}
 		if (extra != nullptr) {
@@ -135,6 +138,7 @@ std::string renderSpj(const SpjRelation &rel, TranslationContext &ctx, const Ext
 	}
 	if (!rel.whereConds.empty()) {
 		std::vector<std::string> conds;
+		conds.reserve(rel.whereConds.size());
 		for (const auto &c : rel.whereConds) {
 			conds.push_back("(" + c + ")");
 		}
@@ -322,8 +326,8 @@ std::string renderAntiJoin(const AntiJoinNode &anti, TranslationContext &ctx) {
 	std::string sql = "SELECT";
 	sql += projectionCols.empty() ? joinColumnList({"1 AS " + dialect.quoteIdentifier("_dummy")}, ctx)
 	                              : joinColumnList(projectionCols, ctx);
-	sql += ctx.clauseSep() + "FROM (" + leftSql + ") AS " + leftAlias + " WHERE NOT EXISTS (SELECT 1 FROM (" + rightSql +
-	       ") AS " + rightAlias + " WHERE " + cond + ")";
+	sql += ctx.clauseSep() + "FROM (" + leftSql + ") AS " + leftAlias + " WHERE NOT EXISTS (SELECT 1 FROM (" +
+	       rightSql + ") AS " + rightAlias + " WHERE " + cond + ")";
 	return sql;
 }
 

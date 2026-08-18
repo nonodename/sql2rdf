@@ -144,6 +144,7 @@ GroupByBuild buildGroupBy(const Query &query, const TranslatedPattern &source, c
 std::string translateHaving(const Query &query, const TranslatedPattern &source, const std::string &alias,
                             TranslationContext &ctx) {
 	std::vector<std::string> conds;
+	conds.reserve(query.solutionModifier.having.size());
 	for (const auto &h : query.solutionModifier.having) {
 		conds.push_back(translateExpression(*h, source, alias, ctx));
 	}
