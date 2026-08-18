@@ -231,6 +231,7 @@ std::unique_ptr<InlineData> Parser::parseInlineDataFull() {
 	expectType(TokenType::LBrace, "'{' after VALUES variable list");
 	while (!check(TokenType::RBrace)) {
 		std::vector<std::unique_ptr<Term>> row;
+		row.reserve(data->vars.size());
 		if (!matchType(TokenType::Nil)) {
 			expectType(TokenType::LParen, "'(' to start a VALUES row");
 			while (!check(TokenType::RParen)) {
@@ -391,6 +392,7 @@ std::unique_ptr<Term> Parser::parseCollection(std::vector<TriplePattern> &out, b
 	}
 	expectType(TokenType::LParen, "'(' to start a collection");
 	std::vector<std::unique_ptr<Term>> elements;
+	elements.reserve(8);
 	do {
 		elements.push_back(parseGraphNode(out, pathMode));
 	} while (!check(TokenType::RParen));

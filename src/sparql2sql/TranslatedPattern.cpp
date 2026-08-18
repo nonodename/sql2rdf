@@ -17,6 +17,7 @@ std::string joinColumnList(const std::vector<std::string> &items, const Translat
 		return std::string();
 	}
 	std::string sql;
+	sql.reserve(64 + items.size() * 32); // rough guess to avoid too many reallocs
 	for (std::size_t i = 0; i < items.size(); ++i) {
 		sql += i == 0 ? (ctx.pretty() ? (ctx.nl() + ctx.indent(1)) : std::string(" "))
 		              : (ctx.pretty() ? (ctx.nl() + ctx.indent(1) + ", ") : std::string(", "));
@@ -30,7 +31,9 @@ std::string joinConditions(const std::vector<std::string> &items, const Translat
 		return std::string();
 	}
 	std::string sep = ctx.pretty() ? (ctx.nl() + ctx.indent(1) + "AND ") : std::string(" AND ");
-	std::string sql = items[0];
+	std::string sql;
+	sql.reserve(64 + items.size() * 32); // rough guess to avoid too many reallocs
+	sql = items[0];
 	for (std::size_t i = 1; i < items.size(); ++i) {
 		sql += sep + items[i];
 	}

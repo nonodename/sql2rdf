@@ -268,6 +268,7 @@ std::unique_ptr<Expression> Parser::parseIriOrFunctionCall() {
 
 std::vector<std::unique_ptr<Expression>> Parser::parseArgList(bool *distinctOut) {
 	std::vector<std::unique_ptr<Expression>> args;
+	args.reserve(8);
 	if (matchType(TokenType::Nil)) {
 		if (distinctOut) {
 			*distinctOut = false;
@@ -290,6 +291,7 @@ std::vector<std::unique_ptr<Expression>> Parser::parseArgList(bool *distinctOut)
 
 std::vector<std::unique_ptr<Expression>> Parser::parseExpressionList() {
 	std::vector<std::unique_ptr<Expression>> list;
+	list.reserve(8);
 	if (matchType(TokenType::Nil)) {
 		return list;
 	}
@@ -306,6 +308,7 @@ std::unique_ptr<Expression> Parser::parseBuiltinArgsN(BuiltinFunction fn, int mi
 	advance(); // consume the builtin's keyword
 	expectType(TokenType::LParen, "'(' to start this function's argument list");
 	std::vector<std::unique_ptr<Expression>> args;
+	args.reserve(maxArgs);
 	args.push_back(parseExpression());
 	while (static_cast<int>(args.size()) < maxArgs && matchType(TokenType::Comma)) {
 		args.push_back(parseExpression());
@@ -385,6 +388,7 @@ std::unique_ptr<Expression> Parser::parseBuiltInCallOrAggregateOrExists() {
 		advance();
 		expectType(TokenType::LParen, "'(' after IF");
 		std::vector<std::unique_ptr<Expression>> args;
+		args.reserve(3);
 		args.push_back(parseExpression());
 		expectType(TokenType::Comma, "',' in IF(...)");
 		args.push_back(parseExpression());

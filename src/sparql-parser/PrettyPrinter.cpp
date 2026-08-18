@@ -113,6 +113,7 @@ std::string pathStr(const PropertyPathExpr &p) {
 	case PathKind::NegatedPropertySet: {
 		const auto &n = static_cast<const NegatedPropertySet &>(p);
 		std::string s = "!(";
+		s.reserve(32);
 		bool first = true;
 		for (const auto &f : n.forward) {
 			if (!first) {
@@ -313,7 +314,9 @@ std::string exprStr(const Expression &e) {
 	}
 	case ExprKind::In: {
 		const auto &in = static_cast<const InExpr &>(e);
-		std::string s = exprStr(*in.lhs) + (in.negated ? " NOT IN (" : " IN (");
+		std::string s;
+		s.reserve(128);
+		s = exprStr(*in.lhs) + (in.negated ? " NOT IN (" : " IN (");
 		for (std::size_t i = 0; i < in.list.size(); ++i) {
 			if (i) {
 				s += ", ";
@@ -324,7 +327,9 @@ std::string exprStr(const Expression &e) {
 	}
 	case ExprKind::FunctionCall: {
 		const auto &f = static_cast<const FunctionCallExpr &>(e);
-		std::string s = f.iri->lexicalForm + "(";
+		std::string s;
+		s.reserve(128);
+		s = f.iri->lexicalForm + "(";
 		if (f.distinct) {
 			s += "DISTINCT ";
 		}
@@ -338,7 +343,9 @@ std::string exprStr(const Expression &e) {
 	}
 	case ExprKind::BuiltInCall: {
 		const auto &b = static_cast<const BuiltInCallExpr &>(e);
-		std::string s = std::string(builtinName(b.fn)) + "(";
+		std::string s;
+		s.reserve(128);
+		s = std::string(builtinName(b.fn)) + "(";
 		for (std::size_t i = 0; i < b.args.size(); ++i) {
 			if (i) {
 				s += ", ";
@@ -349,7 +356,9 @@ std::string exprStr(const Expression &e) {
 	}
 	case ExprKind::Aggregate: {
 		const auto &a = static_cast<const AggregateExpr &>(e);
-		std::string s = std::string(aggregateName(a.aggKind)) + "(";
+		std::string s;
+		s.reserve(128);
+		s = std::string(aggregateName(a.aggKind)) + "(";
 		if (a.distinct) {
 			s += "DISTINCT ";
 		}

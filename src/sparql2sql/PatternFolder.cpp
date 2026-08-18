@@ -48,6 +48,7 @@ std::vector<EquiKey> buildKeys(const RelNode &left, const RelNode &right) {
 	std::set<std::string> leftOpt = left.optionalVars();
 	std::set<std::string> rightOpt = right.optionalVars();
 	std::vector<EquiKey> keys;
+	keys.reserve(shared.size());
 	for (const auto &v : shared) {
 		EquiKey k;
 		k.var = v;
@@ -110,8 +111,11 @@ RelNodePtr translateInlineData(const sparql::ast::InlineData &values, Translatio
 	}
 
 	std::vector<std::string> rowSqls;
+	rowSqls.reserve(values.rows.size());
 	for (const auto &row : values.rows) {
-		std::string sql = "SELECT ";
+		std::string sql;
+		sql.reserve(256); // rough guess to avoid too many reallocs
+		sql = "SELECT ";
 		for (std::size_t i = 0; i < row.size(); ++i) {
 			if (i > 0) {
 				sql += ", ";

@@ -12,7 +12,7 @@ bool startsWithAt(const std::string &haystack, std::size_t pos, const std::strin
 	}
 	return haystack.compare(pos, needle.size(), needle) == 0;
 }
-
+//TODO Merge with other implementation
 bool isHexDigit(char c) {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
@@ -31,6 +31,7 @@ int hexVal(char c) {
 
 std::vector<TemplateSegment> parseTemplate(const std::string &templateString) {
 	std::vector<TemplateSegment> segments;
+	segments.reserve(8); // rough guess to avoid too many reallocs
 	std::string literalBuf;
 	std::size_t i = 0;
 	const std::size_t n = templateString.size();
@@ -72,6 +73,7 @@ std::vector<TemplateSegment> parseTemplate(const std::string &templateString) {
 
 std::vector<std::string> referencedColumns(const std::vector<TemplateSegment> &segments) {
 	std::vector<std::string> out;
+	out.reserve(segments.size()); // rough guess to avoid too many reallocs
 	for (const auto &seg : segments) {
 		if (!seg.isPlaceholder) {
 			continue;

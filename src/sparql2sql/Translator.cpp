@@ -222,6 +222,7 @@ std::string sortKeys(const TermSql &key, const SqlDialect &dialect, bool descend
 	                                       dialect.tryCastToDouble(key.value), dialect.tryCastToTimestamp(key.value),
 	                                       key.value};
 	std::string sql;
+	sql.reserve(64 + keys.size() * 32); // rough guess to avoid too many reallocs
 	for (std::size_t i = 0; i < keys.size(); ++i) {
 		sql += (i > 0 ? ", " : "");
 		sql += keys[i] + direction;
@@ -235,6 +236,7 @@ std::string translateOrderBy(const Query &query, const TranslatedPattern &source
 		return std::string();
 	}
 	std::vector<std::string> keys;
+	keys.reserve(query.solutionModifier.orderBy.size());
 	for (std::size_t i = 0; i < query.solutionModifier.orderBy.size(); ++i) {
 		const OrderCondition &oc = query.solutionModifier.orderBy[i];
 		const bool descending = (oc.direction == OrderDirection::Desc);
@@ -281,6 +283,7 @@ std::string prependCtes(const TranslationContext &ctx, const std::string &body) 
 		return body;
 	}
 	std::vector<std::string> cteDefs;
+	cteDefs.reserve(ctx.pendingCtes().size());
 	for (const auto &cte : ctx.pendingCtes()) {
 		cteDefs.push_back(cte.name + " AS (" + cte.bodySql + ")");
 	}
@@ -488,7 +491,9 @@ std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMa
 		GroupByBuild groupBy = buildGroupBy(query, source, alias, ctx);
 		std::string havingSql = translateHaving(query, source, alias, ctx);
 
-		std::string innerSql = "SELECT 1";
+		std::string innerSql;
+		innerSql.reserve(64 + groupBy.selectListPrefixCols.size() * 32); // rough guess to avoid too many reallocs
+		innerSql = "SELECT 1";
 		for (const auto &c : groupBy.selectListPrefixCols) {
 			innerSql += ", " + c;
 		}

@@ -90,6 +90,7 @@ RelNodePtr translateZeroOrOne(const sparql::ast::ZeroOrOnePath &path, const Term
 	}
 
 	std::vector<RelNodePtr> arms;
+	arms.reserve(2);
 	arms.push_back(std::move(some));
 	arms.push_back(std::move(zero));
 	return unionAll(std::move(arms), ctx, /*dedup=*/true);

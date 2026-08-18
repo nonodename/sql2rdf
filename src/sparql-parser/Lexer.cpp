@@ -375,6 +375,7 @@ std::string Lexer::lexPercentOrLocalEscape() {
 
 std::string Lexer::lexPnLocal() {
 	std::string out;
+	out.reserve(32);
 	// First character: PN_CHARS_U | ':' | digit | PLX
 	if (peek() == '%' || peek() == '\\') {
 		out += lexPercentOrLocalEscape();
@@ -449,6 +450,7 @@ Token Lexer::lexBlankNodeLabel() {
 	advance(); // '_'
 	advance(); // ':'
 	std::string label;
+	label.reserve(32);
 	if (!isNameStartChar(peek()) && !std::isdigit(static_cast<unsigned char>(peek()))) {
 		error("expected blank node label after '_:'");
 	}
@@ -472,7 +474,9 @@ Token Lexer::lexNumberOrSign() {
 
 Token Lexer::lexNumber(bool negative, bool consumedSign) {
 	std::size_t startLine = line_, startColumn = column_;
-	std::string text = negative ? "-" : (consumedSign ? "+" : "");
+	std::string text;
+	text.reserve(32);
+	text = negative ? "-" : (consumedSign ? "+" : "");
 	bool sawDigitsBeforeDot = false;
 	while (std::isdigit(static_cast<unsigned char>(peek()))) {
 		text.push_back(advance());
@@ -518,6 +522,7 @@ Token Lexer::lexString() {
 		advance();
 	}
 	std::string value;
+	value.reserve(32);
 	for (;;) {
 		if (peek() == '\0') {
 			error("unterminated string literal");
@@ -585,6 +590,7 @@ Token Lexer::lexLangTagOrCaret() {
 	std::size_t startLine = line_, startColumn = column_;
 	advance(); // '@'
 	std::string tag;
+	tag.reserve(32);
 	if (!std::isalpha(static_cast<unsigned char>(peek()))) {
 		error("expected language tag after '@'");
 	}

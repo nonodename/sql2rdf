@@ -234,7 +234,9 @@ std::string replaceAll(std::string s, const std::string &from, const std::string
 // (dropped alias -> kept alias). Aliases only ever appear as `alias."col"`, so
 // matching on the trailing dot is exact: "t2." never matches inside "t20.".
 std::string applyRename(const std::string &sql, const std::map<std::string, std::string> &rename) {
-	std::string out = sql;
+	std::string out;
+	out.reserve(sql.size()+rename.size()*8); // rough guess to avoid too many reallocs
+	out = sql;
 	for (const auto &r : rename) {
 		out = replaceAll(out, r.first + ".", r.second + ".");
 	}
@@ -286,6 +288,7 @@ void eliminateSelfJoinsInSpj(SpjRelation &spj) {
 	}
 
 	std::vector<SpjSource> keptSources;
+	keptSources.reserve(spj.sources.size() - rename.size());
 	for (const auto &s : spj.sources) {
 		if (rename.count(s.alias) == 0) {
 			keptSources.push_back(s);
@@ -624,6 +627,7 @@ RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::
 		// doesn't supply) stays a FilterNode above it.
 		SpjRelation &spj = static_cast<SpjRelation &>(*child);
 		std::vector<const sparql::ast::Expression *> keep;
+		keep.reserve(conjuncts.size());
 		for (const auto *c : conjuncts) {
 			if (ctx == nullptr || containsExists(*c) || !foldConjunctIntoSpj(spj, *c, *ctx)) {
 				keep.push_back(c);

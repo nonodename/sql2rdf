@@ -36,7 +36,9 @@ std::string DuckDbDialect::concat(const std::vector<std::string> &parts) const {
 	if (parts.empty()) {
 		return stringLiteral("");
 	}
-	std::string out = "(";
+	std::string out;
+	out.reserve(parts.size() * 16); // rough guess to avoid too many reallocs
+	out = "(";
 	for (std::size_t i = 0; i < parts.size(); ++i) {
 		if (i > 0) {
 			out += " || ";
@@ -132,6 +134,7 @@ std::string DuckDbDialect::argMinMaxBy(const std::string &expr, const std::strin
 std::string DuckDbDialect::combineByName(bool all, const std::vector<std::string> &armSqls) const {
 	std::string keyword = all ? " UNION ALL BY NAME " : " UNION BY NAME ";
 	std::string out;
+	out.reserve(armSqls.size() * 128); // rough guess to avoid too many reallocs
 	for (std::size_t i = 0; i < armSqls.size(); ++i) {
 		if (i > 0) {
 			out += keyword;

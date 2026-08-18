@@ -141,6 +141,7 @@ void fillTemplateKeyInfo(ColumnInfo &col, const SqlDialect &dialect) {
 }
 
 void addUnique(std::vector<std::string> &out, const std::vector<std::string> &more) {
+	out.reserve(more.size());
 	for (const auto &v : more) {
 		if (std::find(out.begin(), out.end(), v) == out.end()) {
 			out.push_back(v);
@@ -169,6 +170,7 @@ bool predicateCouldMatchIri(const PredicateConstraint &predicateSpec, const std:
 // inversion conditions that would have matched that IRI.
 std::string negateConjunction(const std::vector<std::string> &conditions) {
 	std::string joined;
+	joined.reserve(64 + conditions.size() * 32); // rough guess to avoid too many reallocs
 	for (std::size_t i = 0; i < conditions.size(); ++i) {
 		if (i > 0) {
 			joined += " AND ";
@@ -265,7 +267,9 @@ void addConstantTermArm(std::vector<RelNodePtr> &arms, const std::string &value,
 
 	RelNodePtr node(new RawRelation());
 	RawRelation &raw = static_cast<RawRelation &>(*node);
-	std::string sql = "SELECT ";
+	std::string sql;
+	sql.reserve(64 + varNames.size() * 32); // rough guess to avoid too many reallocs
+	sql = "SELECT ";
 	for (std::size_t i = 0; i < varNames.size(); ++i) {
 		if (i > 0) {
 			sql += ", ";
@@ -478,7 +482,7 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 	}
 
 	std::vector<RelNodePtr> branches;
-
+	branches.reserve(ctx.mapping().triplesMaps.size() * 2); // rough guess to avoid too many reallocs
 	for (const auto &tmPtr : ctx.mapping().triplesMaps) {
 		const r2rml::TriplesMap &tm = *tmPtr;
 		if (!tm.logicalTable || !tm.subjectMap) {
@@ -628,7 +632,7 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 
 RelNodePtr allTermsRelation(const std::vector<std::string> &varNames, TranslationContext &ctx) {
 	std::vector<RelNodePtr> arms;
-
+	arms.reserve(ctx.mapping().triplesMaps.size() * 2); // rough guess to avoid too many reallocs
 	for (const auto &tmPtr : ctx.mapping().triplesMaps) {
 		const r2rml::TriplesMap &tm = *tmPtr;
 		if (!tm.logicalTable || !tm.subjectMap) {

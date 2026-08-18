@@ -239,7 +239,9 @@ std::string translateUnary(const UnaryExpr &u, const TranslatedPattern &scope, c
 std::string translateIn(const InExpr &in, const TranslatedPattern &scope, const std::string &alias,
                         TranslationContext &ctx) {
 	std::string lhs = tr(*in.lhs, scope, alias, ctx);
-	std::string sql = "(" + lhs + (in.negated ? " NOT IN (" : " IN (");
+	std::string sql;
+	sql.reserve(64 + in.list.size() * 32); // rough guess to avoid too many reallocs
+	sql = "(" + lhs + (in.negated ? " NOT IN (" : " IN (");
 	for (std::size_t i = 0; i < in.list.size(); ++i) {
 		if (i > 0) {
 			sql += ", ";
@@ -294,6 +296,7 @@ std::string translateExists(const ExistsExpr &ex, const TranslatedPattern &scope
 		// them is what lets the engine decorrelate this into a hash semi-join
 		// instead of a nested loop over the whole inner relation.
 		std::string cond;
+		cond.reserve(shared.size() * 64); // rough guess to avoid too many reallocs
 		bool first = true;
 		for (const auto &v : shared) {
 			std::string outerCol = alias + "." + mangleVar(v, ctx.dialect());
@@ -486,7 +489,9 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 		return "CAST(" + std::string(fn) + dialect.tryCastToDouble(argSql(0)) + ") AS VARCHAR)";
 	}
 	case BuiltinFunction::Coalesce: {
-		std::string sql = "COALESCE(";
+		std::string sql;
+		sql.reserve(64 + args.size() * 32); // rough guess to avoid too many reallocs 
+		sql = "COALESCE(";
 		for (std::size_t i = 0; i < args.size(); ++i) {
 			if (i > 0) {
 				sql += ", ";

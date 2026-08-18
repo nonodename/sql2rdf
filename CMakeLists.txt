@@ -499,3 +499,16 @@ if(SQL2RDF_IS_TOP_LEVEL AND SQL2RDF_BUILD_TESTS)
     )
   endif()
 endif()
+
+# ----------------------------------------------------------------------------
+# distclean target - the built-in 'clean' target only removes compiled
+# objects/binaries; this wipes the whole build directory (CMake cache,
+# generated files, coverage reports included). Run cmake -B build again
+# afterwards to reconfigure.
+# ----------------------------------------------------------------------------
+if(SQL2RDF_IS_TOP_LEVEL)
+  add_custom_target(distclean
+    COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_CURRENT_BINARY_DIR}
+    COMMENT "Removing build directory ${CMAKE_CURRENT_BINARY_DIR}..."
+  )
+endif()

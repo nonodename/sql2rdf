@@ -78,7 +78,9 @@ std::string closureTagProjection(const ColumnInfo &col, TranslationContext &ctx)
 // correlated/anti-join into a hash semi-join and leaves it a nested loop over
 // the inner relation.
 std::string keyComparison(const EquiKey &k, const std::string &lcol, const std::string &rcol) {
-	std::string cond = lcol + " = " + rcol;
+	std::string cond;
+	cond.reserve(128);
+	cond = lcol + " = " + rcol;
 	if (!k.nullSafe) {
 		return cond;
 	}
@@ -220,6 +222,7 @@ std::string renderJoin(const JoinNode &join, TranslationContext &ctx) {
 
 	std::vector<std::string> onConditions;
 	std::vector<std::string> projectExprs;
+	projectExprs.reserve(join.schema().size() + join.keys.size() * 2);
 	for (std::size_t i = 0; i < join.keys.size(); ++i) {
 		const EquiKey &k = join.keys[i];
 		std::string lcol = leftAlias + "." + mangleVar(k.var, dialect);
@@ -263,7 +266,9 @@ std::string renderJoin(const JoinNode &join, TranslationContext &ctx) {
 		}
 	}
 
-	std::string sql = "SELECT";
+	std::string sql;
+	sql.reserve(256);
+	sql = "SELECT";
 	if (projectExprs.empty()) {
 		sql += joinColumnList({"1 AS " + dialect.quoteIdentifier("_dummy")}, ctx);
 	} else {
@@ -301,6 +306,7 @@ std::string renderAntiJoin(const AntiJoinNode &anti, TranslationContext &ctx) {
 	}
 
 	std::vector<std::string> conds;
+	conds.reserve(anti.keys.size() + nativeConds.size());
 	for (std::size_t i = 0; i < anti.keys.size(); ++i) {
 		if (rewritten[i]) {
 			continue;
@@ -316,6 +322,7 @@ std::string renderAntiJoin(const AntiJoinNode &anti, TranslationContext &ctx) {
 	// than SELECT *: the left side may carry hidden native-key columns that must
 	// not escape into an enclosing UNION BY NAME.
 	std::vector<std::string> projectionCols;
+	projectionCols.reserve(anti.schema().size() * 2);
 	for (const auto &c : anti.schema()) {
 		projectionCols.push_back(leftAlias + "." + mangleVar(c.var, dialect) + " AS " + mangleVar(c.var, dialect));
 		if (ctx.needsTag(c.var)) {
@@ -323,7 +330,9 @@ std::string renderAntiJoin(const AntiJoinNode &anti, TranslationContext &ctx) {
 			                         mangleVarTag(c.var, dialect));
 		}
 	}
-	std::string sql = "SELECT";
+	std::string sql;
+	sql.reserve(256);
+	sql = "SELECT";
 	sql += projectionCols.empty() ? joinColumnList({"1 AS " + dialect.quoteIdentifier("_dummy")}, ctx)
 	                              : joinColumnList(projectionCols, ctx);
 	sql += ctx.clauseSep() + "FROM (" + leftSql + ") AS " + leftAlias + " WHERE NOT EXISTS (SELECT 1 FROM (" +
@@ -491,6 +500,7 @@ std::string renderEmpty(const EmptyNode &e, TranslationContext &ctx) {
 		       "WHERE FALSE";
 	}
 	std::vector<std::string> cols;
+	cols.reserve(e.schema().size() * 2);
 	for (const auto &c : e.schema()) {
 		cols.push_back("CAST(NULL AS VARCHAR) AS " + mangleVar(c.var, dialect));
 		if (ctx.needsTag(c.var)) {

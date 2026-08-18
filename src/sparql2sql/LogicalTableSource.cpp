@@ -38,6 +38,7 @@ std::string stripTrailingSemicolon(std::string sql) {
 
 std::vector<ViewSource> mappingViewSources(const r2rml::R2RMLMapping &mapping) {
 	std::vector<ViewSource> out;
+	out.reserve(mapping.triplesMaps.size());
 	std::set<std::string> seen;
 	for (const auto &tmPtr : mapping.triplesMaps) {
 		if (!tmPtr || !tmPtr->logicalTable) {

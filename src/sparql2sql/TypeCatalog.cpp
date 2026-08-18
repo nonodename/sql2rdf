@@ -13,6 +13,7 @@ namespace {
 // VARCHAR(255)) so type names compare on their base kind.
 std::string normalizeType(const std::string &raw) {
 	std::string out;
+	out.reserve(raw.size());
 	for (char c : raw) {
 		if (c == '(') {
 			break;
