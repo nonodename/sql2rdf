@@ -1,5 +1,7 @@
 #include "sparql2sql/TemplateUtil.h"
 
+#include <algorithm>
+
 #include "sparql2sql/SqlDialect.h"
 
 namespace sparql2sql {
@@ -192,6 +194,63 @@ InversionOutcome invertTemplate(const std::vector<TemplateSegment> &segments, co
 
 	outcome.kind = InversionKind::PerColumnMatch;
 	return outcome;
+}
+
+namespace {
+
+bool literalPrefixesCompatible(const std::string &a, const std::string &b) {
+	std::size_t n = std::min(a.size(), b.size());
+	return a.compare(0, n, b, 0, n) == 0;
+}
+
+bool literalSuffixesCompatible(const std::string &a, const std::string &b) {
+	std::size_t n = std::min(a.size(), b.size());
+	return a.compare(a.size() - n, n, b, b.size() - n, n) == 0;
+}
+
+} // namespace
+
+bool templatesCanEverMatch(const std::string &templateA, const std::string &templateB) {
+	if (templateA == templateB) {
+		return true;
+	}
+
+	std::vector<TemplateSegment> a = parseTemplate(templateA);
+	std::vector<TemplateSegment> b = parseTemplate(templateB);
+	if (a.empty() || b.empty()) {
+		// One side is the literal empty string. The only conclusive case (both
+		// fully literal and equal) was already handled above; anything else is
+		// left unproven rather than risking a wrong prune.
+		return true;
+	}
+
+	bool aLiteralOnly = true;
+	for (const auto &seg : a) {
+		if (seg.isPlaceholder) {
+			aLiteralOnly = false;
+			break;
+		}
+	}
+	bool bLiteralOnly = true;
+	for (const auto &seg : b) {
+		if (seg.isPlaceholder) {
+			bLiteralOnly = false;
+			break;
+		}
+	}
+	if (aLiteralOnly && bLiteralOnly) {
+		return false; // both fully literal and, per the check above, not equal.
+	}
+
+	if (!a.front().isPlaceholder && !b.front().isPlaceholder &&
+	    !literalPrefixesCompatible(a.front().text, b.front().text)) {
+		return false;
+	}
+	if (!a.back().isPlaceholder && !b.back().isPlaceholder &&
+	    !literalSuffixesCompatible(a.back().text, b.back().text)) {
+		return false;
+	}
+	return true;
 }
 
 std::string percentDecode(const std::string &value) {

@@ -30,14 +30,16 @@ struct OptimizerOptions {
 };
 
 /// Apply the fixed pass pipeline to a pattern IR tree and return the rewritten
-/// root. Semantics-preserving. Passes, in order: filter pushdown (before
-/// flattening, so folded predicates don't sit between joinable SPJ blocks), SPJ
-/// flattening, self-join elimination, redundant-predicate removal (a
-/// "<x> IS NOT NULL" guard already implied by an "<x> = '<literal>'" conjunct
-/// in the same block, and - when a TranslationContext is supplied - a
-/// comparison against a column an rr:sqlQuery view's own SELECT list defines
-/// as a fixed literal), and (when the enclosing query dedups) DISTINCT
-/// stripping.
+/// root. Semantics-preserving. Passes, in order: union-branch pruning (drop a
+/// joined triple pattern's candidate mappings whose rr:template can provably
+/// never equal the other side's, via IRI template disjointness), filter
+/// pushdown (before flattening, so folded predicates don't sit between
+/// joinable SPJ blocks), SPJ flattening, self-join elimination,
+/// redundant-predicate removal (a "<x> IS NOT NULL" guard already implied by
+/// an "<x> = '<literal>'" conjunct in the same block, and - when a
+/// TranslationContext is supplied - a comparison against a column an
+/// rr:sqlQuery view's own SELECT list defines as a fixed literal), and (when
+/// the enclosing query dedups) DISTINCT stripping.
 RelNodePtr optimize(RelNodePtr root, const OptimizerOptions &opts);
 
 /// True when projecting `outputVars` (in order) over `schema` is a bare identity:

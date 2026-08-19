@@ -385,6 +385,116 @@ TEST_CASE("optimize: self-join elimination collapses same-table same-subject sca
 	}
 }
 
+// --- Union branch pruning via IRI template disjointness ------------------
+
+namespace {
+
+// A UnionByNameNode of `arms`, with a schema built the same way
+// translateAtomicPattern builds it (meetAcrossArms per variable).
+RelNodePtr makeUnion(std::vector<RelNodePtr> arms, const std::vector<std::string> &vars) {
+	RelNodePtr node(new sparql2sql::UnionByNameNode());
+	sparql2sql::UnionByNameNode &u = static_cast<sparql2sql::UnionByNameNode &>(*node);
+	u.all = false;
+	for (const auto &v : vars) {
+		ColumnInfo col;
+		col.var = v;
+		col.nonNull = true;
+		col.term = sparql2sql::meetAcrossArms(v, arms);
+		u.schema().push_back(col);
+	}
+	u.arms = std::move(arms);
+	return node;
+}
+
+} // namespace
+
+TEST_CASE("optimize: drops a union arm whose subject template can never join the other side", "[sparql2sql][ir]") {
+	// Mirrors ex:name (ambiguous between EMP.ENAME and DEPT.DNAME) joined with
+	// ex:department (only ever EMP): the DEPT candidate for ex:name can never
+	// share a subject with the EMP-only side, since "employee/{EMPNO}" and
+	// "department/{DEPTNO}" have incompatible literal prefixes.
+	RelNodePtr onlyEmp =
+	    makeSpj("t1", "EMP", {tmplCol("k", "t1", "http://data.example.com/employee/", "EMPNO", "EMP")}, false);
+
+	RelNodePtr empArm =
+	    makeSpj("t2", "EMP", {tmplCol("k", "t2", "http://data.example.com/employee/", "EMPNO", "EMP")}, false);
+	RelNodePtr deptArm =
+	    makeSpj("t3", "DEPT", {tmplCol("k", "t3", "http://data.example.com/department/", "DEPTNO", "DEPT")}, false);
+	std::vector<RelNodePtr> nameArms;
+	nameArms.push_back(std::move(empArm));
+	nameArms.push_back(std::move(deptArm));
+	RelNodePtr nameUnion = makeUnion(std::move(nameArms), {"k"});
+
+	RelNodePtr join = makeJoin(JoinKind::Inner, std::move(onlyEmp), std::move(nameUnion), "k", /*nullSafe=*/false);
+
+	OptimizerOptions opts;
+	RelNodePtr result = optimize(std::move(join), opts);
+
+	// The DEPT candidate was dropped, collapsing the union to its one surviving
+	// arm, which flatten() could then fuse with the other side into one block.
+	REQUIRE(result->kind() == RelKind::Spj);
+	const SpjRelation &spj = static_cast<const SpjRelation &>(*result);
+	CHECK(spj.sources.size() == 2);
+	for (const auto &s : spj.sources) {
+		CHECK(s.tableIdentity != "DEPT");
+	}
+}
+
+TEST_CASE("optimize: a LeftOuter join never prunes the preserved left side", "[sparql2sql][ir]") {
+	RelNodePtr empArm =
+	    makeSpj("t1", "EMP", {tmplCol("k", "t1", "http://data.example.com/employee/", "EMPNO", "EMP")}, false);
+	RelNodePtr deptArm =
+	    makeSpj("t2", "DEPT", {tmplCol("k", "t2", "http://data.example.com/department/", "DEPTNO", "DEPT")}, false);
+	std::vector<RelNodePtr> leftArms;
+	leftArms.push_back(std::move(empArm));
+	leftArms.push_back(std::move(deptArm));
+	RelNodePtr leftUnion = makeUnion(std::move(leftArms), {"k"});
+
+	RelNodePtr onlyEmp =
+	    makeSpj("t3", "EMP", {tmplCol("k", "t3", "http://data.example.com/employee/", "EMPNO", "EMP")}, false);
+
+	RelNodePtr join = makeJoin(JoinKind::LeftOuter, std::move(leftUnion), std::move(onlyEmp), "k", /*nullSafe=*/false);
+
+	OptimizerOptions opts;
+	RelNodePtr result = optimize(std::move(join), opts);
+
+	// LeftOuter is a flattening boundary regardless, but the left side must
+	// still carry both its original candidates - dropping the DEPT one would
+	// silently drop rows the OPTIONAL semantics require kept (with NULLs on
+	// the right).
+	REQUIRE(result->kind() == RelKind::Join);
+	const JoinNode &j = static_cast<const JoinNode &>(*result);
+	REQUIRE(j.left->kind() == RelKind::UnionByName);
+	CHECK(static_cast<const sparql2sql::UnionByNameNode &>(*j.left).arms.size() == 2);
+}
+
+TEST_CASE("optimize: a null-safe join key is never used to prune union arms", "[sparql2sql][ir]") {
+	// (l = r OR l IS NULL OR r IS NULL) admits a row whenever either side is
+	// NULL, regardless of template compatibility, so an incompatible-looking
+	// candidate cannot be dropped when the key is null-safe.
+	RelNodePtr onlyEmp =
+	    makeSpj("t1", "EMP", {tmplCol("k", "t1", "http://data.example.com/employee/", "EMPNO", "EMP")}, false);
+
+	RelNodePtr empArm =
+	    makeSpj("t2", "EMP", {tmplCol("k", "t2", "http://data.example.com/employee/", "EMPNO", "EMP")}, false);
+	RelNodePtr deptArm =
+	    makeSpj("t3", "DEPT", {tmplCol("k", "t3", "http://data.example.com/department/", "DEPTNO", "DEPT")}, false);
+	std::vector<RelNodePtr> nameArms;
+	nameArms.push_back(std::move(empArm));
+	nameArms.push_back(std::move(deptArm));
+	RelNodePtr nameUnion = makeUnion(std::move(nameArms), {"k"});
+
+	RelNodePtr join = makeJoin(JoinKind::Inner, std::move(onlyEmp), std::move(nameUnion), "k", /*nullSafe=*/true);
+
+	OptimizerOptions opts;
+	RelNodePtr result = optimize(std::move(join), opts);
+
+	REQUIRE(result->kind() == RelKind::Join); // never flattened: still a Union on the right
+	const JoinNode &j = static_cast<const JoinNode &>(*result);
+	REQUIRE(j.right->kind() == RelKind::UnionByName);
+	CHECK(static_cast<const sparql2sql::UnionByNameNode &>(*j.right).arms.size() == 2);
+}
+
 // --- SqlRenderer: renderSpj / renderChild native-key hidden projection ---
 //
 // planNativeKeys only ever populates a non-empty `extra` (the hidden

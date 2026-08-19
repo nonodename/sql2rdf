@@ -85,4 +85,25 @@ InversionOutcome invertTemplate(const std::vector<TemplateSegment> &segments, co
 /// internals.
 std::string percentDecode(const std::string &value);
 
+/// Whether two rr:template strings could ever produce equal lexical values,
+/// decided purely from their fixed literal anchors (the text before the first
+/// placeholder and after the last one) - the same anchor-only technique
+/// invertTemplate uses when adjacent placeholders make a full per-column split
+/// impossible. Used to prune UNION branches that a join can provably never
+/// match: if two candidate mappings' subject (or object) templates have
+/// incompatible leading/trailing literals - e.g. "ex:data/PROD{code}" vs
+/// "ex:data/CAT{code}" - no substitution of their placeholders can ever make
+/// the two produced strings equal.
+///
+/// Returns true (i.e. "cannot prove incompatible, assume compatible") unless
+/// the mismatch is certain, so a false positive here can only miss a pruning
+/// opportunity, never drop a branch that could actually have matched.
+///
+/// Known simplification: only the outermost literal segments are compared: two
+/// templates that agree on both anchors but differ in an interior literal
+/// (e.g. "A{x}B{y}C" vs "A{x}Z{y}C") are not detected as incompatible. This
+/// mirrors the "known simplification" already accepted by invertTemplate above
+/// rather than introducing a new correctness posture.
+bool templatesCanEverMatch(const std::string &templateA, const std::string &templateB);
+
 } // namespace sparql2sql

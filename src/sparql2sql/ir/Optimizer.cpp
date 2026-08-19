@@ -11,6 +11,7 @@
 #include "sparql2sql/LogicalTableSource.h"
 #include "sparql2sql/SqlDialect.h"
 #include "sparql2sql/TagSql.h"
+#include "sparql2sql/TemplateUtil.h"
 #include "sparql2sql/TranslationError.h"
 #include "sparql2sql/TranslatedPattern.h"
 #include "sparql2sql/TypeCatalog.h"
@@ -959,6 +960,198 @@ RelNodePtr pushFilters(RelNodePtr node, TranslationContext *ctx) {
 	return node;
 }
 
+// --- Union branch pruning via IRI template disjointness ------------------
+//
+// translateAtomicPattern compiles one triple pattern into a UNION over every
+// candidate mapping that could produce a triple matching its predicate. When
+// two such patterns are then joined on a shared variable, some of those
+// candidates may be provably unable to ever satisfy the join: if one
+// pattern's only route to the shared variable is a subject/object built from
+// rr:template "ex:data/PROD{code}" and another candidate's is
+// "ex:data/CAT{code}", no substitution of {code} on either side can make the
+// two produced strings equal, so that candidate can never join and
+// contributes nothing to the result.
+//
+// This runs before pushFilters/flatten, directly on the Join/Union tree
+// PatternFolder builds, using each EquiKey's shared variable to line up the
+// two joined patterns' candidates. It only looks at *directly* visible
+// UnionByName/Spj children of a JoinNode - a variable produced by a nested,
+// still-composite JoinNode (three or more patterns joined in a chain) is left
+// alone rather than chased through, which only forgoes pruning, never risks
+// an incorrect one.
+
+// One directly-visible alternative's template for a variable, or "no
+// template" when the column isn't an rr:template expression (a plain column,
+// a constant, or the variable isn't produced here at all) - in which case
+// nothing can be proven about it, so it must be treated as compatible with
+// everything.
+struct TemplateCandidate {
+	bool hasTemplate = false;
+	std::string templateString;
+};
+
+TemplateCandidate templateCandidateFor(const RelNode &node, const std::string &var) {
+	TemplateCandidate out;
+	const ColumnInfo *col = node.column(var);
+	if (col != nullptr && col->prov == Provenance::TemplateExpr) {
+		out.hasTemplate = true;
+		out.templateString = col->templateString;
+	}
+	return out;
+}
+
+bool candidatesCompatible(const TemplateCandidate &a, const TemplateCandidate &b) {
+	if (!a.hasTemplate || !b.hasTemplate) {
+		return true; // nothing to disprove without a template on both sides.
+	}
+	return templatesCanEverMatch(a.templateString, b.templateString);
+}
+
+// One TemplateCandidate per directly-visible alternative for `var` on `side`:
+// one per arm if `side` is a UnionByNameNode (each arm is guaranteed a
+// single-candidate SpjRelation, per translateAtomicPattern), or a single
+// entry otherwise.
+std::vector<TemplateCandidate> gatherCandidates(const RelNode &side, const std::string &var) {
+	if (side.kind() == RelKind::UnionByName) {
+		const UnionByNameNode &u = static_cast<const UnionByNameNode &>(side);
+		std::vector<TemplateCandidate> out;
+		out.reserve(u.arms.size());
+		for (const auto &arm : u.arms) {
+			out.push_back(templateCandidateFor(*arm, var));
+		}
+		return out;
+	}
+	std::vector<TemplateCandidate> out;
+	out.push_back(templateCandidateFor(side, var));
+	return out;
+}
+
+// Drop arms of `side` that, for some key, are incompatible with every
+// alternative the other side of the join offers for that key's variable.
+// Skips any key whose comparison is null-tolerant (`nullSafe`): its rendered
+// form is "(l = r OR l IS NULL OR r IS NULL)", which is satisfied whenever
+// either operand is NULL regardless of template compatibility, so template
+// disjointness proves nothing about it. Never empties `side` outright -
+// leaving at least one arm behind is always correct (a query that turns out
+// unsatisfiable just keeps one now-dead branch), matching the conservative
+// posture templatesCanEverMatch itself documents.
+void pruneUnionSide(UnionByNameNode &side, const RelNode &other, const std::vector<EquiKey> &keys) {
+	std::vector<bool> keep(side.arms.size(), true);
+	for (const auto &k : keys) {
+		if (k.nullSafe) {
+			continue;
+		}
+		std::vector<TemplateCandidate> otherCandidates = gatherCandidates(other, k.var);
+		for (std::size_t i = 0; i < side.arms.size(); ++i) {
+			if (!keep[i]) {
+				continue;
+			}
+			TemplateCandidate mine = templateCandidateFor(*side.arms[i], k.var);
+			bool compatibleWithAny = false;
+			for (const auto &oc : otherCandidates) {
+				if (candidatesCompatible(mine, oc)) {
+					compatibleWithAny = true;
+					break;
+				}
+			}
+			if (!compatibleWithAny) {
+				keep[i] = false;
+			}
+		}
+	}
+
+	std::size_t survivors = 0;
+	for (bool k : keep) {
+		if (k) {
+			++survivors;
+		}
+	}
+	if (survivors == 0 || survivors == side.arms.size()) {
+		return;
+	}
+
+	std::vector<RelNodePtr> newArms;
+	newArms.reserve(survivors);
+	for (std::size_t i = 0; i < side.arms.size(); ++i) {
+		if (keep[i]) {
+			newArms.push_back(std::move(side.arms[i]));
+		}
+	}
+	side.arms = std::move(newArms);
+}
+
+// A UNION reduced to exactly one arm is exactly what translateAtomicPattern
+// itself returns directly (branches.size() == 1) rather than ever wrapping in
+// a UnionByNameNode - collapsing here after pruning restores that same shape,
+// re-exposing the arm's real per-column provenance (instead of the union's
+// synthesized schema) so flatten's mergeInner can fuse it with its inner-join
+// partners.
+RelNodePtr unwrapSingletonUnion(RelNodePtr node) {
+	if (node->kind() == RelKind::UnionByName) {
+		UnionByNameNode &u = static_cast<UnionByNameNode &>(*node);
+		if (u.arms.size() == 1) {
+			return std::move(u.arms.front());
+		}
+	}
+	return node;
+}
+
+RelNodePtr pruneUnionBranches(RelNodePtr node) {
+	switch (node->kind()) {
+	case RelKind::Join: {
+		JoinNode &j = static_cast<JoinNode &>(*node);
+		j.left = pruneUnionBranches(std::move(j.left));
+		j.right = pruneUnionBranches(std::move(j.right));
+		// LeftOuter must preserve every left row whether or not it matches, so
+		// only an Inner join's left side may lose arms; the right (optional)
+		// side may always lose arms that can never match anything on the left.
+		if (j.left->kind() == RelKind::UnionByName && j.joinKind == JoinKind::Inner) {
+			pruneUnionSide(static_cast<UnionByNameNode &>(*j.left), *j.right, j.keys);
+		}
+		if (j.right->kind() == RelKind::UnionByName) {
+			pruneUnionSide(static_cast<UnionByNameNode &>(*j.right), *j.left, j.keys);
+		}
+		j.left = unwrapSingletonUnion(std::move(j.left));
+		j.right = unwrapSingletonUnion(std::move(j.right));
+		return node;
+	}
+	case RelKind::AntiJoin: {
+		AntiJoinNode &a = static_cast<AntiJoinNode &>(*node);
+		a.left = pruneUnionBranches(std::move(a.left));
+		a.right = pruneUnionBranches(std::move(a.right));
+		return node;
+	}
+	case RelKind::UnionByName: {
+		UnionByNameNode &u = static_cast<UnionByNameNode &>(*node);
+		for (auto &arm : u.arms) {
+			arm = pruneUnionBranches(std::move(arm));
+		}
+		return node;
+	}
+	case RelKind::Filter: {
+		FilterNode &f = static_cast<FilterNode &>(*node);
+		f.child = pruneUnionBranches(std::move(f.child));
+		return node;
+	}
+	case RelKind::Bind: {
+		BindNode &b = static_cast<BindNode &>(*node);
+		b.child = pruneUnionBranches(std::move(b.child));
+		return node;
+	}
+	case RelKind::TransitiveClosure: {
+		TransitiveClosureNode &t = static_cast<TransitiveClosureNode &>(*node);
+		t.step = pruneUnionBranches(std::move(t.step));
+		return node;
+	}
+	case RelKind::Spj:
+	case RelKind::Raw:
+	case RelKind::SingleRow:
+	case RelKind::Empty:
+		return node;
+	}
+	return node;
+}
+
 } // namespace
 
 bool isIdentityProjection(const std::vector<ColumnInfo> &schema, const std::vector<std::string> &outputVars) {
@@ -974,6 +1167,11 @@ bool isIdentityProjection(const std::vector<ColumnInfo> &schema, const std::vect
 }
 
 RelNodePtr optimize(RelNodePtr root, const OptimizerOptions &opts) {
+	// Union-branch pruning first: dropping a provably-dead candidate (and, when
+	// that leaves only one, unwrapping the UNION entirely) can only make more
+	// SpjRelations directly visible to every later pass - pushdown, flattening,
+	// self-join elimination - so it should never run after them.
+	root = pruneUnionBranches(std::move(root));
 	// Pushdown first: a conjunct folded into an SpjRelation keeps that block
 	// mergeable, so flattening can still fuse it with its inner-join partners.
 	root = pushFilters(std::move(root), opts.ctx);
