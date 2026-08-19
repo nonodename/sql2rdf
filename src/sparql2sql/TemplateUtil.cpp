@@ -12,7 +12,7 @@ bool startsWithAt(const std::string &haystack, std::size_t pos, const std::strin
 	}
 	return haystack.compare(pos, needle.size(), needle) == 0;
 }
-//TODO Merge with other implementation
+// TODO Merge with other implementation
 bool isHexDigit(char c) {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }

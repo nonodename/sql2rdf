@@ -235,7 +235,7 @@ std::string replaceAll(std::string s, const std::string &from, const std::string
 // matching on the trailing dot is exact: "t2." never matches inside "t20.".
 std::string applyRename(const std::string &sql, const std::map<std::string, std::string> &rename) {
 	std::string out;
-	out.reserve(sql.size()+rename.size()*8); // rough guess to avoid too many reallocs
+	out.reserve(sql.size() + rename.size() * 8); // rough guess to avoid too many reallocs
 	out = sql;
 	for (const auto &r : rename) {
 		out = replaceAll(out, r.first + ".", r.second + ".");

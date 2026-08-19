@@ -490,7 +490,7 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 	}
 	case BuiltinFunction::Coalesce: {
 		std::string sql;
-		sql.reserve(64 + args.size() * 32); // rough guess to avoid too many reallocs 
+		sql.reserve(64 + args.size() * 32); // rough guess to avoid too many reallocs
 		sql = "COALESCE(";
 		for (std::size_t i = 0; i < args.size(); ++i) {
 			if (i > 0) {
