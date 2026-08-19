@@ -459,6 +459,17 @@ emitting SQL strings directly, then applies a fixed pipeline of semantics-preser
    is `SELECT DISTINCT`/`ASK`, and likewise inside an EXISTS body (an existence check cannot see
    duplicates).
 
+**Duplicated view text is left alone on purpose.** An `rr:sqlQuery` view's SQL is inlined once per
+candidate arm, so a mapping with a variable-predicate triples map (a candidate for *every* pattern)
+can inline the same body ten or more times. Hoisting each distinct body into one shared `WITH` CTE
+was tried and **reverted**: the arms filter that shared view on *different* values (one per
+predicate IRI), and only the inlined copies let the engine push each arm's predicate down into its
+own base-table scan. On a 1.6M-row triple table, replacing three inlined bodies with three CTEs took
+one benchmark query from 0.2s to unbounded — DuckDB scanned the whole million-row slice instead of a
+filtered sliver, with or without an `AS MATERIALIZED` hint. The redundant text is the price of
+per-arm pushdown. Any future attempt needs to hoist the *filtered* relation, not the bare view, and
+must be judged on measured execution time rather than SQL size.
+
 Everything below the level of these structural simplifications — join ordering, physical join
 choice, index selection — is deliberately left to the target engine's own optimizer, which does it
 better on the flat, native-typed plan it is handed. The rewrites above are confined to what an
