@@ -242,6 +242,102 @@ RelNodePtr foldBindIntoSpj(RelNodePtr node, TranslationContext *ctx) {
 	return std::move(b.child);
 }
 
+// Whether an inner join on `keys` may be distributed across every arm of
+// `u` (see distributeJoinOverUnion): every arm must already be a flattened
+// SpjRelation - true of any union translateAtomicPattern builds, since each
+// arm is guaranteed a single-candidate SpjRelation projecting every one of
+// the pattern's variables - and must itself supply every key variable.
+//
+// The second condition is what keeps this from misfiring on a real SPARQL
+// UNION{} whose branches bind different variables: mergeInner only adds a
+// join-equality conjunct for a key when *both* sides have that column
+// (Optimizer.cpp's mergeInner), so an arm silently missing a key variable
+// would distribute into an unconstrained cross join with the other side
+// instead of contributing no rows the way the un-distributed union does.
+bool unionCoversKeys(const UnionByNameNode &u, const std::vector<EquiKey> &keys) {
+	for (const auto &arm : u.arms) {
+		if (arm->kind() != RelKind::Spj) {
+			return false;
+		}
+		for (const auto &k : keys) {
+			if (arm->column(k.var) == nullptr) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+// Distribute an inner join across a UnionByName side into one merged SPJ per
+// arm, re-wrapped in a union of the (now smaller) merged blocks - the same
+// transformation an inner join distributes over union algebraically:
+// (A u B) JOIN C = (A JOIN C) u (B JOIN C).
+//
+// Without this, a join between a still-ambiguous candidate union (one
+// pruneUnionBranches couldn't reduce to a single arm) and a concrete
+// SpjRelation is never flattened at all - mergeInner only fires when both
+// sides are already Spj - so a genuine self-join hiding inside one specific
+// candidate arm (that arm and the other side scan the same table under the
+// same subject) is never visible to eliminateSelfJoinsInSpj. Distributing
+// first turns each arm into its own merged SpjRelation, exactly like the
+// singleton-union case unwrapSingletonUnion already produces, so the
+// self-join pass sees it the same way afterwards.
+//
+// `other` is copy-constructed once per arm - safe and cheap since a
+// (flattened) SpjRelation holds only value types, no owned child nodes - so
+// this needs no general RelNode::clone() to spread it across every arm.
+// Only ever called once `unionCoversKeys` has approved both preconditions.
+RelNodePtr distributeJoinOverUnion(RelNodePtr node, bool unionOnLeft, const OptimizerOptions &opts) {
+	JoinNode &j = static_cast<JoinNode &>(*node);
+	RelNodePtr &unionSlot = unionOnLeft ? j.left : j.right;
+	RelNodePtr &otherSlot = unionOnLeft ? j.right : j.left;
+	RelNodePtr unionPtr = std::move(unionSlot);
+	UnionByNameNode &u = static_cast<UnionByNameNode &>(*unionPtr);
+	const SpjRelation &other = static_cast<const SpjRelation &>(*otherSlot);
+
+	std::vector<RelNodePtr> mergedArms;
+	mergedArms.reserve(u.arms.size());
+	for (auto &arm : u.arms) {
+		JoinNode tmp;
+		tmp.joinKind = JoinKind::Inner;
+		tmp.keys = j.keys;
+		if (unionOnLeft) {
+			tmp.left = std::move(arm);
+			tmp.right = RelNodePtr(new SpjRelation(other));
+		} else {
+			tmp.left = RelNodePtr(new SpjRelation(other));
+			tmp.right = std::move(arm);
+		}
+		mergedArms.push_back(mergeInner(tmp, opts.catalog));
+	}
+
+	RelNodePtr result(new UnionByNameNode());
+	UnionByNameNode &outU = static_cast<UnionByNameNode &>(*result);
+	outU.all = u.all;
+	std::set<std::string> vars;
+	for (const auto &arm : mergedArms) {
+		for (const auto &c : arm->schema()) {
+			vars.insert(c.var);
+		}
+	}
+	for (const auto &v : vars) {
+		ColumnInfo col;
+		col.var = v;
+		col.nonNull = true;
+		for (const auto &arm : mergedArms) {
+			const ColumnInfo *c = arm->column(v);
+			if (c == nullptr || !c->nonNull) {
+				col.nonNull = false;
+				break;
+			}
+		}
+		col.term = meetAcrossArms(v, mergedArms);
+		outU.schema().push_back(col);
+	}
+	outU.arms = std::move(mergedArms);
+	return result;
+}
+
 // SPJ flattening. Bottom-up: after flattening both children of an inner join,
 // if both are SpjRelations, merge them. Outer joins, anti-joins, unions and
 // filters are boundaries: their children flatten internally, but the node
@@ -255,6 +351,14 @@ RelNodePtr flatten(RelNodePtr node, const OptimizerOptions &opts) {
 		j.right = flatten(std::move(j.right), opts);
 		if (j.joinKind == JoinKind::Inner && j.left->kind() == RelKind::Spj && j.right->kind() == RelKind::Spj) {
 			return mergeInner(j, opts.catalog);
+		}
+		if (j.joinKind == JoinKind::Inner && j.left->kind() == RelKind::UnionByName &&
+		    j.right->kind() == RelKind::Spj && unionCoversKeys(static_cast<const UnionByNameNode &>(*j.left), j.keys)) {
+			return distributeJoinOverUnion(std::move(node), /*unionOnLeft=*/true, opts);
+		}
+		if (j.joinKind == JoinKind::Inner && j.right->kind() == RelKind::UnionByName &&
+		    j.left->kind() == RelKind::Spj && unionCoversKeys(static_cast<const UnionByNameNode &>(*j.right), j.keys)) {
+			return distributeJoinOverUnion(std::move(node), /*unionOnLeft=*/false, opts);
 		}
 		return node;
 	}
@@ -334,7 +438,14 @@ bool isTrivialEquality(const std::string &cond) {
 // dropped alias onto the kept one; the subject-key equalities then collapse to
 // trivially-true and are removed, and duplicate conjuncts are deduplicated.
 void eliminateSelfJoinsInSpj(SpjRelation &spj) {
-	std::map<std::string, std::string> keptByGroup; // group key -> kept alias
+	// Kept alias(es) per group - `parentAlias` is only ever non-empty for a
+	// referencing-object-map source, where it names the second (parent-side)
+	// alias that also needs renaming onto the kept source's parent alias.
+	struct KeptAliases {
+		std::string alias;
+		std::string parentAlias;
+	};
+	std::map<std::string, KeptAliases> keptByGroup; // group key -> kept aliases
 	std::map<std::string, std::string> rename;      // dropped alias -> kept alias
 	for (const auto &s : spj.sources) {
 		if (s.subjectVar.empty() || s.subjectKeySig.empty()) {
@@ -343,9 +454,12 @@ void eliminateSelfJoinsInSpj(SpjRelation &spj) {
 		std::string group = s.tableIdentity + "\x1f" + s.subjectKeySig + "\x1f" + s.subjectVar;
 		auto it = keptByGroup.find(group);
 		if (it == keptByGroup.end()) {
-			keptByGroup[group] = s.alias;
+			keptByGroup[group] = KeptAliases {s.alias, s.parentAlias};
 		} else {
-			rename[s.alias] = it->second;
+			rename[s.alias] = it->second.alias;
+			if (!s.parentAlias.empty() && !it->second.parentAlias.empty()) {
+				rename[s.parentAlias] = it->second.parentAlias;
+			}
 		}
 	}
 	if (rename.empty()) {

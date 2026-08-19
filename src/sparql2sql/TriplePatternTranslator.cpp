@@ -294,10 +294,19 @@ void addConstantTermArm(std::vector<RelNodePtr> &arms, const std::string &value,
 // Attempt to build one candidate branch's SpjRelation. Appends to `branches`
 // on success; silently does nothing if the candidate is statically prunable
 // (a bound position can never match this candidate's source).
+//
+// `parentAlias`/`parentJoinSig` are only ever non-empty for a
+// referencing-object-map candidate (`fromSql` is "child JOIN parent ON
+// ..."): `parentAlias` is the join's second alias, and `parentJoinSig` is an
+// alias-independent signature of the parent table + join condition, folded
+// into the emitted subjectKeySig so self-join elimination only merges two
+// such sources when their entire FROM clause - not just the child table -
+// is identical (see SpjSource::subjectKeySig).
 void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromSql, const std::string &fromAlias,
                      const std::string &fromIdentity, const TermSource &subjectSrc, const TermSource &predicateSrc,
                      const TermSource &objectSrc, const TermSpec &subjectSpec, const PredicateConstraint &predicateSpec,
-                     const TermSpec &objectSpec, bool mergeableSubject, TranslationContext &ctx) {
+                     const TermSpec &objectSpec, bool mergeableSubject, TranslationContext &ctx,
+                     const std::string &parentAlias = std::string(), const std::string &parentJoinSig = std::string()) {
 	const SqlDialect &dialect = ctx.dialect();
 
 	std::vector<std::string> whereConditions;
@@ -402,8 +411,12 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 			sig = "col:" + subjectR.columnName;
 		}
 		if (!sig.empty()) {
+			if (!parentJoinSig.empty()) {
+				sig += "\x1f" + parentJoinSig;
+			}
 			source.subjectVar = subjectSpec.varName;
 			source.subjectKeySig = sig;
+			source.parentAlias = parentAlias;
 		}
 	}
 	spj.sources.push_back(source);
@@ -572,9 +585,21 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 						objectSrc.alias = parentAlias;
 						objectSrc.tableIdentity = logicalTableIdentity(*parentTm.logicalTable);
 
+						// The subject side is still a simple single-table key on the
+						// child table - the join is a *second*, non-subject-defining
+						// FROM element - so self-join elimination may still merge two
+						// occurrences of this exact candidate, as long as the parent
+						// table and join condition match too (folded into the sig via
+						// parentJoinSig, so it never conflates this with a plain
+						// candidate over the same child table, or with a
+						// referencing-object-map candidate through a different parent).
+						std::string parentJoinSig = "rom:" + logicalTableIdentity(*parentTm.logicalTable);
+						for (const auto &jc : refObjMap->joinConditions) {
+							parentJoinSig += "\x1f" + jc.childColumn + "=" + jc.parentColumn;
+						}
 						tryAddCandidate(branches, fromSql, childAlias, childIdentity, subjectSrc, predicateSrc,
 						                objectSrc, subjectSpec, predicateSpec, objectSpec,
-						                /*mergeableSubject=*/false, ctx);
+						                /*mergeableSubject=*/true, ctx, parentAlias, parentJoinSig);
 						continue;
 					}
 

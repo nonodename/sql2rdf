@@ -170,12 +170,24 @@ struct SpjSource {
 	/// alias-independent signature of its subject term map (e.g.
 	/// "tmpl:<template>" or "col:<column>"). Two sources with the same
 	/// tableIdentity, the same non-empty subjectVar, and the same non-empty
-	/// subjectKeySig denote the same table row and may be merged. Left empty
-	/// for sources whose subject isn't a simple single-table key (e.g. a
-	/// referencing-object-map's child-JOIN-parent source), which are never
-	/// merged.
+	/// subjectKeySig denote the same table row and may be merged.
+	///
+	/// For a referencing-object-map source (`sql` is "child JOIN parent ON
+	/// ..."), `subjectKeySig` additionally encodes the parent table identity
+	/// and join columns (see TriplePatternTranslator.cpp), so two such
+	/// sources only compare equal when their *entire* FROM clause - child
+	/// table, parent table, and join condition - is identical; a plain
+	/// single-table source and a referencing-object-map source over the same
+	/// child table always compare unequal, since only one of them carries
+	/// that suffix.
 	std::string subjectVar;
 	std::string subjectKeySig;
+
+	/// The second alias a referencing-object-map source introduces (the
+	/// parent side of "child JOIN parent"), so self-join elimination can
+	/// rewrite references to it too when two such sources merge. Empty for a
+	/// plain single-table source.
+	std::string parentAlias;
 };
 
 /// The fused Select-Project-Join block. A single triple-pattern candidate is

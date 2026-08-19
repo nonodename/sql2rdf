@@ -385,6 +385,86 @@ TEST_CASE("optimize: self-join elimination collapses same-table same-subject sca
 	}
 }
 
+namespace {
+
+// A single-source SpjRelation over a referencing-object-map join, "child
+// JOIN parent ON ...", carrying both self-join-elimination aliases.
+RelNodePtr makeRomSpj(const std::string &childAlias, const std::string &parentAlias, const std::string &subjectVar,
+                      const std::string &subjectKeySig, std::vector<ColumnInfo> cols) {
+	RelNodePtr node(new SpjRelation());
+	SpjRelation &spj = static_cast<SpjRelation &>(*node);
+	SpjSource src;
+	src.sql = "\"PEOPLE\" AS " + childAlias + " JOIN \"DEPT\" AS " + parentAlias + " ON " + childAlias +
+	          ".\"DEPT_ID\" = " + parentAlias + ".\"ID\"";
+	src.alias = childAlias;
+	src.parentAlias = parentAlias;
+	src.tableIdentity = "PEOPLE";
+	src.subjectVar = subjectVar;
+	src.subjectKeySig = subjectKeySig;
+	spj.sources.push_back(src);
+	spj.distinct = true;
+	spj.schema() = std::move(cols);
+	return node;
+}
+
+} // namespace
+
+TEST_CASE("optimize: self-join elimination collapses two identical referencing-object-map sources",
+          "[sparql2sql][ir]") {
+	// Two occurrences of the same ReferencingObjectMap candidate (?p's subject
+	// on PEOPLE, joined to the same DEPT parent via the same join condition),
+	// projecting different parent-side columns - a self-join through the ROM
+	// join, not just through the child table.
+	const std::string sig = "tmpl:person/{ID}\x1f"
+	                        "rom:DEPT\x1f"
+	                        "DEPT_ID=ID";
+	std::vector<ColumnInfo> leftCols = {templateSubjectCol("p", "t1"), pureCol("a", "d1", "DNAME", "DEPT", true)};
+	std::vector<ColumnInfo> rightCols = {templateSubjectCol("p", "t2"), pureCol("b", "d2", "DNAME", "DEPT", true)};
+	RelNodePtr join = makeJoin(JoinKind::Inner, makeRomSpj("t1", "d1", "p", sig, leftCols),
+	                           makeRomSpj("t2", "d2", "p", sig, rightCols), "p", /*nullSafe=*/false);
+
+	OptimizerOptions opts;
+	RelNodePtr result = optimize(std::move(join), opts);
+
+	REQUIRE(result->kind() == RelKind::Spj);
+	const SpjRelation &spj = static_cast<const SpjRelation &>(*result);
+	// Both child-JOIN-DEPT sources merged into one.
+	CHECK(spj.sources.size() == 1);
+	CHECK(spj.allVars() == std::set<std::string> {"p", "a", "b"});
+	// ?b's column was rewritten from the dropped source's parent alias (d2)
+	// onto the kept one's (d1) - not just its primary alias.
+	const ColumnInfo *b = spj.column("b");
+	REQUIRE(b != nullptr);
+	CHECK(b->sourceAlias == "d1");
+	CHECK(b->renderedExpr == "CAST(d1.\"DNAME\" AS VARCHAR)");
+	for (const auto &c : spj.whereConds) {
+		CHECK(c.find(" = ") == std::string::npos);
+	}
+}
+
+TEST_CASE("optimize: distinct referencing-object-map parents are never merged as a self-join", "[sparql2sql][ir]") {
+	// Same child table and subject, but through two different parent joins
+	// (different join columns) - these must NOT be treated as the same row
+	// source, since the joined rows genuinely differ.
+	const std::string sigA = "tmpl:person/{ID}\x1f"
+	                         "rom:DEPT\x1f"
+	                         "DEPT_ID=ID";
+	const std::string sigB = "tmpl:person/{ID}\x1f"
+	                         "rom:DEPT\x1f"
+	                         "OTHER_DEPT_ID=ID";
+	std::vector<ColumnInfo> leftCols = {templateSubjectCol("p", "t1"), pureCol("a", "d1", "DNAME", "DEPT", true)};
+	std::vector<ColumnInfo> rightCols = {templateSubjectCol("p", "t2"), pureCol("b", "d2", "DNAME", "DEPT", true)};
+	RelNodePtr join = makeJoin(JoinKind::Inner, makeRomSpj("t1", "d1", "p", sigA, leftCols),
+	                           makeRomSpj("t2", "d2", "p", sigB, rightCols), "p", /*nullSafe=*/false);
+
+	OptimizerOptions opts;
+	RelNodePtr result = optimize(std::move(join), opts);
+
+	REQUIRE(result->kind() == RelKind::Spj);
+	const SpjRelation &spj = static_cast<const SpjRelation &>(*result);
+	CHECK(spj.sources.size() == 2); // not merged: distinct join conditions
+}
+
 // --- Union branch pruning via IRI template disjointness ------------------
 
 namespace {
@@ -489,10 +569,85 @@ TEST_CASE("optimize: a null-safe join key is never used to prune union arms", "[
 	OptimizerOptions opts;
 	RelNodePtr result = optimize(std::move(join), opts);
 
-	REQUIRE(result->kind() == RelKind::Join); // never flattened: still a Union on the right
+	// The inner join distributes across the union (valid regardless of the
+	// key's null-safety - union distributes over any join predicate), merging
+	// each arm with onlyEmp in turn; both arms survive, unpruned.
+	REQUIRE(result->kind() == RelKind::UnionByName);
+	CHECK(static_cast<const sparql2sql::UnionByNameNode &>(*result).arms.size() == 2);
+}
+
+TEST_CASE("optimize: an inner join distributes across an un-pruned union, exposing a self-join in one arm",
+          "[sparql2sql][ir]") {
+	// ?p ex:label ?label is ambiguous (EMP or DEPT could supply it) and is
+	// joined with ?p ex:name ?name, which is unambiguously EMP-only. ?p is a
+	// plain column here (not an rr:template), so pruneUnionBranches - which
+	// only ever disproves a *template* candidate - cannot drop the DEPT arm;
+	// both candidates survive into flatten. Before distribution, Join(Union,
+	// Spj) never flattens at all - mergeInner requires both sides already Spj
+	// - so the EMP arm's redundant EMP scan is never visible to
+	// eliminateSelfJoinsInSpj. Distributing the join into the union turns
+	// each arm into its own merged block, exposing that self-join.
+	RelNodePtr empArm =
+	    makeSubjectSpj("t1", "EMP", "p", "col:ID",
+	                   {pureCol("p", "t1", "ID", "EMP", true), pureCol("label", "t1", "LABEL", "EMP", true)}, false);
+	RelNodePtr deptArm =
+	    makeSpj("t2", "DEPT",
+	            {pureCol("p", "t2", "MGRID", "DEPT", true), pureCol("label", "t2", "DNAME", "DEPT", true)}, false);
+	std::vector<RelNodePtr> arms;
+	arms.push_back(std::move(empArm));
+	arms.push_back(std::move(deptArm));
+	RelNodePtr ambiguousUnion = makeUnion(std::move(arms), {"p", "label"});
+
+	RelNodePtr onlyEmp =
+	    makeSubjectSpj("t3", "EMP", "p", "col:ID",
+	                   {pureCol("p", "t3", "ID", "EMP", true), pureCol("name", "t3", "NAME", "EMP", true)}, false);
+
+	RelNodePtr join = makeJoin(JoinKind::Inner, std::move(ambiguousUnion), std::move(onlyEmp), "p", /*nullSafe=*/false);
+
+	OptimizerOptions opts;
+	RelNodePtr result = optimize(std::move(join), opts);
+
+	REQUIRE(result->kind() == RelKind::UnionByName);
+	const auto &u = static_cast<const sparql2sql::UnionByNameNode &>(*result);
+	REQUIRE(u.arms.size() == 2);
+
+	// The EMP arm self-joined with onlyEmp: one source, both columns present.
+	REQUIRE(u.arms[0]->kind() == RelKind::Spj);
+	const SpjRelation &empMerged = static_cast<const SpjRelation &>(*u.arms[0]);
+	CHECK(empMerged.sources.size() == 1);
+	CHECK(empMerged.allVars() == std::set<std::string> {"p", "label", "name"});
+
+	// The DEPT arm is an ordinary (non-self) join with onlyEmp: two sources.
+	REQUIRE(u.arms[1]->kind() == RelKind::Spj);
+	const SpjRelation &deptMerged = static_cast<const SpjRelation &>(*u.arms[1]);
+	CHECK(deptMerged.sources.size() == 2);
+	CHECK(deptMerged.allVars() == std::set<std::string> {"p", "label", "name"});
+}
+
+TEST_CASE("optimize: a real UNION{} with heterogeneous arm schemas is never distributed", "[sparql2sql][ir]") {
+	// A genuine SPARQL UNION{} arm that doesn't bind the join's shared
+	// variable at all (unlike every arm translateAtomicPattern builds, which
+	// always projects the whole pattern's variables) must not be distributed:
+	// mergeInner would silently drop the join constraint for that arm rather
+	// than correctly contributing no rows.
+	RelNodePtr armWithKey = makeSpj("t1", "EMP", {pureCol("k", "t1", "ID", "EMP", true)}, false);
+	RelNodePtr armWithoutKey = makeSpj("t2", "DEPT", {pureCol("other", "t2", "DEPTNO", "DEPT", true)}, false);
+	std::vector<RelNodePtr> arms;
+	arms.push_back(std::move(armWithKey));
+	arms.push_back(std::move(armWithoutKey));
+	RelNodePtr heterogeneousUnion = makeUnion(std::move(arms), {"k", "other"});
+
+	RelNodePtr onlyEmp = makeSpj("t3", "EMP", {pureCol("k", "t3", "ID", "EMP", true)}, false);
+
+	RelNodePtr join =
+	    makeJoin(JoinKind::Inner, std::move(heterogeneousUnion), std::move(onlyEmp), "k", /*nullSafe=*/false);
+
+	OptimizerOptions opts;
+	RelNodePtr result = optimize(std::move(join), opts);
+
+	REQUIRE(result->kind() == RelKind::Join); // left undistributed: still a Union on the left
 	const JoinNode &j = static_cast<const JoinNode &>(*result);
-	REQUIRE(j.right->kind() == RelKind::UnionByName);
-	CHECK(static_cast<const sparql2sql::UnionByNameNode &>(*j.right).arms.size() == 2);
+	CHECK(j.left->kind() == RelKind::UnionByName);
 }
 
 // --- SqlRenderer: renderSpj / renderChild native-key hidden projection ---
