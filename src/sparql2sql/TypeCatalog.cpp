@@ -98,6 +98,14 @@ bool TypeCatalog::comparable(const std::string &tableA, const std::string &colum
 	return ca == cb;
 }
 
+bool TypeCatalog::isStringType(const std::string &table, const std::string &column) const {
+	std::string type = typeOf(table, column);
+	if (type.empty()) {
+		return false;
+	}
+	return categoryOf(normalizeType(type)) == TypeCategory::String;
+}
+
 std::string naturalXsdDatatype(const std::string &sqlTypeName) {
 	// R2RML Section 10.2's table, plus the spellings DuckDB and common
 	// information_schema implementations actually report. Two entries look like

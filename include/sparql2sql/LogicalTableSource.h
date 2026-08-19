@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -49,5 +50,27 @@ struct ViewSource {
 /// `identity`. The core library stays connection-free: it only tells the
 /// caller what to ask about.
 std::vector<ViewSource> mappingViewSources(const r2rml::R2RMLMapping &mapping);
+
+/// Unescape a single-quoted SQL string literal, e.g. `'ab''c'` -> `ab'c`.
+/// Returned unchanged if it doesn't look like one (missing/mismatched
+/// surrounding quotes).
+std::string unquoteSqlStringLiteral(const std::string &quoted);
+
+/// Column name -> the VARCHAR-cast rendering every row of `sql`'s result
+/// would produce for that column, for every column in `sql`'s top-level
+/// SELECT list that is a bare literal (a single-quoted string, the keyword
+/// TRUE/FALSE, or a bare integer) rather than a real per-row column
+/// reference - e.g. `SELECT true AS FLAG, 'x' AS KIND FROM ...` yields
+/// {"FLAG": "true", "KIND": "x"}.
+///
+/// Detected by a lightweight textual scan of the query's top-level SELECT
+/// list (this project's dependency-free core has no SQL parser to build on).
+/// A column outside these three literal forms, or a query shape this scan
+/// doesn't confidently recognize (no top-level "SELECT ... FROM ..."), is
+/// simply absent from the result - always the conservative, safe answer, and
+/// what makes the optimization built on this data provably correct: it only
+/// ever removes a comparison this scan is certain evaluates the same way for
+/// every row.
+std::map<std::string, std::string> detectConstantSelectColumns(const std::string &sql);
 
 } // namespace sparql2sql

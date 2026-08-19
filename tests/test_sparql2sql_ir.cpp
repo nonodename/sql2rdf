@@ -487,3 +487,153 @@ TEST_CASE("renderSpj: a schema-less join side still surfaces its native-key hidd
 	CHECK(result.sql.find("\"k_0\"") != std::string::npos);
 	CHECK(result.sql.find("t1.\"capIQCompanyID\"") != std::string::npos);
 }
+
+// --- optimize: redundant-predicate removal --------------------------------
+
+TEST_CASE("optimize: a redundant IS NOT NULL is dropped when the column is already proven = 'literal'",
+          "[sparql2sql][ir]") {
+	// Mirrors what TriplePatternTranslator actually builds: a requiredNonNull
+	// guard on the uncast column ref, plus a CAST-wrapped equality from
+	// inverting the same term map against a bound object term.
+	RelNodePtr node(new SpjRelation());
+	SpjRelation &spj = static_cast<SpjRelation &>(*node);
+	SpjSource src;
+	src.sql = "\"EMP\" AS t1";
+	src.alias = "t1";
+	src.tableIdentity = "EMP";
+	spj.sources.push_back(src);
+	spj.whereConds.emplace_back("t1.\"ENAME\" IS NOT NULL");
+	spj.whereConds.emplace_back("CAST(t1.\"ENAME\" AS VARCHAR) = 'SMITH'");
+	spj.distinct = true;
+	spj.schema().push_back(pureCol("s", "t1", "EMPNO", "EMP", true));
+
+	OptimizerOptions opts;
+	RelNodePtr result = optimize(std::move(node), opts);
+
+	REQUIRE(result->kind() == RelKind::Spj);
+	const SpjRelation &out = static_cast<const SpjRelation &>(*result);
+	REQUIRE(out.whereConds.size() == 1);
+	CHECK(out.whereConds[0] == "CAST(t1.\"ENAME\" AS VARCHAR) = 'SMITH'");
+}
+
+TEST_CASE("optimize: an IS NOT NULL guard survives when no literal equality proves it", "[sparql2sql][ir]") {
+	RelNodePtr node(new SpjRelation());
+	SpjRelation &spj = static_cast<SpjRelation &>(*node);
+	SpjSource src;
+	src.sql = "\"EMP\" AS t1";
+	src.alias = "t1";
+	src.tableIdentity = "EMP";
+	spj.sources.push_back(src);
+	spj.whereConds.emplace_back("t1.\"ENAME\" IS NOT NULL");
+	spj.distinct = true;
+	spj.schema().push_back(pureCol("s", "t1", "EMPNO", "EMP", true));
+
+	OptimizerOptions opts;
+	RelNodePtr result = optimize(std::move(node), opts);
+
+	const SpjRelation &out = static_cast<const SpjRelation &>(*result);
+	REQUIRE(out.whereConds.size() == 1);
+	CHECK(out.whereConds[0] == "t1.\"ENAME\" IS NOT NULL");
+}
+
+TEST_CASE("optimize: an IS NOT NULL guard on a different column is unaffected", "[sparql2sql][ir]") {
+	RelNodePtr node(new SpjRelation());
+	SpjRelation &spj = static_cast<SpjRelation &>(*node);
+	SpjSource src;
+	src.sql = "\"EMP\" AS t1";
+	src.alias = "t1";
+	src.tableIdentity = "EMP";
+	spj.sources.push_back(src);
+	spj.whereConds.emplace_back("t1.\"JOB\" IS NOT NULL");
+	spj.whereConds.emplace_back("CAST(t1.\"ENAME\" AS VARCHAR) = 'SMITH'");
+	spj.distinct = true;
+	spj.schema().push_back(pureCol("s", "t1", "EMPNO", "EMP", true));
+
+	OptimizerOptions opts;
+	RelNodePtr result = optimize(std::move(node), opts);
+
+	const SpjRelation &out = static_cast<const SpjRelation &>(*result);
+	REQUIRE(out.whereConds.size() == 2);
+	CHECK(out.whereConds[0] == "t1.\"JOB\" IS NOT NULL");
+}
+
+TEST_CASE("optimize: a comparison against a view's constant SELECT column is dropped, given a context",
+          "[sparql2sql][ir]") {
+	RelNodePtr node(new SpjRelation());
+	SpjRelation &spj = static_cast<SpjRelation &>(*node);
+	const std::string viewSql = "SELECT EMPNO, true AS FLAG FROM EMP";
+	SpjSource src;
+	src.sql = "(" + viewSql + ") AS t1";
+	src.alias = "t1";
+	src.tableIdentity = "view:" + viewSql;
+	spj.sources.push_back(src);
+	// requiredNonNull guard plus the inverted equality, exactly as the
+	// translator would build for `?s ex:flag "true" .` against this view.
+	spj.whereConds.emplace_back("t1.\"FLAG\" IS NOT NULL");
+	spj.whereConds.emplace_back("CAST(t1.\"FLAG\" AS VARCHAR) = 'true'");
+	spj.distinct = true;
+	spj.schema().push_back(pureCol("s", "t1", "EMPNO", "view:" + viewSql, true));
+
+	R2RMLMapping mapping;
+	DuckDbDialect dialect;
+	TranslationContext ctx(mapping, dialect);
+	OptimizerOptions opts;
+	opts.ctx = &ctx;
+	RelNodePtr result = optimize(std::move(node), opts);
+
+	const SpjRelation &out = static_cast<const SpjRelation &>(*result);
+	// Both the guard (case 1) and the now-vacuous equality (case 2) are gone.
+	CHECK(out.whereConds.empty());
+}
+
+TEST_CASE("optimize: a comparison against a view's constant column survives without a context", "[sparql2sql][ir]") {
+	// Without a TranslationContext there is no SqlDialect to render the
+	// expected column reference against, so the view-constant pass is
+	// skipped entirely - the always-correct (if suboptimal) fallback.
+	RelNodePtr node(new SpjRelation());
+	SpjRelation &spj = static_cast<SpjRelation &>(*node);
+	const std::string viewSql = "SELECT EMPNO, true AS FLAG FROM EMP";
+	SpjSource src;
+	src.sql = "(" + viewSql + ") AS t1";
+	src.alias = "t1";
+	src.tableIdentity = "view:" + viewSql;
+	spj.sources.push_back(src);
+	spj.whereConds.emplace_back("CAST(t1.\"FLAG\" AS VARCHAR) = 'true'");
+	spj.distinct = true;
+	spj.schema().push_back(pureCol("s", "t1", "EMPNO", "view:" + viewSql, true));
+
+	OptimizerOptions opts;
+	RelNodePtr result = optimize(std::move(node), opts);
+
+	const SpjRelation &out = static_cast<const SpjRelation &>(*result);
+	REQUIRE(out.whereConds.size() == 1);
+	CHECK(out.whereConds[0] == "CAST(t1.\"FLAG\" AS VARCHAR) = 'true'");
+}
+
+TEST_CASE("optimize: a comparison against a non-constant value doesn't match the view's fixed literal",
+          "[sparql2sql][ir]") {
+	RelNodePtr node(new SpjRelation());
+	SpjRelation &spj = static_cast<SpjRelation &>(*node);
+	const std::string viewSql = "SELECT EMPNO, true AS FLAG FROM EMP";
+	SpjSource src;
+	src.sql = "(" + viewSql + ") AS t1";
+	src.alias = "t1";
+	src.tableIdentity = "view:" + viewSql;
+	spj.sources.push_back(src);
+	// "false" never appears for FLAG in this view, so the comparison is not
+	// vacuously true and must be left alone.
+	spj.whereConds.emplace_back("CAST(t1.\"FLAG\" AS VARCHAR) = 'false'");
+	spj.distinct = true;
+	spj.schema().push_back(pureCol("s", "t1", "EMPNO", "view:" + viewSql, true));
+
+	R2RMLMapping mapping;
+	DuckDbDialect dialect;
+	TranslationContext ctx(mapping, dialect);
+	OptimizerOptions opts;
+	opts.ctx = &ctx;
+	RelNodePtr result = optimize(std::move(node), opts);
+
+	const SpjRelation &out = static_cast<const SpjRelation &>(*result);
+	REQUIRE(out.whereConds.size() == 1);
+	CHECK(out.whereConds[0] == "CAST(t1.\"FLAG\" AS VARCHAR) = 'false'");
+}

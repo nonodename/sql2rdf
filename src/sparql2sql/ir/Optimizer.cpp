@@ -8,6 +8,7 @@
 
 #include "sparql2sql/ExprAnalysis.h"
 #include "sparql2sql/ExpressionTranslator.h"
+#include "sparql2sql/LogicalTableSource.h"
 #include "sparql2sql/SqlDialect.h"
 #include "sparql2sql/TagSql.h"
 #include "sparql2sql/TranslationError.h"
@@ -363,6 +364,207 @@ void selfJoinWalk(RelNode &node) {
 	}
 }
 
+// --- Redundant-predicate removal -----------------------------------------
+//
+// Two forms of a WHERE conjunct that provably contribute nothing once another
+// conjunct in the same block already implies it, both arising because the
+// two conjuncts are generated independently by different parts of the
+// translator rather than as a single decision.
+
+// Whether `cond` is a single top-level "<expr> = <literal>" equality against a
+// dialect string literal - like isTrivialEquality, restricted to exactly one
+// "=" so a multi-operator conjunct (e.g. the null-tolerant OPTIONAL join-key
+// form) never matches. On success, `exprOut` is the LHS text and `rhsOut` is
+// the RHS literal's unescaped value.
+bool isLiteralEquality(const std::string &cond, std::string &exprOut, std::string &rhsOut) {
+	std::size_t eq = cond.find(" = ");
+	if (eq == std::string::npos) {
+		return false;
+	}
+	if (cond.find(" = ", eq + 3) != std::string::npos) {
+		return false; // more than one "=" -> not a plain equality
+	}
+	std::string rhs = cond.substr(eq + 3);
+	if (rhs.size() < 2 || rhs.front() != '\'' || rhs.back() != '\'') {
+		return false; // RHS isn't a dialect string literal (e.g. a column ref)
+	}
+	exprOut = cond.substr(0, eq);
+	rhsOut = unquoteSqlStringLiteral(rhs);
+	return true;
+}
+
+// Strip a "CAST(<inner> AS VARCHAR)" wrapper, if present; otherwise returns
+// `expr` unchanged. Lets a comparison built from the CAST-wrapped columnExpr()
+// and a guard built from the uncast qualifiedColumnRef() (TermMapSql.cpp) be
+// recognized as referring to the same underlying column.
+std::string stripVarcharCast(const std::string &expr) {
+	static const std::string kPrefix = "CAST(";
+	static const std::string kSuffix = " AS VARCHAR)";
+	if (expr.size() > kPrefix.size() + kSuffix.size() && expr.compare(0, kPrefix.size(), kPrefix) == 0 &&
+	    expr.compare(expr.size() - kSuffix.size(), kSuffix.size(), kSuffix) == 0) {
+		return expr.substr(kPrefix.size(), expr.size() - kPrefix.size() - kSuffix.size());
+	}
+	return expr;
+}
+
+// Case (1): a "<x> IS NOT NULL" guard is redundant once "<x> = '<literal>'"
+// (optionally CAST-to-VARCHAR-wrapped) is already a conjunct of the same
+// WHERE clause: for the whole conjunction to be TRUE for a row, the equality
+// must itself evaluate to TRUE rather than the three-valued UNKNOWN a NULL
+// operand would produce, which already forces <x> non-NULL. This commonly
+// arises because the two conjuncts come from independent sources - the guard
+// from a term map's own "drop this row if the source column is NULL" rule
+// (TriplePatternTranslator's requiredNonNull), the equality from inverting
+// that same term map against a bound term in the triple pattern
+// (invertTermMapAgainstBoundTerm).
+void removeRedundantNotNullInSpj(SpjRelation &spj) {
+	std::set<std::string> provenNonNull;
+	for (const auto &cond : spj.whereConds) {
+		std::string expr;
+		std::string rhs;
+		if (!isLiteralEquality(cond, expr, rhs)) {
+			continue;
+		}
+		provenNonNull.insert(expr);
+		provenNonNull.insert(stripVarcharCast(expr));
+	}
+	if (provenNonNull.empty()) {
+		return;
+	}
+	static const std::string kSuffix = " IS NOT NULL";
+	std::vector<std::string> newConds;
+	newConds.reserve(spj.whereConds.size());
+	for (const auto &cond : spj.whereConds) {
+		if (cond.size() > kSuffix.size() && cond.compare(cond.size() - kSuffix.size(), kSuffix.size(), kSuffix) == 0) {
+			std::string expr = cond.substr(0, cond.size() - kSuffix.size());
+			if (provenNonNull.count(expr) != 0) {
+				continue;
+			}
+		}
+		newConds.push_back(cond);
+	}
+	spj.whereConds = std::move(newConds);
+}
+
+void redundancyWalk(RelNode &node) {
+	switch (node.kind()) {
+	case RelKind::Spj:
+		removeRedundantNotNullInSpj(static_cast<SpjRelation &>(node));
+		break;
+	case RelKind::Join: {
+		JoinNode &j = static_cast<JoinNode &>(node);
+		redundancyWalk(*j.left);
+		redundancyWalk(*j.right);
+		break;
+	}
+	case RelKind::AntiJoin: {
+		AntiJoinNode &a = static_cast<AntiJoinNode &>(node);
+		redundancyWalk(*a.left);
+		redundancyWalk(*a.right);
+		break;
+	}
+	case RelKind::UnionByName: {
+		UnionByNameNode &u = static_cast<UnionByNameNode &>(node);
+		for (auto &arm : u.arms) {
+			redundancyWalk(*arm);
+		}
+		break;
+	}
+	case RelKind::Filter:
+		redundancyWalk(*static_cast<FilterNode &>(node).child);
+		break;
+	case RelKind::Bind:
+		redundancyWalk(*static_cast<BindNode &>(node).child);
+		break;
+	case RelKind::TransitiveClosure:
+		redundancyWalk(*static_cast<TransitiveClosureNode &>(node).step);
+		break;
+	case RelKind::Raw:
+	case RelKind::SingleRow:
+	case RelKind::Empty:
+		break;
+	}
+}
+
+// Case (2): a comparison against a view-sourced column is vacuously true when
+// the view's own SELECT list projects that column as the very same literal
+// for every row (e.g. `SELECT true AS FLAG FROM ...`) - such a column carries
+// no per-row information for that comparison to test. Detected purely by
+// scanning the view's own SQL text (LogicalTableSource::detectConstantSelectColumns);
+// a column that scan can't classify is simply absent from its result, so this
+// pass only ever drops a comparison proven redundant.
+void removeRedundantViewConstantComparisons(SpjRelation &spj, const SqlDialect &dialect) {
+	std::map<std::string, std::string> refToConstant; // "alias.\"COL\"" -> its fixed VARCHAR rendering
+	static const std::string kViewPrefix = "view:";
+	for (const auto &src : spj.sources) {
+		if (src.tableIdentity.compare(0, kViewPrefix.size(), kViewPrefix) != 0) {
+			continue;
+		}
+		std::map<std::string, std::string> constants =
+		    detectConstantSelectColumns(src.tableIdentity.substr(kViewPrefix.size()));
+		for (const auto &kv : constants) {
+			refToConstant[src.alias + "." + dialect.quoteIdentifier(kv.first)] = kv.second;
+		}
+	}
+	if (refToConstant.empty()) {
+		return;
+	}
+	std::vector<std::string> newConds;
+	newConds.reserve(spj.whereConds.size());
+	for (const auto &cond : spj.whereConds) {
+		std::string expr;
+		std::string rhs;
+		if (isLiteralEquality(cond, expr, rhs)) {
+			auto it = refToConstant.find(stripVarcharCast(expr));
+			if (it != refToConstant.end() && it->second == rhs) {
+				continue; // always true for this view - drop.
+			}
+		}
+		newConds.push_back(cond);
+	}
+	spj.whereConds = std::move(newConds);
+}
+
+void constantColumnWalk(RelNode &node, const SqlDialect &dialect) {
+	switch (node.kind()) {
+	case RelKind::Spj:
+		removeRedundantViewConstantComparisons(static_cast<SpjRelation &>(node), dialect);
+		break;
+	case RelKind::Join: {
+		JoinNode &j = static_cast<JoinNode &>(node);
+		constantColumnWalk(*j.left, dialect);
+		constantColumnWalk(*j.right, dialect);
+		break;
+	}
+	case RelKind::AntiJoin: {
+		AntiJoinNode &a = static_cast<AntiJoinNode &>(node);
+		constantColumnWalk(*a.left, dialect);
+		constantColumnWalk(*a.right, dialect);
+		break;
+	}
+	case RelKind::UnionByName: {
+		UnionByNameNode &u = static_cast<UnionByNameNode &>(node);
+		for (auto &arm : u.arms) {
+			constantColumnWalk(*arm, dialect);
+		}
+		break;
+	}
+	case RelKind::Filter:
+		constantColumnWalk(*static_cast<FilterNode &>(node).child, dialect);
+		break;
+	case RelKind::Bind:
+		constantColumnWalk(*static_cast<BindNode &>(node).child, dialect);
+		break;
+	case RelKind::TransitiveClosure:
+		constantColumnWalk(*static_cast<TransitiveClosureNode &>(node).step, dialect);
+		break;
+	case RelKind::Raw:
+	case RelKind::SingleRow:
+	case RelKind::Empty:
+		break;
+	}
+}
+
 // Always-safe DISTINCT elimination: when the enclosing query dedups its result
 // (SELECT DISTINCT) or is an ASK existence check, every per-relation DISTINCT
 // is redundant - the outer dedup/existence subsumes it. Also downgrades the
@@ -702,6 +904,14 @@ RelNodePtr optimize(RelNodePtr root, const OptimizerOptions &opts) {
 	root = pushFilters(std::move(root), opts.ctx);
 	root = flatten(std::move(root), opts.catalog);
 	selfJoinWalk(*root);
+	// Order matters: removing a redundant "IS NOT NULL" guard first (using
+	// the still-present equality) before dropping that equality itself (when
+	// it's against a proven view constant) eliminates both conjuncts for such
+	// a column instead of leaving one behind.
+	redundancyWalk(*root);
+	if (opts.ctx != nullptr) {
+		constantColumnWalk(*root, opts.ctx->dialect());
+	}
 	if (opts.topLevelDistinct) {
 		stripDistinct(*root);
 	}

@@ -31,6 +31,12 @@ struct TypeCatalog {
 	/// rewrite.
 	bool comparable(const std::string &tableA, const std::string &columnA, const std::string &tableB,
 	                const std::string &columnB) const;
+
+	/// True iff the column's declared SQL type is already a VARCHAR-family
+	/// string type (VARCHAR/CHAR/TEXT/STRING/BPCHAR, any width/precision), so a
+	/// `CAST(... AS VARCHAR)` around it is a no-op that can be dropped. False -
+	/// the conservative default - when the type is unknown or anything else.
+	bool isStringType(const std::string &table, const std::string &column) const;
 };
 
 /// R2RML Section 10.2's natural mapping from a SQL datatype to an XSD datatype

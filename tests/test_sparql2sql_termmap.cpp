@@ -17,6 +17,7 @@
 #include "sparql2sql/DuckDbDialect.h"
 #include "sparql2sql/TemplateUtil.h"
 #include "sparql2sql/TermMapSql.h"
+#include "sparql2sql/TypeCatalog.h"
 
 using sparql2sql::buildProjectionSql;
 using sparql2sql::DuckDbDialect;
@@ -29,6 +30,7 @@ using sparql2sql::percentDecode;
 using sparql2sql::referencedColumns;
 using sparql2sql::SqlExpr;
 using sparql2sql::termMapToSqlExpr;
+using sparql2sql::TypeCatalog;
 
 TEST_CASE("parseTemplate splits literal text and {column} placeholders") {
 	auto segs = parseTemplate("http://data.example.com/employee/{EMPNO}");
@@ -255,4 +257,49 @@ TEST_CASE("invertTermMapAgainstBoundTerm: TemplateTermMap prunes on mismatch and
 	sparql::ast::Iri boundMismatching("http://other.example.com/employee/7369", "");
 	InversionResult mismatchResult = invertTermMapAgainstBoundTerm(tmpl, boundMismatching, "t1", dialect);
 	CHECK_FALSE(mismatchResult.possible);
+}
+
+TEST_CASE("TypeCatalog::isStringType recognizes the VARCHAR family and rejects everything else") {
+	TypeCatalog cat;
+	cat.columnTypes["EMP"]["ENAME"] = "VARCHAR(255)";
+	cat.columnTypes["EMP"]["EMPNO"] = "BIGINT";
+	CHECK(cat.isStringType("EMP", "ENAME"));
+	CHECK_FALSE(cat.isStringType("EMP", "EMPNO"));
+	CHECK_FALSE(cat.isStringType("EMP", "MISSING"));
+}
+
+TEST_CASE("termMapToSqlExpr: a VARCHAR-typed column drops the CAST, given a catalog") {
+	DuckDbDialect dialect;
+	r2rml::ColumnTermMap col("ENAME");
+	TypeCatalog cat;
+	cat.columnTypes["EMP"]["ENAME"] = "VARCHAR";
+
+	SqlExpr withCatalog = termMapToSqlExpr(col, "t1", dialect, &cat, "EMP");
+	CHECK(withCatalog.expr == "t1.\"ENAME\"");
+
+	// No catalog, or a non-string catalog entry, keeps the always-correct cast.
+	SqlExpr withoutCatalog = termMapToSqlExpr(col, "t1", dialect);
+	CHECK(withoutCatalog.expr == "CAST(t1.\"ENAME\" AS VARCHAR)");
+
+	TypeCatalog intCat;
+	intCat.columnTypes["EMP"]["ENAME"] = "BIGINT";
+	SqlExpr withIntCatalog = termMapToSqlExpr(col, "t1", dialect, &intCat, "EMP");
+	CHECK(withIntCatalog.expr == "CAST(t1.\"ENAME\" AS VARCHAR)");
+}
+
+TEST_CASE("invertTermMapAgainstBoundTerm: a VARCHAR-typed column drops the CAST in the equality") {
+	DuckDbDialect dialect;
+	r2rml::ColumnTermMap col("ENAME");
+	sparql::ast::RdfLiteral lit("SMITH");
+	TypeCatalog cat;
+	cat.columnTypes["EMP"]["ENAME"] = "VARCHAR";
+
+	InversionResult result = invertTermMapAgainstBoundTerm(col, lit, "t1", dialect, &cat, "EMP");
+	REQUIRE(result.whereConditions.size() == 1);
+	CHECK(result.whereConditions[0] == "t1.\"ENAME\" = 'SMITH'");
+
+	// Unchanged (still cast) when no catalog is supplied.
+	InversionResult noCatalog = invertTermMapAgainstBoundTerm(col, lit, "t1", dialect);
+	REQUIRE(noCatalog.whereConditions.size() == 1);
+	CHECK(noCatalog.whereConditions[0] == "CAST(t1.\"ENAME\" AS VARCHAR) = 'SMITH'");
 }

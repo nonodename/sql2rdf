@@ -88,7 +88,14 @@ struct InversionResult {
 /// candidate can be statically discarded (e.g. a constant term map whose
 /// value differs from the bound term, or a template whose fixed literal
 /// segments can't fit the bound term's lexical form).
+///
+/// `catalog`/`tableIdentity` are optional, exactly as in termMapToSqlExpr, and
+/// affect only whether a plain rr:column comparison is wrapped in
+/// `CAST(... AS VARCHAR)`: when the catalog says the column is already a
+/// VARCHAR-family type, the cast is a no-op and is omitted.
 InversionResult invertTermMapAgainstBoundTerm(const r2rml::TermMap &termMap, const sparql::ast::Term &boundTerm,
-                                              const std::string &sourceAlias, const SqlDialect &dialect);
+                                              const std::string &sourceAlias, const SqlDialect &dialect,
+                                              const TypeCatalog *catalog = nullptr,
+                                              const std::string &tableIdentity = std::string());
 
 } // namespace sparql2sql

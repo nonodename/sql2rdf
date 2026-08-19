@@ -37,6 +37,7 @@
 using r2rml::R2RMLMapping;
 using r2rml::R2RMLParser;
 using sparql::Parser;
+using sparql2sql::detectConstantSelectColumns;
 using sparql2sql::DuckDbDialect;
 using sparql2sql::logicalTableIdentity;
 using sparql2sql::mappingViewSources;
@@ -44,6 +45,7 @@ using sparql2sql::stripTrailingSemicolon;
 using sparql2sql::translateQuery;
 using sparql2sql::TranslationError;
 using sparql2sql::TypeCatalog;
+using sparql2sql::unquoteSqlStringLiteral;
 using sparql2sql::ViewSource;
 
 namespace {
@@ -225,4 +227,57 @@ TEST_CASE("DATATYPE over a computed view column folds to the described type", "[
 	// so the fold above really is the catalog's doing.
 	CHECK(contains(translate("SELECT ?n WHERE { ?s ex:namelen ?n . FILTER(datatype(?n) = xsd:integer) }"),
 	               "ELSE NULL END"));
+}
+
+// --- detectConstantSelectColumns: scanning an rr:sqlQuery view's SELECT list
+// for columns that are bare literals, not real per-row column references. ---
+
+TEST_CASE("unquoteSqlStringLiteral: unescapes a doubled quote and passes through non-literals", "[sparql2sql]") {
+	CHECK(unquoteSqlStringLiteral("'true'") == "true");
+	CHECK(unquoteSqlStringLiteral("'ab''c'") == "ab'c");
+	CHECK(unquoteSqlStringLiteral("''").empty());
+	CHECK(unquoteSqlStringLiteral("not-quoted") == "not-quoted");
+}
+
+TEST_CASE("detectConstantSelectColumns: a quoted string literal column", "[sparql2sql]") {
+	auto cols = detectConstantSelectColumns("SELECT EMPNO, 'ACTIVE' AS STATUS FROM EMP");
+	REQUIRE(cols.count("STATUS") == 1);
+	CHECK(cols["STATUS"] == "ACTIVE");
+	CHECK(cols.count("EMPNO") == 0); // a real column reference is never classified.
+}
+
+TEST_CASE("detectConstantSelectColumns: a boolean keyword literal renders lowercase", "[sparql2sql]") {
+	auto cols = detectConstantSelectColumns("SELECT EMPNO, true AS FLAG FROM EMP");
+	REQUIRE(cols.count("FLAG") == 1);
+	CHECK(cols["FLAG"] == "true");
+
+	auto colsFalse = detectConstantSelectColumns("SELECT EMPNO, FALSE AS FLAG FROM EMP");
+	REQUIRE(colsFalse.count("FLAG") == 1);
+	CHECK(colsFalse["FLAG"] == "false");
+}
+
+TEST_CASE("detectConstantSelectColumns: a bare integer literal", "[sparql2sql]") {
+	auto cols = detectConstantSelectColumns("SELECT EMPNO, 42 AS ANSWER FROM EMP");
+	REQUIRE(cols.count("ANSWER") == 1);
+	CHECK(cols["ANSWER"] == "42");
+}
+
+TEST_CASE("detectConstantSelectColumns: a real column, function call, or unaliased item is not classified",
+          "[sparql2sql]") {
+	auto cols = detectConstantSelectColumns("SELECT EMPNO, LENGTH(ENAME) AS NAMELEN, ENAME FROM EMP");
+	CHECK(cols.empty());
+}
+
+TEST_CASE("detectConstantSelectColumns: a comma inside a nested literal/subquery does not split the item early",
+          "[sparql2sql]") {
+	auto cols = detectConstantSelectColumns("SELECT 'a,b' AS X, (SELECT 1 FROM T) AS Y FROM EMP");
+	REQUIRE(cols.count("X") == 1);
+	CHECK(cols["X"] == "a,b");
+	CHECK(cols.count("Y") == 0); // a subquery expression is not a literal this scan classifies.
+}
+
+TEST_CASE("detectConstantSelectColumns: a query shape without a top-level SELECT...FROM yields nothing",
+          "[sparql2sql]") {
+	CHECK(detectConstantSelectColumns("SELECT 1").empty());
+	CHECK(detectConstantSelectColumns("VALUES (1, 2)").empty());
 }

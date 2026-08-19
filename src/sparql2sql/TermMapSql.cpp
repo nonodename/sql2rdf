@@ -22,7 +22,16 @@ std::string constantTermMapText(const r2rml::ConstantTermMap &constant) {
 	return std::string(reinterpret_cast<const char *>(constant.constantValue.buf), constant.constantValue.n_bytes);
 }
 
-std::string columnExpr(const std::string &sourceAlias, const std::string &columnName, const SqlDialect &dialect) {
+// Render a plain rr:column reference for comparison/projection. Wrapped in
+// CAST(... AS VARCHAR) unless the catalog already knows the column is a
+// VARCHAR-family type, in which case the cast is a provable no-op and is
+// dropped - the catalog is optional, so with none supplied this is exactly
+// the old unconditional-cast behaviour.
+std::string columnExpr(const std::string &sourceAlias, const std::string &columnName, const SqlDialect &dialect,
+                       const TypeCatalog *catalog, const std::string &tableIdentity) {
+	if (catalog != nullptr && !tableIdentity.empty() && catalog->isStringType(tableIdentity, columnName)) {
+		return sourceAlias + "." + dialect.quoteIdentifier(columnName);
+	}
 	return "CAST(" + sourceAlias + "." + dialect.quoteIdentifier(columnName) + " AS VARCHAR)";
 }
 
@@ -163,7 +172,7 @@ SqlExpr termMapToSqlExpr(const r2rml::TermMap &termMap, const std::string &sourc
                          const TypeCatalog *catalog, const std::string &tableIdentity) {
 	if (const auto *col = dynamic_cast<const r2rml::ColumnTermMap *>(&termMap)) {
 		SqlExpr result;
-		result.expr = columnExpr(sourceAlias, col->columnName, dialect);
+		result.expr = columnExpr(sourceAlias, col->columnName, dialect, catalog, tableIdentity);
 		result.requiredNonNullColumns.push_back(qualifiedColumnRef(sourceAlias, col->columnName, dialect));
 		result.term = annotate(termMap, col->columnName, catalog, tableIdentity);
 		return result;
@@ -186,7 +195,8 @@ SqlExpr termMapToSqlExpr(const r2rml::TermMap &termMap, const std::string &sourc
 }
 
 InversionResult invertTermMapAgainstBoundTerm(const r2rml::TermMap &termMap, const sparql::ast::Term &boundTerm,
-                                              const std::string &sourceAlias, const SqlDialect &dialect) {
+                                              const std::string &sourceAlias, const SqlDialect &dialect,
+                                              const TypeCatalog *catalog, const std::string &tableIdentity) {
 	InversionResult result;
 	const std::string boundValue = termLexicalForm(boundTerm);
 
@@ -196,8 +206,8 @@ InversionResult invertTermMapAgainstBoundTerm(const r2rml::TermMap &termMap, con
 	}
 	if (const auto *col = dynamic_cast<const r2rml::ColumnTermMap *>(&termMap)) {
 		result.possible = true;
-		result.whereConditions.push_back(columnExpr(sourceAlias, col->columnName, dialect) + " = " +
-		                                 dialect.stringLiteral(boundValue));
+		result.whereConditions.push_back(columnExpr(sourceAlias, col->columnName, dialect, catalog, tableIdentity) +
+		                                 " = " + dialect.stringLiteral(boundValue));
 		return result;
 	}
 	if (const auto *tmpl = dynamic_cast<const r2rml::TemplateTermMap *>(&termMap)) {
@@ -215,8 +225,9 @@ InversionResult invertTermMapAgainstBoundTerm(const r2rml::TermMap &termMap, con
 			return result;
 		}
 		for (const auto &columnValue : outcome.columnValues) {
-			result.whereConditions.push_back(columnExpr(sourceAlias, columnValue.first, dialect) + " = " +
-			                                 dialect.stringLiteral(columnValue.second));
+			result.whereConditions.push_back(
+			    columnExpr(sourceAlias, columnValue.first, dialect, catalog, tableIdentity) + " = " +
+			    dialect.stringLiteral(columnValue.second));
 		}
 		return result;
 	}

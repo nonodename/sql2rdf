@@ -92,13 +92,14 @@ Resolved resolveSource(const TermSource &src, const SqlDialect &dialect, const T
 	return r;
 }
 
-InversionResult resolveInversion(const TermSource &src, const sparql::ast::Term &boundTerm, const SqlDialect &dialect) {
+InversionResult resolveInversion(const TermSource &src, const sparql::ast::Term &boundTerm, const SqlDialect &dialect,
+                                 const TypeCatalog *catalog) {
 	if (src.isConstant) {
 		InversionResult r;
 		r.possible = (src.constantValue == termLexicalForm(boundTerm));
 		return r;
 	}
-	return invertTermMapAgainstBoundTerm(*src.termMap, boundTerm, src.alias, dialect);
+	return invertTermMapAgainstBoundTerm(*src.termMap, boundTerm, src.alias, dialect, catalog, src.tableIdentity);
 }
 
 std::string logicalTableFromSql(const r2rml::LogicalTable &lt, const std::string &alias, const SqlDialect &dialect) {
@@ -193,10 +194,11 @@ std::string negateConjunction(const std::vector<std::string> &conditions) {
 //   possible, with where conditions     -> it carries it exactly when those
 //                                          hold, so negate them.
 bool applyPredicateExclusions(const TermSource &predicateSrc, const std::vector<std::string> &excludedIris,
-                              const SqlDialect &dialect, std::vector<std::string> &whereConditions) {
+                              const SqlDialect &dialect, const TypeCatalog *catalog,
+                              std::vector<std::string> &whereConditions) {
 	for (const auto &iri : excludedIris) {
 		sparql::ast::Iri excludedTerm(iri, iri);
-		InversionResult inv = resolveInversion(predicateSrc, excludedTerm, dialect);
+		InversionResult inv = resolveInversion(predicateSrc, excludedTerm, dialect, catalog);
 		if (!inv.possible) {
 			continue;
 		}
@@ -304,7 +306,7 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 	Resolved subjectR = resolveSource(subjectSrc, dialect, ctx.catalog());
 	addUnique(requiredNonNull, subjectR.requiredNonNull);
 	if (!subjectSpec.isVar) {
-		InversionResult inv = resolveInversion(subjectSrc, *subjectSpec.boundTerm, dialect);
+		InversionResult inv = resolveInversion(subjectSrc, *subjectSpec.boundTerm, dialect, ctx.catalog());
 		if (!inv.possible) {
 			return;
 		}
@@ -315,13 +317,14 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 	addUnique(requiredNonNull, predicateR.requiredNonNull);
 	if (predicateSpec.kind == PredicateConstraint::ConstantIri) {
 		sparql::ast::Iri predicateBoundTerm(predicateSpec.iri, predicateSpec.iri);
-		InversionResult inv = resolveInversion(predicateSrc, predicateBoundTerm, dialect);
+		InversionResult inv = resolveInversion(predicateSrc, predicateBoundTerm, dialect, ctx.catalog());
 		if (!inv.possible) {
 			return;
 		}
 		addUnique(whereConditions, inv.whereConditions);
 	} else if (predicateSpec.kind == PredicateConstraint::NotIn) {
-		if (!applyPredicateExclusions(predicateSrc, predicateSpec.excludedIris, dialect, whereConditions)) {
+		if (!applyPredicateExclusions(predicateSrc, predicateSpec.excludedIris, dialect, ctx.catalog(),
+		                              whereConditions)) {
 			return;
 		}
 	}
@@ -329,7 +332,7 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 	Resolved objectR = resolveSource(objectSrc, dialect, ctx.catalog());
 	addUnique(requiredNonNull, objectR.requiredNonNull);
 	if (!objectSpec.isVar) {
-		InversionResult inv = resolveInversion(objectSrc, *objectSpec.boundTerm, dialect);
+		InversionResult inv = resolveInversion(objectSrc, *objectSpec.boundTerm, dialect, ctx.catalog());
 		if (!inv.possible) {
 			return;
 		}
