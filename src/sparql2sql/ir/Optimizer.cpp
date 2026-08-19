@@ -167,58 +167,22 @@ RelNodePtr mergeInner(JoinNode &join, const TypeCatalog *catalog) {
 	return node;
 }
 
-// SPJ flattening. Bottom-up: after flattening both children of an inner join,
-// if both are SpjRelations, merge them. Outer joins, anti-joins, unions,
-// filters and binds are boundaries: their children flatten internally, but the
-// node itself is preserved (never hoisted across).
-RelNodePtr flatten(RelNodePtr node, const TypeCatalog *catalog) {
-	switch (node->kind()) {
-	case RelKind::Join: {
-		JoinNode &j = static_cast<JoinNode &>(*node);
-		j.left = flatten(std::move(j.left), catalog);
-		j.right = flatten(std::move(j.right), catalog);
-		if (j.joinKind == JoinKind::Inner && j.left->kind() == RelKind::Spj && j.right->kind() == RelKind::Spj) {
-			return mergeInner(j, catalog);
-		}
-		return node;
-	}
-	case RelKind::AntiJoin: {
-		AntiJoinNode &a = static_cast<AntiJoinNode &>(*node);
-		a.left = flatten(std::move(a.left), catalog);
-		a.right = flatten(std::move(a.right), catalog);
-		return node;
-	}
-	case RelKind::UnionByName: {
-		UnionByNameNode &u = static_cast<UnionByNameNode &>(*node);
-		for (auto &arm : u.arms) {
-			arm = flatten(std::move(arm), catalog);
-		}
-		return node;
-	}
-	case RelKind::Filter: {
-		FilterNode &f = static_cast<FilterNode &>(*node);
-		f.child = flatten(std::move(f.child), catalog);
-		return node;
-	}
-	case RelKind::Bind: {
-		BindNode &b = static_cast<BindNode &>(*node);
-		b.child = flatten(std::move(b.child), catalog);
-		return node;
-	}
-	case RelKind::TransitiveClosure: {
-		TransitiveClosureNode &t = static_cast<TransitiveClosureNode &>(*node);
-		t.step = flatten(std::move(t.step), catalog);
-		return node; // non-mergeable: the node itself is never hoisted/merged.
-	}
-	case RelKind::Spj:
-	case RelKind::Raw:
-	case RelKind::SingleRow:
-	case RelKind::Empty:
-		return node;
-	}
-	return node;
-}
-
+// Fold a BindNode into its already-flattened SpjRelation child by appending the
+// bound expression as one more projected column, in place, rather than leaving
+// a "SELECT *, (expr) AS v FROM (<spj>) AS alias" wrapper around it - the
+// derived-table layer BindNode's own renderer would otherwise always add even
+// though a BIND is exactly a "projection-only" node (the child's columns plus
+// one computed one) with nothing that requires a join boundary of its own.
+//
+// The predicate/expression is rendered against a fresh sentinel alias exactly
+// as foldConjunctIntoSpj does for FILTER, and every reference to it is then
+// textually replaced by that column's own SQL expression evaluated over the
+// block's FROM sources - the same alias-substitution technique, reused for the
+// same reason (translateTerm has no other way to target an as-yet-unaliased
+// relation). Declines - leaving the BindNode in place - when there is no
+// TranslationContext to translate against, the child isn't (yet) a flattened
+// SpjRelation, or the expression can't be resolved purely in terms of the
+// block's own columns.
 std::string replaceAll(std::string s, const std::string &from, const std::string &to) {
 	if (from.empty()) {
 		return s;
@@ -229,6 +193,105 @@ std::string replaceAll(std::string s, const std::string &from, const std::string
 		pos += to.size();
 	}
 	return s;
+}
+
+RelNodePtr foldBindIntoSpj(RelNodePtr node, TranslationContext *ctx) {
+	BindNode &b = static_cast<BindNode &>(*node);
+	if (ctx == nullptr || b.child->kind() != RelKind::Spj) {
+		return node;
+	}
+	SpjRelation &spj = static_cast<SpjRelation &>(*b.child);
+
+	TranslatedPattern scope;
+	fillScopeFromSchema(scope, spj.schema());
+	std::string sentinel = ctx->nextAlias();
+	TermSql bound;
+	try {
+		bound = translateTerm(*b.expr, scope, sentinel, *ctx);
+	} catch (const TranslationError &) {
+		// Mirrors foldConjunctIntoSpj: most often the tag dimension isn't
+		// materialised here yet (see TagDemand.h) - decline and let the late
+		// renderer translate it once it is, or raise the same error there.
+		return node;
+	}
+	std::string value = bound.value;
+	std::string tag = bound.tag;
+	for (const auto &c : spj.schema()) {
+		std::string ref = sentinel + "." + mangleVar(c.var, ctx->dialect());
+		value = replaceAll(value, ref, "(" + c.renderedExpr + ")");
+		if (!tag.empty()) {
+			tag = replaceAll(tag, ref, "(" + c.renderedExpr + ")");
+		}
+	}
+	if (value.find(sentinel + ".") != std::string::npos ||
+	    (!tag.empty() && tag.find(sentinel + ".") != std::string::npos)) {
+		return node; // references a variable this block doesn't itself supply.
+	}
+
+	// The bind column's nonNull/term annotation was already computed by the
+	// folder (PatternFolder.cpp) from the same expression against the same
+	// child scope, and is the last entry of the BindNode's own schema - reuse
+	// it rather than re-derive, so folding changes nothing about what the
+	// column claims to be, only where it's computed.
+	ColumnInfo col = b.schema().back();
+	col.renderedExpr = value;
+	col.prov = Provenance::Computed;
+	col.tagExpr = tag;
+	spj.schema().push_back(col);
+	return std::move(b.child);
+}
+
+// SPJ flattening. Bottom-up: after flattening both children of an inner join,
+// if both are SpjRelations, merge them. Outer joins, anti-joins, unions and
+// filters are boundaries: their children flatten internally, but the node
+// itself is preserved (never hoisted across). A BIND is not a boundary - see
+// foldBindIntoSpj - so it disappears entirely when its child is mergeable.
+RelNodePtr flatten(RelNodePtr node, const OptimizerOptions &opts) {
+	switch (node->kind()) {
+	case RelKind::Join: {
+		JoinNode &j = static_cast<JoinNode &>(*node);
+		j.left = flatten(std::move(j.left), opts);
+		j.right = flatten(std::move(j.right), opts);
+		if (j.joinKind == JoinKind::Inner && j.left->kind() == RelKind::Spj && j.right->kind() == RelKind::Spj) {
+			return mergeInner(j, opts.catalog);
+		}
+		return node;
+	}
+	case RelKind::AntiJoin: {
+		AntiJoinNode &a = static_cast<AntiJoinNode &>(*node);
+		a.left = flatten(std::move(a.left), opts);
+		a.right = flatten(std::move(a.right), opts);
+		return node;
+	}
+	case RelKind::UnionByName: {
+		UnionByNameNode &u = static_cast<UnionByNameNode &>(*node);
+		for (auto &arm : u.arms) {
+			arm = flatten(std::move(arm), opts);
+		}
+		return node;
+	}
+	case RelKind::Filter: {
+		FilterNode &f = static_cast<FilterNode &>(*node);
+		f.child = flatten(std::move(f.child), opts);
+		return node;
+	}
+	case RelKind::Bind: {
+		BindNode &b = static_cast<BindNode &>(*node);
+		b.child = flatten(std::move(b.child), opts);
+		return foldBindIntoSpj(std::move(node), opts.ctx);
+	}
+	case RelKind::TransitiveClosure: {
+		TransitiveClosureNode &t = static_cast<TransitiveClosureNode &>(*node);
+		t.step = flatten(std::move(t.step), opts);
+		return node; // non-mergeable: the node itself is never hoisted/merged.
+	}
+	case RelKind::Spj:
+	case RelKind::Raw:
+	case RelKind::SingleRow:
+	case RelKind::Empty:
+		return node;
+	}
+	return node;
 }
 
 // Rewrite alias-qualified column references in a SQL fragment per `rename`
@@ -898,11 +961,23 @@ RelNodePtr pushFilters(RelNodePtr node, TranslationContext *ctx) {
 
 } // namespace
 
+bool isIdentityProjection(const std::vector<ColumnInfo> &schema, const std::vector<std::string> &outputVars) {
+	if (schema.size() != outputVars.size()) {
+		return false;
+	}
+	for (std::size_t i = 0; i < schema.size(); ++i) {
+		if (schema[i].var != outputVars[i]) {
+			return false;
+		}
+	}
+	return true;
+}
+
 RelNodePtr optimize(RelNodePtr root, const OptimizerOptions &opts) {
 	// Pushdown first: a conjunct folded into an SpjRelation keeps that block
 	// mergeable, so flattening can still fuse it with its inner-join partners.
 	root = pushFilters(std::move(root), opts.ctx);
-	root = flatten(std::move(root), opts.catalog);
+	root = flatten(std::move(root), opts);
 	selfJoinWalk(*root);
 	// Order matters: removing a redundant "IS NOT NULL" guard first (using
 	// the still-present equality) before dropping that equality itself (when

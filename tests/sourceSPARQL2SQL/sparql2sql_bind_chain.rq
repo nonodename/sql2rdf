@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?m ?a ?b ?c
+WHERE {
+  ?m ex:amount ?a .
+  BIND(?a + 1 AS ?b)
+  BIND(?b + 1 AS ?c)
+}

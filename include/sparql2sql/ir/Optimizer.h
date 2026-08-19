@@ -40,4 +40,13 @@ struct OptimizerOptions {
 /// stripping.
 RelNodePtr optimize(RelNodePtr root, const OptimizerOptions &opts);
 
+/// True when projecting `outputVars` (in order) over `schema` is a bare identity:
+/// same variables, same order, nothing renamed/reordered/dropped. Wrapping such a
+/// relation in a "SELECT alias.a AS a, alias.b AS b, ... FROM (<relation>) AS alias"
+/// derived table - the shape a query-level projection or a `{ SELECT ... }`
+/// subquery's own projection otherwise always builds - would be a no-op layer, so a
+/// caller that also confirms no DISTINCT/GROUP BY/ORDER BY/LIMIT/tag-column need is
+/// riding on that wrap may splice the relation's own SQL in directly instead.
+bool isIdentityProjection(const std::vector<ColumnInfo> &schema, const std::vector<std::string> &outputVars);
+
 } // namespace sparql2sql

@@ -401,25 +401,55 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 	std::string havingSql = translateHaving(query, source, alias, ctx);
 	std::string orderBySql = translateOrderBy(query, source, alias, selectListAliasNames, ctx);
 
-	std::string sql = "SELECT";
-	if (query.distinct || query.reduced) {
-		sql += " DISTINCT";
+	// Final flattening: when this statement does nothing but rename the
+	// optimized tree's own columns back to themselves - no DISTINCT/GROUP BY/
+	// HAVING/ORDER BY/LIMIT/OFFSET and no tag column riding along - the
+	// "SELECT alias.a AS a, alias.b AS b, ... FROM (<source>) AS alias" wrapper
+	// built below is a pure no-op derived table. That shape is exactly what a
+	// chain of OPTIONAL/BIND/FILTER blocks nests one more layer of on top of
+	// their own (semantically necessary) wrapping, so eliding it here removes
+	// the one layer that is never anything but boilerplate. Splice `source.sql`
+	// straight through instead.
+	bool elideProjection = !query.selectStar && !grouping && !(query.distinct || query.reduced) && havingSql.empty() &&
+	                       orderBySql.empty() && !query.solutionModifier.hasLimit &&
+	                       !query.solutionModifier.hasOffset && tagCols.empty();
+	std::vector<std::string> bareOutputVars;
+	if (elideProjection) {
+		bareOutputVars.reserve(query.selectItems.size());
+		for (const auto &item : query.selectItems) {
+			if (item.expr) {
+				elideProjection = false;
+				break;
+			}
+			bareOutputVars.push_back(item.var->name);
+		}
+		elideProjection = elideProjection && isIdentityProjection(rootNode->schema(), bareOutputVars);
 	}
-	if (selectCols.empty()) {
-		sql += joinColumnList({"1 AS " + dialect.quoteIdentifier("_dummy")}, ctx);
+
+	std::string sql;
+	if (elideProjection) {
+		sql = source.sql;
 	} else {
-		sql += joinColumnList(selectCols, ctx);
+		sql = "SELECT";
+		if (query.distinct || query.reduced) {
+			sql += " DISTINCT";
+		}
+		if (selectCols.empty()) {
+			sql += joinColumnList({"1 AS " + dialect.quoteIdentifier("_dummy")}, ctx);
+		} else {
+			sql += joinColumnList(selectCols, ctx);
+		}
+		sql += ctx.clauseSep() + "FROM (" + source.sql + ") AS " + alias;
+		if (grouping && !groupBy.groupByKeys.empty()) {
+			sql += ctx.clauseSep() + "GROUP BY" + joinColumnList(groupBy.groupByKeys, ctx);
+		}
+		if (!havingSql.empty()) {
+			sql += ctx.clauseSep() + "HAVING " + havingSql;
+		}
+		sql += orderBySql;
+		sql += dialect.limitOffsetClause(query.solutionModifier.hasLimit, query.solutionModifier.limit,
+		                                 query.solutionModifier.hasOffset, query.solutionModifier.offset);
 	}
-	sql += ctx.clauseSep() + "FROM (" + source.sql + ") AS " + alias;
-	if (grouping && !groupBy.groupByKeys.empty()) {
-		sql += ctx.clauseSep() + "GROUP BY" + joinColumnList(groupBy.groupByKeys, ctx);
-	}
-	if (!havingSql.empty()) {
-		sql += ctx.clauseSep() + "HAVING " + havingSql;
-	}
-	sql += orderBySql;
-	sql += dialect.limitOffsetClause(query.solutionModifier.hasLimit, query.solutionModifier.limit,
-	                                 query.solutionModifier.hasOffset, query.solutionModifier.offset);
 
 	TranslatedPattern result;
 	result.sql = sql;
