@@ -1,0 +1,13 @@
+PREFIX ex: <http://example.com/ns#>
+
+# Star pattern over TriplesMap2/DEPT: every triple resolves (after union
+# pruning against the shared ?d subject and rr:class constraint) to a plain
+# PredicateObjectMap on the same logical table, so self-join elimination
+# should collapse all four candidate scans into one.
+SELECT ?d ?n ?loc ?s
+WHERE {
+  ?d a ex:Department ;
+     ex:name ?n ;
+     ex:location ?loc ;
+     ex:staff ?s .
+}
