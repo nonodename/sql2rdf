@@ -1189,6 +1189,56 @@ std::vector<TemplateCandidate> gatherCandidates(const RelNode &side, const std::
 	return out;
 }
 
+// Whether every directly-visible alternative `other` offers for `var` agrees
+// on one definite RdfTermKind - only then does knowing a side arm's own
+// definite kind prove anything: an object position whose mapping fixes it to
+// Literal can never join against a position that is definitely Iri/BlankNode
+// (R2RML forbids a literal-typed subject map), and symmetrically a position
+// forced to a definite non-Literal kind (e.g. by a sibling rdf:type triple's
+// synthetic Iri arm) can never join against a definitely-Literal position.
+// If any alternative is Unknown, or two alternatives disagree, nothing is
+// provable and every side arm must pass regardless of its own kind - callers
+// skip the (potentially large) per-arm scan entirely in that case, rather
+// than pay an O(sideArms) pass for a check that cannot prune anything.
+//
+// Deliberately a single O(otherArms) scan, not a per-arm candidate list like
+// TemplateCandidate/gatherCandidates above: `var` here is typically the
+// object of a triple pattern with an unconstrained (variable) predicate,
+// which can union in one arm per PredicateObjectMap across the *entire*
+// mapping, so an O(sideArms * otherArms) check here - cheap per comparison
+// but still quadratic - measurably slowed exactly that query shape.
+struct RequiredKind {
+	bool restrictive = false; // true iff every alternative agrees on `kind`
+	RdfTermKind kind = RdfTermKind::Unknown;
+};
+
+RequiredKind requiredKindFor(const RelNode &other, const std::string &var) {
+	RequiredKind out;
+	auto consider = [&](const ColumnInfo *col) -> bool {
+		if (col == nullptr || col->term.kind == RdfTermKind::Unknown) {
+			return false; // not restrictive - stop scanning.
+		}
+		if (!out.restrictive) {
+			out.restrictive = true;
+			out.kind = col->term.kind;
+		} else if (out.kind != col->term.kind) {
+			return false;
+		}
+		return true;
+	};
+	if (other.kind() == RelKind::UnionByName) {
+		const UnionByNameNode &u = static_cast<const UnionByNameNode &>(other);
+		for (const auto &arm : u.arms) {
+			if (!consider(arm->column(var))) {
+				return RequiredKind();
+			}
+		}
+		return out;
+	}
+	consider(other.column(var));
+	return out;
+}
+
 // Recompute `side`'s own schema (per-variable term annotation and
 // boundedness) from its current `arms`, after pruneUnionSide has dropped some
 // of them but left more than one survivor (the exactly-one case is instead
@@ -1273,9 +1323,18 @@ void pruneUnionSide(UnionByNameNode &side, const RelNode &other, const std::vect
 			continue;
 		}
 		std::vector<TemplateCandidate> otherCandidates = gatherCandidates(other, k.var);
+		RequiredKind requiredKind = requiredKindFor(other, k.var);
 		for (std::size_t i = 0; i < side.arms.size(); ++i) {
 			if (!keep[i]) {
 				continue;
+			}
+			if (requiredKind.restrictive) {
+				const ColumnInfo *mineCol = side.arms[i]->column(k.var);
+				if (mineCol != nullptr && mineCol->term.kind != RdfTermKind::Unknown &&
+				    mineCol->term.kind != requiredKind.kind) {
+					keep[i] = false;
+					continue;
+				}
 			}
 			TemplateCandidate mine = templateCandidateFor(*side.arms[i], k.var);
 			bool compatibleWithAny = false;

@@ -1,0 +1,29 @@
+@prefix rr:  <http://www.w3.org/ns/r2rml#>.
+@prefix ex:  <http://example.com/ns#>.
+
+# Toy mapping for pruneUnionSide's term-kind pruning: ex:val is ambiguous
+# across TWO triples maps on its own - TableA's object map is rr:IRI-typed,
+# TableB's is a plain (literal) column - so ?o's kind alone is unknown.
+# TableC is the only source of ex:tag, and R2RML forbids a literal subject
+# map, so its subject is always an IRI. Joining ?o (ex:val's object) against
+# ?o (ex:tag's subject) proves ?o can never be TableB's literal arm, even
+# though TableB's plain column carries no rr:template to disprove it by the
+# existing template-disjointness check.
+
+<#TableA>
+    rr:logicalTable [ rr:tableName "TABLE_A" ];
+    rr:subjectMap [ rr:template "http://ex.org/a/{ID}" ];
+    rr:predicateObjectMap [ rr:predicate ex:val;
+        rr:objectMap [ rr:template "http://ex.org/thing/{REF}"; rr:termType rr:IRI ] ].
+
+<#TableB>
+    rr:logicalTable [ rr:tableName "TABLE_B" ];
+    rr:subjectMap [ rr:template "http://ex.org/b/{ID}" ];
+    rr:predicateObjectMap [ rr:predicate ex:val;
+        rr:objectMap [ rr:column "VAL" ] ].
+
+<#TableC>
+    rr:logicalTable [ rr:tableName "TABLE_C" ];
+    rr:subjectMap [ rr:template "http://ex.org/thing/{ID}" ];
+    rr:predicateObjectMap [ rr:predicate ex:tag;
+        rr:objectMap [ rr:column "TAG" ] ].

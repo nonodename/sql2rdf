@@ -34,11 +34,11 @@ using sparql2sql::translateQuery;
 
 namespace {
 
-std::string translateFixture(const char *rqFile) {
+std::string translateFixture(const char *rqFile, const char *ttlFile = "example_emp_dept.ttl") {
 	Parser parser;
 	auto q = parser.parseFile(std::string(SOURCE_SPARQL2SQL_DIR) + rqFile);
 	R2RMLParser mappingParser;
-	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	R2RMLMapping mapping = mappingParser.parse(std::string(SOURCE_R2RML_DIR) + ttlFile);
 	DuckDbDialect dialect;
 	return translateQuery(*q, mapping, dialect);
 }
@@ -70,4 +70,27 @@ TEST_CASE("translateQuery: joining on the subject prunes the union arm with an i
 	CHECK(sql.find("\"DEPT\"") == std::string::npos);
 	CHECK(sql.find("\"ENAME\"") != std::string::npos);
 	CHECK(sql.find("\"EMP\"") != std::string::npos);
+}
+
+TEST_CASE("translateQuery: an object position ambiguous between IRI and literal stays a union alone") {
+	// Baseline (sparql2sql_kind_prune.ttl): ex:val's object is a real union
+	// between TableA's rr:IRI-typed template and TableB's plain (literal)
+	// column - genuinely ambiguous with nothing else to disambiguate it.
+	std::string sql = translateFixture("kind_prune_val_alone.rq", "sparql2sql_kind_prune.ttl");
+	CHECK(sql.find("UNION") != std::string::npos);
+	CHECK(sql.find("\"TABLE_A\"") != std::string::npos);
+	CHECK(sql.find("\"TABLE_B\"") != std::string::npos);
+}
+
+TEST_CASE("translateQuery: joining an ambiguous object against a subject prunes the literal-kind arm") {
+	// ex:tag's subject (TableC) is - like every R2RML subject map - never a
+	// literal, so once ?o is also constrained to be ex:tag's subject,
+	// ex:val's TableB candidate (a plain literal column, with no rr:template
+	// for the existing disjointness check to disprove) is provably dead and
+	// the union collapses to TableA alone.
+	std::string sql = translateFixture("kind_prune_val_tag_join.rq", "sparql2sql_kind_prune.ttl");
+	CHECK(sql.find("UNION") == std::string::npos);
+	CHECK(sql.find("\"TABLE_B\"") == std::string::npos);
+	CHECK(sql.find("\"TABLE_A\"") != std::string::npos);
+	CHECK(sql.find("\"TABLE_C\"") != std::string::npos);
 }
