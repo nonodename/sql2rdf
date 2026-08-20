@@ -1,0 +1,37 @@
+@prefix rr:  <http://www.w3.org/ns/r2rml#>.
+@prefix ex:  <http://example.com/ns#>.
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#>.
+
+# Toy mapping for pruneUnionSide's schema-refresh: ex:val is ambiguous across
+# THREE triples maps (TableA/TableB/TableC), two of which (A, B) agree on
+# datatype (xsd:integer) and one of which (C) disagrees (xsd:string). ex:marker
+# is ambiguous across only A and B, with subject templates disjoint from C's.
+#
+# Joining ex:val with ex:marker on the shared subject prunes exactly one of
+# ex:val's three arms (C - incompatible with both of ex:marker's templates),
+# leaving two surviving arms rather than collapsing to a single one. Those two
+# arms happen to agree on datatype, so the refreshed union schema should come
+# out fully determined even though the *original* three-arm meet (integer vs
+# integer vs string) was degraded.
+
+<#TableA>
+    rr:logicalTable [ rr:tableName "TABLE_A" ];
+    rr:subjectMap [ rr:template "http://ex.org/a/{ID}" ];
+    rr:predicateObjectMap [ rr:predicate ex:val;
+        rr:objectMap [ rr:column "VAL"; rr:datatype xsd:integer ] ];
+    rr:predicateObjectMap [ rr:predicate ex:marker;
+        rr:objectMap [ rr:column "ID" ] ].
+
+<#TableB>
+    rr:logicalTable [ rr:tableName "TABLE_B" ];
+    rr:subjectMap [ rr:template "http://ex.org/b/{ID}" ];
+    rr:predicateObjectMap [ rr:predicate ex:val;
+        rr:objectMap [ rr:column "VAL"; rr:datatype xsd:integer ] ];
+    rr:predicateObjectMap [ rr:predicate ex:marker;
+        rr:objectMap [ rr:column "ID" ] ].
+
+<#TableC>
+    rr:logicalTable [ rr:tableName "TABLE_C" ];
+    rr:subjectMap [ rr:template "http://ex.org/c/{ID}" ];
+    rr:predicateObjectMap [ rr:predicate ex:val;
+        rr:objectMap [ rr:column "VAL"; rr:datatype xsd:string ] ].

@@ -1,5 +1,7 @@
 #include "sparql2sql/ir/Optimizer.h"
 
+#include <algorithm>
+#include <iterator>
 #include <map>
 #include <set>
 #include <string>
@@ -1187,6 +1189,74 @@ std::vector<TemplateCandidate> gatherCandidates(const RelNode &side, const std::
 	return out;
 }
 
+// Recompute `side`'s own schema (per-variable term annotation and
+// boundedness) from its current `arms`, after pruneUnionSide has dropped some
+// of them but left more than one survivor (the exactly-one case is instead
+// handled by unwrapSingletonUnion, which replaces the whole node with the
+// survivor's own already-correct schema).
+//
+// meetAcrossArms was originally computed over the *full* arm list at fold
+// time; dropping whole arms can only remove disagreement, never add it, so
+// the recomputed annotation is always at least as precise as the stale one -
+// most usefully, a variable whose surviving arms all agree on datatype now
+// becomes fully determined, letting ORDER BY and comparisons over it fold
+// their CASE ladder down to a single typed key instead of carrying a d_<var>
+// tag column for a cross-type ambiguity that pruning has already ruled out.
+void refreshUnionSchema(UnionByNameNode &side) {
+	bool first = true;
+	std::set<std::string> boundV;
+	for (const auto &arm : side.arms) {
+		std::set<std::string> bv = arm->boundVars();
+		if (first) {
+			boundV = std::move(bv);
+			first = false;
+		} else {
+			std::set<std::string> next;
+			std::set_intersection(boundV.begin(), boundV.end(), bv.begin(), bv.end(), std::inserter(next, next.end()));
+			boundV = std::move(next);
+		}
+	}
+	for (auto &col : side.schema()) {
+		col.nonNull = boundV.count(col.var) != 0;
+		col.term = meetAcrossArms(col.var, side.arms);
+	}
+}
+
+// A Join/AntiJoin/Filter/Bind node's own schema is a COPY made once at fold
+// time (PatternFolder.cpp's innerJoin/leftOuterJoin/antiJoin/Filter/Bind
+// cases), not a live view of its child(ren). refreshUnionSchema above only
+// fixes the UnionByNameNode itself; every ancestor between it and the query's
+// top level is holding its own stale copy of the same columns and must be
+// re-synced too, or a variable that just became fully determined stays
+// degraded everywhere above the union. `child` supplies the fresh term/
+// nonNull for any column this node shares with it; a node's own extra column
+// not present in `child` (a Bind's computed output) is left untouched.
+void refreshFromChild(RelNode &node, const RelNode &child) {
+	for (auto &col : node.schema()) {
+		const ColumnInfo *src = child.column(col.var);
+		if (src != nullptr) {
+			col.nonNull = src->nonNull;
+			col.term = src->term;
+		}
+	}
+}
+
+// Same idea as refreshFromChild, but for a JoinNode: its schema is a meet of
+// BOTH sides (a shared variable must agree across the match), not a plain
+// copy of one, so it needs its own recomputation mirroring buildKeys'
+// callers exactly.
+void refreshJoinSchema(JoinNode &j) {
+	std::set<std::string> boundV = j.left->boundVars();
+	if (j.joinKind == JoinKind::Inner) {
+		std::set<std::string> rBound = j.right->boundVars();
+		boundV.insert(rBound.begin(), rBound.end());
+	}
+	for (auto &col : j.schema()) {
+		col.nonNull = boundV.count(col.var) != 0;
+		col.term = meetColumns({j.left->column(col.var), j.right->column(col.var)});
+	}
+}
+
 // Drop arms of `side` that, for some key, are incompatible with every
 // alternative the other side of the join offers for that key's variable.
 // Skips any key whose comparison is null-tolerant (`nullSafe`): its rendered
@@ -1239,6 +1309,9 @@ void pruneUnionSide(UnionByNameNode &side, const RelNode &other, const std::vect
 		}
 	}
 	side.arms = std::move(newArms);
+	if (survivors > 1) {
+		refreshUnionSchema(side);
+	}
 }
 
 // Whether two directly-visible union arms can ever produce the same output
@@ -1316,12 +1389,21 @@ RelNodePtr pruneUnionBranches(RelNodePtr node) {
 		}
 		j.left = unwrapSingletonUnion(std::move(j.left));
 		j.right = unwrapSingletonUnion(std::move(j.right));
+		// Either side's pruning (or a nested refresh further down the tree)
+		// may have sharpened a column this join's own schema copies - re-meet
+		// it now so a variable fully determined on both sides after pruning
+		// reads that way here too, not just at the union that produced it.
+		refreshJoinSchema(j);
 		return node;
 	}
 	case RelKind::AntiJoin: {
 		AntiJoinNode &a = static_cast<AntiJoinNode &>(*node);
 		a.left = pruneUnionBranches(std::move(a.left));
 		a.right = pruneUnionBranches(std::move(a.right));
+		// MINUS preserves left's schema exactly (see antiJoin in
+		// PatternFolder.cpp); re-sync that copy from the (possibly refreshed)
+		// left child.
+		refreshFromChild(a, *a.left);
 		return node;
 	}
 	case RelKind::UnionByName: {
@@ -1330,16 +1412,23 @@ RelNodePtr pruneUnionBranches(RelNodePtr node) {
 			arm = pruneUnionBranches(std::move(arm));
 		}
 		relaxUnionDedupIfDisjoint(u);
+		// An arm's own schema may have sharpened during its own recursive
+		// pruning (it need not have lost any of ITS arms at this level to have
+		// gained precision further down), so re-meet this union's schema from
+		// its current arms even when pruneUnionSide never touches `u` itself.
+		refreshUnionSchema(u);
 		return node;
 	}
 	case RelKind::Filter: {
 		FilterNode &f = static_cast<FilterNode &>(*node);
 		f.child = pruneUnionBranches(std::move(f.child));
+		refreshFromChild(f, *f.child);
 		return node;
 	}
 	case RelKind::Bind: {
 		BindNode &b = static_cast<BindNode &>(*node);
 		b.child = pruneUnionBranches(std::move(b.child));
+		refreshFromChild(b, *b.child);
 		return node;
 	}
 	case RelKind::TransitiveClosure: {

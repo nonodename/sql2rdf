@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?s ?v
+WHERE {
+  ?s ex:val ?v .
+}
+ORDER BY ?v
