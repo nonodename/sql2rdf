@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?t ?pn ?d
+WHERE {
+  ?t ex:pname ?pn .
+  ?t ex:idesc ?d .
+}

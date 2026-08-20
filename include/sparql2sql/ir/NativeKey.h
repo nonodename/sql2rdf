@@ -26,10 +26,13 @@ struct NativeKeyPair {
 /// pair type-comparable (so a missing or partial catalog simply disables the
 /// rewrite):
 ///  - both sides are a pure, uncast base column (rr:column term maps);
-///  - both sides are the *same* invertible rr:template over the same number of
-///    placeholders. Equal placeholder values always produce equal template
-///    text, and invertibility (no two placeholders textually adjacent) gives
-///    the converse, so the two equalities are equivalent. This is the case that
+///  - both sides are invertible rr:templates with the same "shape"
+///    (identical literal segments and placeholder positions - see
+///    TemplateUtil::sameTemplateShape; placeholder *names* may differ, e.g.
+///    "ex:data/PROD/{PROD_CODE}" vs "ex:data/PROD/{ITEM_PROD_CODE}"). Equal
+///    placeholder values always produce equal template text, and
+///    invertibility (no two placeholders textually adjacent) gives the
+///    converse, so the two equalities are equivalent. This is the case that
 ///    matters in practice: R2RML subjects are nearly always templates, so
 ///    without it subject joins compare constructed IRI strings.
 ///

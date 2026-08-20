@@ -1,0 +1,26 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Toy fixture for the same-*shape*-template native-join-key optimization:
+# two triples maps whose subject templates share the same literal prefix
+# ("http://ex.org/data/PROD/") but name their placeholder column differently -
+# PRODUCTS.PROD_CODE vs ITEMS.ITEM_PROD_CODE. Because the templates have the
+# same shape and are both invertible, a type catalog lets the join be
+# rewritten to a plain equality on the two placeholder columns instead of
+# comparing constructed IRI text.
+
+<#ProductsTriplesMap>
+    rr:logicalTable [ rr:tableName "PRODUCTS" ];
+    rr:subjectMap [ rr:template "http://ex.org/data/PROD/{PROD_CODE}" ];
+    rr:predicateObjectMap [
+        rr:predicate ex:pname;
+        rr:objectMap [ rr:column "PNAME" ];
+    ].
+
+<#ItemsTriplesMap>
+    rr:logicalTable [ rr:tableName "ITEMS" ];
+    rr:subjectMap [ rr:template "http://ex.org/data/PROD/{ITEM_PROD_CODE}" ];
+    rr:predicateObjectMap [
+        rr:predicate ex:idesc;
+        rr:objectMap [ rr:column "IDESC" ];
+    ].

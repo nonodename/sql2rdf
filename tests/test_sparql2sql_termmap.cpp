@@ -28,6 +28,7 @@ using sparql2sql::invertTermMapAgainstBoundTerm;
 using sparql2sql::parseTemplate;
 using sparql2sql::percentDecode;
 using sparql2sql::referencedColumns;
+using sparql2sql::sameTemplateShape;
 using sparql2sql::SqlExpr;
 using sparql2sql::termMapToSqlExpr;
 using sparql2sql::TypeCatalog;
@@ -185,6 +186,30 @@ TEST_CASE("percentDecode is the inverse of RFC3986 percent-encoding") {
 	CHECK(percentDecode("no-encoding-here") == "no-encoding-here");
 	// Trailing malformed escape left as-is rather than decoded.
 	CHECK(percentDecode("bad%2") == "bad%2");
+}
+
+TEST_CASE("sameTemplateShape: identical templates are the same shape") {
+	CHECK(sameTemplateShape("ex:data/PROD/{PROD_CODE}", "ex:data/PROD/{PROD_CODE}"));
+}
+
+TEST_CASE("sameTemplateShape: same literal segments with a differently-named placeholder are the same shape") {
+	CHECK(sameTemplateShape("ex:data/PROD/{PROD_CODE}", "ex:data/PROD/{ITEM_PROD_CODE}"));
+}
+
+TEST_CASE("sameTemplateShape: differing literal text is not the same shape") {
+	CHECK_FALSE(sameTemplateShape("ex:data/PROD/{PROD_CODE}", "ex:data/CAT/{PROD_CODE}"));
+}
+
+TEST_CASE("sameTemplateShape: differing placeholder counts are not the same shape") {
+	CHECK_FALSE(sameTemplateShape("ex:data/{A}/{B}", "ex:data/{A}"));
+}
+
+TEST_CASE("sameTemplateShape: a placeholder repeated at the same positions is the same shape") {
+	CHECK(sameTemplateShape("ex:{X}/{X}/end", "ex:{Y}/{Y}/end"));
+}
+
+TEST_CASE("sameTemplateShape: a placeholder repeated on only one side is not the same shape") {
+	CHECK_FALSE(sameTemplateShape("ex:{X}/{X}/end", "ex:{Y}/{Z}/end"));
 }
 
 TEST_CASE("termMapToSqlExpr: ColumnTermMap produces a cast column reference") {

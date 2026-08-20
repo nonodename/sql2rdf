@@ -23,7 +23,9 @@ namespace sparql2sql {
 ///    only provenance for which a native (non-VARCHAR-cast) join key is
 ///    considered.
 ///  - TemplateExpr: an rr:template string concatenation. A join on two
-///    columns with the *identical* template is equivalent to a join on the
+///    columns whose templates have the *same shape* (TemplateUtil::
+///    sameTemplateShape - identical literal segments/placeholder positions,
+///    placeholder names may differ) is equivalent to a join on the
 ///    placeholder columns (subject to TemplateUtil's inversion assumptions).
 ///  - ConstantExpr: a constant term map / literal.
 ///  - Coalesced: COALESCE(l, r) from a null-tolerant (OPTIONAL) join.

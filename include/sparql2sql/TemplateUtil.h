@@ -106,4 +106,21 @@ std::string percentDecode(const std::string &value);
 /// rather than introducing a new correctness posture.
 bool templatesCanEverMatch(const std::string &templateA, const std::string &templateB);
 
+/// Whether two rr:template strings have the same literal/placeholder
+/// "shape": the same number of segments, in the same order, with every
+/// literal segment byte-identical and every placeholder position aligned -
+/// but placeholder *names* may differ, and a repeated placeholder in one
+/// template (e.g. "{x}/{x}") must be repeated at exactly the same positions
+/// in the other (e.g. "{y}/{y}").
+///
+/// Used by the native-join-key rewrite to recognize joins like
+/// "ex:data/PROD/{PROD_CODE}" = "ex:data/PROD/{ITEM_PROD_CODE}" as reducible
+/// to a plain column equality PROD_CODE = ITEM_PROD_CODE, without requiring
+/// the placeholder column to be named identically on both sides.
+///
+/// A true result implies referencedColumns() on the two parsed templates
+/// produces same-length, positionally-corresponding vectors: callers may
+/// zip them directly.
+bool sameTemplateShape(const std::string &templateA, const std::string &templateB);
+
 } // namespace sparql2sql

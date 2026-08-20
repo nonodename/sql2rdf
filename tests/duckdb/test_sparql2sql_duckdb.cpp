@@ -133,6 +133,16 @@ std::unique_ptr<DuckDBConnection> makeSeededDatabase() {
 	conn->execute("INSERT INTO COUNTS VALUES (1,'a'),(2,'a'),(3,'a'),(4,'a'),(5,'a'),(6,'a'),(7,'a'),(8,'a'),"
 	              "(9,'a'),(10,'a'),(11,'a'),(12,'b'),(13,'b')");
 
+	// Two tables whose subject templates share the same literal shape
+	// ("ex:data/PROD/{...}") but name their placeholder column differently -
+	// PRODUCTS.PROD_CODE vs ITEMS.ITEM_PROD_CODE - backing
+	// sparql2sql_template_join_diff_placeholder.ttl. Only PROD_CODE 7 has a
+	// matching ITEMS row.
+	conn->execute("CREATE TABLE PRODUCTS (PROD_CODE INTEGER, PNAME VARCHAR)");
+	conn->execute("INSERT INTO PRODUCTS VALUES (7, 'WIDGET'), (8, 'GIZMO')");
+	conn->execute("CREATE TABLE ITEMS (ITEM_PROD_CODE INTEGER, IDESC VARCHAR)");
+	conn->execute("INSERT INTO ITEMS VALUES (7, 'blue widget')");
+
 	return conn;
 }
 
@@ -541,6 +551,48 @@ TEST_CASE("sparql2sql_template_join.rq: two same-template subjects join on the n
 	std::string nativeSql = translateQuery(*query, mapping, dialect, &cat);
 	INFO("native SQL: " << nativeSql);
 	CHECK(nativeSql.find("\"ID\" = ") != std::string::npos);
+	{
+		std::unique_ptr<r2rml::SQLResultSet> rs = conn->execute(nativeSql);
+		auto rows = collectRows(*rs);
+		REQUIRE(rows.size() == 1);
+		CHECK(containsRow(rows, expected));
+	}
+}
+
+TEST_CASE("sparql2sql_template_join_diff_placeholder.rq: same-shape templates with differently-named "
+          "placeholders join on their native columns, same rows") {
+	auto conn = makeSeededDatabase();
+	Parser parser;
+	auto query = parser.parseFile(SOURCE_SPARQL2SQL_DIR "sparql2sql_template_join_diff_placeholder.rq");
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_template_join_diff_placeholder.ttl");
+	REQUIRE(mapping.isValid());
+	DuckDbDialect dialect;
+
+	// Only PRODUCTS.PROD_CODE 7 has a matching ITEMS row.
+	const Row expected = {{"V_T", "http://ex.org/data/PROD/7"}, {"V_PN", "WIDGET"}, {"V_D", "blue widget"}};
+
+	// Without a catalog: the subjects are compared as constructed IRI strings.
+	std::string plainSql = translateQuery(*query, mapping, dialect);
+	INFO("plain SQL: " << plainSql);
+	CHECK(plainSql.find("'http://ex.org/data/PROD/' || ") != std::string::npos);
+	{
+		std::unique_ptr<r2rml::SQLResultSet> rs = conn->execute(plainSql);
+		auto rows = collectRows(*rs);
+		REQUIRE(rows.size() == 1);
+		CHECK(containsRow(rows, expected));
+	}
+
+	sparql2sql::TypeCatalog cat = catalogOf(*conn);
+	REQUIRE(cat.comparable("PRODUCTS", "PROD_CODE", "ITEMS", "ITEM_PROD_CODE"));
+
+	// With a catalog: despite the differently-named placeholder columns, the
+	// join is emitted on the native columns instead of the constructed IRI
+	// text, and the result set is unchanged.
+	std::string nativeSql = translateQuery(*query, mapping, dialect, &cat);
+	INFO("native SQL: " << nativeSql);
+	CHECK(nativeSql.find("\"PROD_CODE\" = ") != std::string::npos);
+	CHECK(nativeSql.find("\"ITEM_PROD_CODE\"") != std::string::npos);
 	{
 		std::unique_ptr<r2rml::SQLResultSet> rs = conn->execute(nativeSql);
 		auto rows = collectRows(*rs);

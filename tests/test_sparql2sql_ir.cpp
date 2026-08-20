@@ -230,10 +230,11 @@ ColumnInfo tmplCol(const std::string &var, const std::string &alias, const std::
 	c.prov = Provenance::TemplateExpr;
 	c.sourceAlias = alias;
 	c.tableIdentity = table;
-	// Note the template string embeds the placeholder's column NAME, so two
-	// sides can only share a template if they also share that column name -
-	// they differ in table and alias, which is exactly the shape a SPARQL
-	// variable bound to one map's subject IRI and another's object IRI takes.
+	// The template string embeds the placeholder's column NAME, but the
+	// native-key rewrite compares template *shape* (TemplateUtil::
+	// sameTemplateShape), not exact template text, so two sides can share a
+	// literal prefix while naming the placeholder column differently - see
+	// "two same-shape templates with differently-named placeholders" below.
 	c.templateString = prefix + "{" + placeholder + "}";
 	c.templateColumnNames.push_back(placeholder);
 	c.templateColumnRefs.push_back(alias + ".\"" + placeholder + "\"");
@@ -272,6 +273,28 @@ TEST_CASE("optimize: two same-template subject keys join on their placeholder co
 
 	REQUIRE(result->kind() == RelKind::Spj);
 	CHECK(hasCond(*result, "t1.\"DEPTNO\" = t2.\"DEPTNO\""));
+}
+
+TEST_CASE("optimize: two same-shape templates with differently-named placeholders join on their placeholder columns",
+          "[sparql2sql][ir]") {
+	// Same literal prefix/shape, but the placeholder column is named
+	// differently on each side (e.g. a fact table's PROD_CODE joined against
+	// a dimension table's ITEM_PROD_CODE) - the rewrite must not require the
+	// two template strings to be byte-identical.
+	std::vector<ColumnInfo> leftCols = {tmplCol("k", "t1", "http://x/d/", "PROD_CODE", "company")};
+	std::vector<ColumnInfo> rightCols = {tmplCol("k", "t2", "http://x/d/", "ITEM_PROD_CODE", "relations")};
+	RelNodePtr join = makeJoin(JoinKind::Inner, makeSpj("t1", "company", leftCols, true),
+	                           makeSpj("t2", "relations", rightCols, true), "k", /*nullSafe=*/false);
+
+	TypeCatalog cat;
+	cat.columnTypes["company"]["PROD_CODE"] = "BIGINT";
+	cat.columnTypes["relations"]["ITEM_PROD_CODE"] = "BIGINT";
+	OptimizerOptions opts;
+	opts.catalog = &cat;
+	RelNodePtr result = optimize(std::move(join), opts);
+
+	REQUIRE(result->kind() == RelKind::Spj);
+	CHECK(hasCond(*result, "t1.\"PROD_CODE\" = t2.\"ITEM_PROD_CODE\""));
 }
 
 namespace {

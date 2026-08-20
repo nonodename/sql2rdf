@@ -253,6 +253,63 @@ bool templatesCanEverMatch(const std::string &templateA, const std::string &temp
 	return true;
 }
 
+bool sameTemplateShape(const std::string &templateA, const std::string &templateB) {
+	if (templateA == templateB) {
+		return true;
+	}
+	std::vector<TemplateSegment> a = parseTemplate(templateA);
+	std::vector<TemplateSegment> b = parseTemplate(templateB);
+	if (a.size() != b.size()) {
+		return false;
+	}
+	// Canonicalize each side's placeholder names to their first-occurrence
+	// index so a repeated placeholder ("{x}/{x}") only matches a template
+	// that repeats a placeholder at the same positions ("{y}/{y}").
+	std::vector<int> canonA, canonB;
+	canonA.reserve(a.size());
+	canonB.reserve(b.size());
+	std::vector<std::string> seenA, seenB;
+	for (const auto &seg : a) {
+		if (!seg.isPlaceholder) {
+			canonA.push_back(-1);
+			continue;
+		}
+		auto it = std::find(seenA.begin(), seenA.end(), seg.text);
+		if (it == seenA.end()) {
+			canonA.push_back(static_cast<int>(seenA.size()));
+			seenA.push_back(seg.text);
+		} else {
+			canonA.push_back(static_cast<int>(it - seenA.begin()));
+		}
+	}
+	for (const auto &seg : b) {
+		if (!seg.isPlaceholder) {
+			canonB.push_back(-1);
+			continue;
+		}
+		auto it = std::find(seenB.begin(), seenB.end(), seg.text);
+		if (it == seenB.end()) {
+			canonB.push_back(static_cast<int>(seenB.size()));
+			seenB.push_back(seg.text);
+		} else {
+			canonB.push_back(static_cast<int>(it - seenB.begin()));
+		}
+	}
+	for (std::size_t i = 0; i < a.size(); ++i) {
+		if (a[i].isPlaceholder != b[i].isPlaceholder) {
+			return false;
+		}
+		if (!a[i].isPlaceholder) {
+			if (a[i].text != b[i].text) {
+				return false;
+			}
+		} else if (canonA[i] != canonB[i]) {
+			return false;
+		}
+	}
+	return true;
+}
+
 std::string percentDecode(const std::string &value) {
 	std::string out;
 	out.reserve(value.size());
