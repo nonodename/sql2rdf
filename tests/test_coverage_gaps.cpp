@@ -477,7 +477,8 @@ TEST_CASE("PredicateObjectMap::processRow falls back to an internal Serd environ
 	const uint8_t subjUri[] = "http://example.com/subj/1";
 	SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
 
-	std::string out = captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn); });
+	std::string out =
+	    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn, {}); });
 
 	REQUIRE(out.find("SMITH") != std::string::npos);
 }
@@ -506,7 +507,8 @@ TEST_CASE("PredicateObjectMap::processRow: literal with a language tag never get
 	const uint8_t subjUri[] = "http://example.com/subj/1";
 	SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
 
-	std::string out = captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn); });
+	std::string out =
+	    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn, {}); });
 
 	REQUIRE(out.find("\"42\"") != std::string::npos);
 	REQUIRE(out.find("^^<http://www.w3.org/2001/XMLSchema#integer>") == std::string::npos);
@@ -533,7 +535,8 @@ TEST_CASE("PredicateObjectMap::processRow skips a ReferencingObjectMap whose par
 	const uint8_t subjUri[] = "http://example.com/subj/1";
 	SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
 
-	std::string out = captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn); });
+	std::string out =
+	    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn, {}); });
 	REQUIRE(out.empty());
 }
 
@@ -1158,7 +1161,7 @@ TEST_CASE("PredicateObjectMap::processRow skips rows whose predicate or object t
 		SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
 
 		std::string out =
-		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn); });
+		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn, {}); });
 		REQUIRE(out.empty());
 	}
 
@@ -1176,7 +1179,7 @@ TEST_CASE("PredicateObjectMap::processRow skips rows whose predicate or object t
 		SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
 
 		std::string out =
-		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn); });
+		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn, {}); });
 		REQUIRE(out.empty());
 	}
 }
@@ -1322,7 +1325,7 @@ TEST_CASE("PredicateObjectMap::processRow tolerates null map entries and null pa
 		SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
 
 		std::string out =
-		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn); });
+		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn, {}); });
 		// The valid predicate/object pair still emits despite the null entries.
 		REQUIRE(out.find("SMITH") != std::string::npos);
 	}
@@ -1353,7 +1356,7 @@ TEST_CASE("PredicateObjectMap::processRow tolerates null map entries and null pa
 		SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
 
 		std::string out =
-		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn); });
+		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn, {}); });
 		REQUIRE(out.empty());
 	}
 }

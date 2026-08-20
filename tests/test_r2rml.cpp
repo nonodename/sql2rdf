@@ -797,3 +797,50 @@ TEST_CASE("operator<< omits parse errors section when there are none") {
 	oss << mapping;
 	REQUIRE(oss.str().find("Parse errors") == std::string::npos);
 }
+
+// ---------------------------------------------------------------------------
+// rr:graph (subject map) and rr:graphMap (predicate-object map) parsing.
+// Regression coverage: the parser previously never built any GraphMap
+// instances at all (see subject_named_graph.ttl / test_process_database.cpp
+// for the write-side, quad-emission regression test).
+// ---------------------------------------------------------------------------
+TEST_CASE("R2RML parser populates rr:graph on a subject map as a constant GraphMap") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "subject_named_graph.ttl");
+	REQUIRE(mapping.isValid());
+	REQUIRE(mapping.triplesMaps.size() == 1);
+
+	const auto &sm = mapping.triplesMaps[0]->subjectMap;
+	REQUIRE(sm->graphMaps.size() == 1);
+
+	SerdEnv *env = serd_env_new(nullptr);
+	MapSQLRow row;
+	SerdNode graphNode = sm->graphMaps[0]->generateRDFTerm(row, *env);
+	REQUIRE(graphNode.type == SERD_URI);
+	REQUIRE(std::string(reinterpret_cast<const char *>(graphNode.buf), graphNode.n_bytes) ==
+	        "http://example.com/graph/employees");
+	serd_env_free(env);
+}
+
+TEST_CASE("R2RML parser populates rr:graphMap on a predicate-object map as a template GraphMap") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "subject_named_graph.ttl");
+	REQUIRE(mapping.isValid());
+
+	const auto &poms = mapping.triplesMaps[0]->predicateObjectMaps;
+	REQUIRE(poms.size() == 2);
+
+	// The ex:name POM has no graphMap of its own.
+	REQUIRE(poms[0]->graphMaps.empty());
+
+	// The ex:job POM has a template-valued rr:graphMap.
+	REQUIRE(poms[1]->graphMaps.size() == 1);
+
+	SerdEnv *env = serd_env_new(nullptr);
+	MapSQLRow row = r2rml::testing::makeRow({{"JOB", StringSQLValue(std::string("CLERK"))}});
+	SerdNode graphNode = poms[1]->graphMaps[0]->generateRDFTerm(row, *env);
+	REQUIRE(graphNode.type == SERD_URI);
+	REQUIRE(std::string(reinterpret_cast<const char *>(graphNode.buf), graphNode.n_bytes) ==
+	        "http://example.com/graph/jobs/CLERK");
+	serd_env_free(env);
+}

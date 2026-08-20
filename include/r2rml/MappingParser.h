@@ -43,6 +43,9 @@ const char *const RR_OBJECT_MAP = "http://www.w3.org/ns/r2rml#objectMap";
 const char *const RR_SUBJECT = "http://www.w3.org/ns/r2rml#subject";
 const char *const RR_SUBJECT_MAP = "http://www.w3.org/ns/r2rml#subjectMap";
 const char *const RR_PREDICATE_OBJECT_MAP = "http://www.w3.org/ns/r2rml#predicateObjectMap";
+const char *const RR_GRAPH = "http://www.w3.org/ns/r2rml#graph";
+const char *const RR_GRAPH_MAP = "http://www.w3.org/ns/r2rml#graphMap";
+const char *const RR_DEFAULT_GRAPH = "http://www.w3.org/ns/r2rml#defaultGraph";
 } // namespace vocab
 
 /**

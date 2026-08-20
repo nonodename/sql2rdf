@@ -27,10 +27,14 @@ public:
 
 	/**
 	 * Process a single row given a subject node and emit one or more triples
-	 * by invoking the provided SerdWriter.
+	 * by invoking the provided SerdWriter. `subjectGraphMaps` are the
+	 * enclosing triples map's subject-level rr:graph/rr:graphMap annotations
+	 * (may be empty); per R2RML §12, the graphs a generated triple is written
+	 * into are the union of those and this predicate-object map's own
+	 * graphMaps.
 	 */
 	void processRow(const SQLRow &row, const SerdNode &subject, SerdWriter &rdfWriter, const R2RMLMapping &mapping,
-	                SQLConnection &dbConnection) const;
+	                SQLConnection &dbConnection, const std::vector<std::unique_ptr<GraphMap>> &subjectGraphMaps) const;
 
 	bool isValid() const;
 

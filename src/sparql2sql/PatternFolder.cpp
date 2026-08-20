@@ -422,8 +422,9 @@ RelNodePtr fold(const sparql::ast::GroupGraphPattern &pattern, TranslationContex
 		}
 		case ElementKind::GraphGraphPattern:
 			throw TranslationError(
-			    "unsupported: GRAPH patterns require named-graph support, which this R2RML mapping model does not "
-			    "provide (rr:graph/rr:graphMap are never populated by the mapping parser)");
+			    "unsupported: GRAPH patterns require named-graph support, which sparql2sql's translation algebra "
+			    "does not yet provide (rr:graph/rr:graphMap are parsed and honoured by RDF generation, but "
+			    "SPARQL-to-SQL translation still treats every triples map as default-graph only)");
 		case ElementKind::ServiceGraphPattern:
 			throw TranslationError("unsupported: SERVICE (federated query) is not supported");
 		}

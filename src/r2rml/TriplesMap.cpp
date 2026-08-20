@@ -1,6 +1,7 @@
 #include "r2rml/TriplesMap.h"
 #include "r2rml/LogicalTable.h"
 #include "r2rml/SubjectMap.h"
+#include "r2rml/GraphMap.h"
 #include "r2rml/PredicateObjectMap.h"
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/SQLConnection.h"
@@ -40,20 +41,24 @@ void TriplesMap::generateTriples(const SQLRow &row, SerdWriter &rdfWriter, const
 		return; // null subject – skip row
 	}
 
-	// Emit rdf:type triples for each rr:class.
+	// Emit rdf:type triples for each rr:class. Only the subject map's own
+	// graph maps apply here – there is no predicate-object map involved.
+	static const std::vector<std::unique_ptr<GraphMap>> noGraphMaps;
 	if (!subjectMap->classIRIs.empty()) {
 		SerdNode rdfType = serd_node_from_string(SERD_URI, RDF_TYPE_URI);
 		for (const std::string &classIRI : subjectMap->classIRIs) {
 			SerdNode classNode = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(classIRI.c_str()));
-			checkWriteStatus(
-			    serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &rdfType, &classNode, nullptr, nullptr));
+			forEachGraphNode(subjectMap->graphMaps, noGraphMaps, row, *env, [&](const SerdNode *graph) {
+				checkWriteStatus(serd_writer_write_statement(&rdfWriter, 0, graph, &subject, &rdfType, &classNode,
+				                                             nullptr, nullptr));
+			});
 		}
 	}
 
 	// Process each predicate-object map.
 	for (const auto &pom : predicateObjectMaps) {
 		if (pom) {
-			pom->processRow(row, subject, rdfWriter, mapping, dbConnection);
+			pom->processRow(row, subject, rdfWriter, mapping, dbConnection, subjectMap->graphMaps);
 		}
 	}
 }

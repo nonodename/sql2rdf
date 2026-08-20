@@ -95,6 +95,9 @@ using vocab::RR_CLASS;
 using vocab::RR_COLUMN;
 using vocab::RR_CONSTANT;
 using vocab::RR_DATATYPE;
+using vocab::RR_DEFAULT_GRAPH;
+using vocab::RR_GRAPH;
+using vocab::RR_GRAPH_MAP;
 using vocab::RR_IRI_TERM_TYPE;
 using vocab::RR_JOIN_CONDITION;
 using vocab::RR_LANGUAGE;
@@ -389,6 +392,36 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// ConcreteGraphMap – private to this translation unit.
+//
+// GraphMap inherits TermMap's pure-virtual generateRDFTerm without
+// overriding it, making it abstract; ConcreteGraphMap adds an inner TermMap
+// (built via ParseContext::buildTermMap, so it shares the same
+// column/template/constant machinery as predicate/object maps) that
+// supplies the value-generation strategy.
+// ---------------------------------------------------------------------------
+class ConcreteGraphMap : public GraphMap {
+public:
+	std::unique_ptr<TermMap> valueMap;
+
+	SerdNode generateRDFTerm(const SQLRow &row, const SerdEnv &env) const override {
+		if (valueMap) {
+			return valueMap->generateRDFTerm(row, env);
+		}
+		return SERD_NODE_NULL;
+	}
+
+	std::ostream &print(std::ostream &os) const override {
+		os << "GraphMap {";
+		if (valueMap) {
+			os << " valueMap=" << *valueMap;
+		}
+		os << " }";
+		return os;
+	}
+};
+
+// ---------------------------------------------------------------------------
 // ConcreteReferencingObjectMap – private to this translation unit.
 //
 // ReferencingObjectMap only declares the two-row generateRDFTerm variant, so
@@ -554,6 +587,48 @@ public:
 	}
 
 	// ------------------------------------------------------------------
+	// Build the rr:graph / rr:graphMap annotations on `nodeKey` (a subject
+	// map or predicate-object map) into a list of GraphMap instances. The
+	// rr:graph shortcut takes a constant IRI directly; rr:graphMap points at
+	// a full term map (rr:column/rr:template/rr:constant), built the same way
+	// as any other term map.
+	// ------------------------------------------------------------------
+	std::vector<std::unique_ptr<GraphMap>> buildGraphMaps(const std::string &nodeKey) {
+		std::vector<std::unique_ptr<GraphMap>> graphMaps;
+
+		const auto *graphObjs = getObjects(ts, nodeKey, RR_GRAPH);
+		if (graphObjs) {
+			for (const auto &g : *graphObjs) {
+				if (g.type == ObjType::URI) {
+					auto gm = std::unique_ptr<ConcreteGraphMap>(new ConcreteGraphMap());
+					gm->valueMap = makeConstantUri(g.value);
+					graphMaps.push_back(std::move(gm));
+				}
+			}
+		}
+
+		const auto *graphMapObjs = getObjects(ts, nodeKey, RR_GRAPH_MAP);
+		if (graphMapObjs) {
+			for (const auto &gmObj : *graphMapObjs) {
+				std::string gmKey = objKey(gmObj);
+				if (gmKey.empty()) {
+					continue;
+				}
+				auto tm = buildTermMap(gmKey);
+				if (tm) {
+					auto gm = std::unique_ptr<ConcreteGraphMap>(new ConcreteGraphMap());
+					gm->valueMap = std::move(tm);
+					graphMaps.push_back(std::move(gm));
+				} else {
+					errors.push_back("R2RML parser: unknown graph map type for <" + gmKey + ">");
+				}
+			}
+		}
+
+		return graphMaps;
+	}
+
+	// ------------------------------------------------------------------
 	// Build a SubjectMap from a node key.
 	// ------------------------------------------------------------------
 	std::unique_ptr<SubjectMap> buildSubjectMap(const std::string &smKey) {
@@ -594,6 +669,8 @@ public:
 				}
 			}
 		}
+
+		sm->graphMaps = buildGraphMaps(smKey);
 
 		return sm;
 	}
@@ -662,6 +739,8 @@ public:
 				}
 			}
 		}
+
+		pom->graphMaps = buildGraphMaps(pomKey);
 
 		return pom;
 	}

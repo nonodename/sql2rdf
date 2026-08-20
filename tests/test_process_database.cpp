@@ -80,6 +80,27 @@ std::string runProcessDatabase(R2RMLMapping &mapping, MockSQLConnection &conn) {
 	return result;
 }
 
+// Same as runProcessDatabase(), but serialises as NQuads so a triple's graph
+// component (rr:graph/rr:graphMap) is visible in the output text.
+std::string runProcessDatabaseNQuads(R2RMLMapping &mapping, MockSQLConnection &conn) {
+	SerdChunk chunk {nullptr, 0};
+	SerdEnv *env = serd_env_new(nullptr);
+	SerdWriter *writer = serd_writer_new(SERD_NQUADS, (SerdStyle)0, env, nullptr, serd_chunk_sink, &chunk);
+
+	mapping.processDatabase(conn, *writer);
+
+	serd_writer_finish(writer);
+	uint8_t *raw = serd_chunk_sink_finish(&chunk);
+	std::string result;
+	if (raw) {
+		result = std::string(reinterpret_cast<const char *>(raw));
+		serd_free(raw);
+	}
+	serd_writer_free(writer);
+	serd_env_free(env);
+	return result;
+}
+
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -559,4 +580,46 @@ TEST_CASE("R2RML parser reports a Turtle syntax error instead of silently droppi
 		}
 	}
 	CHECK(reportedSyntaxError);
+}
+
+// ---------------------------------------------------------------------------
+// Regression test: rr:graph on a subject map and rr:graphMap on a
+// predicate-object map must actually route generated triples into named
+// graphs (quads), not the default graph. Previously TriplesMap::
+// generateTriples/PredicateObjectMap::processRow always wrote statements
+// with a null graph, silently discarding rr:graph/rr:graphMap entirely.
+//
+// Mapping (subject_named_graph.ttl):
+//   - subjectMap has rr:graph <http://example.com/graph/employees>
+//   - the ex:name predicate-object map has no graph of its own, so it
+//     inherits only the subject map's graph
+//   - the ex:job predicate-object map additionally has its own
+//     rr:graphMap (template), so per R2RML §12 its triple is written into
+//     the UNION of both graphs
+// ---------------------------------------------------------------------------
+TEST_CASE("processDatabase honours rr:graph and rr:graphMap by emitting named-graph quads") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "subject_named_graph.ttl");
+	REQUIRE(mapping.isValid());
+
+	MockSQLConnection conn;
+	conn.addResult("EMP", {makeRow({{"EMPNO", StringSQLValue(std::string("7369"))},
+	                                {"ENAME", StringSQLValue(std::string("SMITH"))},
+	                                {"JOB", StringSQLValue(std::string("CLERK"))},
+	                                {"DEPTNO", StringSQLValue(std::string("10"))}})});
+
+	std::string out = runProcessDatabaseNQuads(mapping, conn);
+	INFO(out);
+
+	// rdf:type triple: subject map's graph applies.
+	CHECK(out.find("<http://example.com/ns#Employee> <http://example.com/graph/employees> .") != std::string::npos);
+
+	// ex:name triple: only the subject map's graph applies (the POM has none
+	// of its own).
+	CHECK(out.find("\"SMITH\" <http://example.com/graph/employees> .") != std::string::npos);
+
+	// ex:job triple: written into BOTH the subject map's graph and the POM's
+	// own rr:graphMap-derived graph.
+	CHECK(out.find("\"CLERK\" <http://example.com/graph/employees> .") != std::string::npos);
+	CHECK(out.find("\"CLERK\" <http://example.com/graph/jobs/CLERK> .") != std::string::npos);
 }

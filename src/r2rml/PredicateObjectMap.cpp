@@ -16,7 +16,8 @@ PredicateObjectMap::PredicateObjectMap() = default;
 PredicateObjectMap::~PredicateObjectMap() = default;
 
 void PredicateObjectMap::processRow(const SQLRow &row, const SerdNode &subject, SerdWriter &rdfWriter,
-                                    const R2RMLMapping &mapping, SQLConnection &dbConnection) const {
+                                    const R2RMLMapping &mapping, SQLConnection &dbConnection,
+                                    const std::vector<std::unique_ptr<GraphMap>> &subjectGraphMaps) const {
 	const SerdEnv *env = mapping.serdEnvironment;
 	static SerdEnv *fallbackEnv = nullptr;
 	if (!env) {
@@ -56,8 +57,10 @@ void PredicateObjectMap::processRow(const SQLRow &row, const SerdNode &subject, 
 					if (object.type == SERD_NOTHING) {
 						continue;
 					}
-					checkWriteStatus(serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &predicate, &object,
-					                                             nullptr, nullptr));
+					forEachGraphNode(subjectGraphMaps, graphMaps, row, *env, [&](const SerdNode *graph) {
+						checkWriteStatus(serd_writer_write_statement(&rdfWriter, 0, graph, &subject, &predicate,
+						                                             &object, nullptr, nullptr));
+					});
 				}
 			} else {
 				// Regular term map.
@@ -86,8 +89,10 @@ void PredicateObjectMap::processRow(const SQLRow &row, const SerdNode &subject, 
 					}
 				}
 
-				checkWriteStatus(
-				    serd_writer_write_statement(&rdfWriter, 0, nullptr, &subject, &predicate, &object, datatype, lang));
+				forEachGraphNode(subjectGraphMaps, graphMaps, row, *env, [&](const SerdNode *graph) {
+					checkWriteStatus(serd_writer_write_statement(&rdfWriter, 0, graph, &subject, &predicate, &object,
+					                                             datatype, lang));
+				});
 			}
 		}
 	}
