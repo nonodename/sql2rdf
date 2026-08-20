@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?s
+WHERE {
+  ?s ex:val ?v .
+  MINUS { ?s ex:val ?w . }
+}

@@ -48,8 +48,12 @@ std::string translateFixture(const char *rqFile) {
 TEST_CASE("translateQuery: an ambiguous predicate alone still unions every candidate") {
 	// Baseline: ex:name by itself is genuinely ambiguous (EMP.ENAME or
 	// DEPT.DNAME), so nothing should be pruned without the join constraint.
+	// The two candidates' subject templates (".../employee/{EMPNO}" vs
+	// ".../department/{DEPTNO}") are pairwise disjoint, so the union combiner
+	// itself needs no cross-arm dedup - it's UNION ALL BY NAME rather than
+	// UNION BY NAME (each arm keeps its own per-candidate DISTINCT).
 	std::string sql = translateFixture("emp_dept_simple_select.rq");
-	CHECK(sql.find("UNION BY NAME") != std::string::npos);
+	CHECK(sql.find("UNION ALL BY NAME") != std::string::npos);
 	CHECK(sql.find("\"ENAME\"") != std::string::npos);
 	CHECK(sql.find("\"DNAME\"") != std::string::npos);
 }

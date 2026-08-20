@@ -1,0 +1,25 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Toy fixture for Optimizer.cpp's relaxUnionDedupIfDisjoint: two independent
+# tables mapped under the *syntactically identical* subject template, each
+# contributing a candidate for the same predicate ex:val. Because the
+# templates are not provably disjoint (they can trivially agree), the
+# candidate union for ex:val must keep its cross-arm dedup - unlike
+# example_emp_dept.ttl's ex:name (EMP vs DEPT use different templates).
+
+<#AMap>
+    rr:logicalTable [ rr:tableName "TABLE_A" ];
+    rr:subjectMap [ rr:template "http://ex.org/thing/{ID}" ];
+    rr:predicateObjectMap [
+        rr:predicate ex:val;
+        rr:objectMap [ rr:column "VAL_A" ];
+    ].
+
+<#BMap>
+    rr:logicalTable [ rr:tableName "TABLE_B" ];
+    rr:subjectMap [ rr:template "http://ex.org/thing/{ID}" ];
+    rr:predicateObjectMap [
+        rr:predicate ex:val;
+        rr:objectMap [ rr:column "VAL_B" ];
+    ].

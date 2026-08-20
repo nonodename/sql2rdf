@@ -789,6 +789,53 @@ void stripDistinct(RelNode &node) {
 	}
 }
 
+// Semi-join dedup elimination: an AntiJoinNode's right side (MINUS's
+// subtracted pattern) is only ever probed with NOT EXISTS - renderAntiJoin
+// never projects any of its columns - so its own dedup is always irrelevant
+// to the result, independent of whether the enclosing query dedups.
+//
+// Unlike stripDistinct (which also strips the *kept* left side, and is only
+// safe to run when the whole query dedups), this walk leaves every left side
+// alone and touches only what a MINUS anti-joins against, so it runs
+// unconditionally.
+void stripAntiJoinRightDedup(RelNode &node) {
+	switch (node.kind()) {
+	case RelKind::Join: {
+		JoinNode &j = static_cast<JoinNode &>(node);
+		stripAntiJoinRightDedup(*j.left);
+		stripAntiJoinRightDedup(*j.right);
+		break;
+	}
+	case RelKind::AntiJoin: {
+		AntiJoinNode &a = static_cast<AntiJoinNode &>(node);
+		stripAntiJoinRightDedup(*a.left);
+		stripDistinct(*a.right);
+		break;
+	}
+	case RelKind::UnionByName: {
+		UnionByNameNode &u = static_cast<UnionByNameNode &>(node);
+		for (auto &arm : u.arms) {
+			stripAntiJoinRightDedup(*arm);
+		}
+		break;
+	}
+	case RelKind::Filter:
+		stripAntiJoinRightDedup(*static_cast<FilterNode &>(node).child);
+		break;
+	case RelKind::Bind:
+		stripAntiJoinRightDedup(*static_cast<BindNode &>(node).child);
+		break;
+	case RelKind::TransitiveClosure:
+		stripAntiJoinRightDedup(*static_cast<TransitiveClosureNode &>(node).step);
+		break;
+	case RelKind::Spj:
+	case RelKind::Raw:
+	case RelKind::SingleRow:
+	case RelKind::Empty:
+		break;
+	}
+}
+
 // --- Filter pushdown -----------------------------------------------------
 //
 // Re-parent FILTERs downward so each lands on the smallest relation supplying
@@ -1194,6 +1241,48 @@ void pruneUnionSide(UnionByNameNode &side, const RelNode &other, const std::vect
 	side.arms = std::move(newArms);
 }
 
+// Whether two directly-visible union arms can ever produce the same output
+// row: true when some variable they both project is an rr:template whose
+// generated strings are provably disjoint (templatesCanEverMatch false) -
+// the same test pruneUnionSide uses against a join partner, here applied
+// arm-against-arm. One disjoint column is enough: if it can never agree, the
+// whole rows can never agree regardless of any other column.
+bool armsProvablyDisjoint(const RelNode &a, const RelNode &b) {
+	for (const auto &c : a.schema()) {
+		if (c.prov != Provenance::TemplateExpr) {
+			continue;
+		}
+		const ColumnInfo *bc = b.column(c.var);
+		if (bc == nullptr || bc->prov != Provenance::TemplateExpr) {
+			continue;
+		}
+		if (!templatesCanEverMatch(c.templateString, bc->templateString)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// A candidate union's own cross-arm dedup (`all == false`) exists only to
+// collapse two arms that happen to produce the same row. When every pair of
+// arms is provably disjoint, no such collision is possible, so the union may
+// switch to UNION ALL - each arm's own DISTINCT (deduping *within* that one
+// candidate) is untouched, since disjointness across arms says nothing about
+// duplicate rows arising from a single candidate's own source.
+void relaxUnionDedupIfDisjoint(UnionByNameNode &u) {
+	if (u.all || u.arms.size() < 2) {
+		return;
+	}
+	for (std::size_t i = 0; i < u.arms.size(); ++i) {
+		for (std::size_t j = i + 1; j < u.arms.size(); ++j) {
+			if (!armsProvablyDisjoint(*u.arms[i], *u.arms[j])) {
+				return;
+			}
+		}
+	}
+	u.all = true;
+}
+
 // A UNION reduced to exactly one arm is exactly what translateAtomicPattern
 // itself returns directly (branches.size() == 1) rather than ever wrapping in
 // a UnionByNameNode - collapsing here after pruning restores that same shape,
@@ -1240,6 +1329,7 @@ RelNodePtr pruneUnionBranches(RelNodePtr node) {
 		for (auto &arm : u.arms) {
 			arm = pruneUnionBranches(std::move(arm));
 		}
+		relaxUnionDedupIfDisjoint(u);
 		return node;
 	}
 	case RelKind::Filter: {
@@ -1299,6 +1389,9 @@ RelNodePtr optimize(RelNodePtr root, const OptimizerOptions &opts) {
 	if (opts.ctx != nullptr) {
 		constantColumnWalk(*root, opts.ctx->dialect());
 	}
+	// Unconditional: a MINUS's subtracted side is a semi-join test no matter
+	// whether the enclosing query itself dedups.
+	stripAntiJoinRightDedup(*root);
 	if (opts.topLevelDistinct) {
 		stripDistinct(*root);
 	}
