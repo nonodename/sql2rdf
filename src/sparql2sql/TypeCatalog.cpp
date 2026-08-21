@@ -83,6 +83,54 @@ std::string TypeCatalog::typeOf(const std::string &table, const std::string &col
 	return std::string();
 }
 
+bool TypeCatalog::isNotNull(const std::string &table, const std::string &column) const {
+	// Case-insensitive on both levels, for the same reason typeOf is.
+	for (const auto &t : notNullColumns) {
+		if (!iequals(t.first, table)) {
+			continue;
+		}
+		for (const auto &c : t.second) {
+			if (iequals(c, column)) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool TypeCatalog::coversUniqueKey(const std::string &table, const std::set<std::string> &columns) const {
+	for (const auto &t : uniqueKeys) {
+		if (!iequals(t.first, table)) {
+			continue;
+		}
+		for (const auto &key : t.second) {
+			// An empty constraint column list proves nothing - it would otherwise
+			// vacuously "cover" every projection.
+			if (key.empty()) {
+				continue;
+			}
+			bool contained = true;
+			for (const auto &keyCol : key) {
+				bool found = false;
+				for (const auto &have : columns) {
+					if (iequals(have, keyCol)) {
+						found = true;
+						break;
+					}
+				}
+				if (!found) {
+					contained = false;
+					break;
+				}
+			}
+			if (contained) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 bool TypeCatalog::comparable(const std::string &tableA, const std::string &columnA, const std::string &tableB,
                              const std::string &columnB) const {
 	std::string a = typeOf(tableA, columnA);

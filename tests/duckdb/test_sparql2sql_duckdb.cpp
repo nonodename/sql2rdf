@@ -58,10 +58,15 @@ using Row = std::map<std::string, std::string>;
 
 std::unique_ptr<DuckDBConnection> makeSeededDatabase() {
 	std::unique_ptr<DuckDBConnection> conn(new DuckDBConnection(":memory:"));
-	conn->execute("CREATE TABLE EMP (EMPNO INTEGER, ENAME VARCHAR, DEPTNO INTEGER)");
+	// EMPNO is the declared key, so the catalog can prove a subject-keyed
+	// candidate arm needs no DISTINCT; MGR backs example_emp_dept.ttl's ex:knows
+	// edge, giving the +/* property-path closures a real relation to walk.
+	conn->execute("CREATE TABLE EMP (EMPNO INTEGER PRIMARY KEY, ENAME VARCHAR, DEPTNO INTEGER, MGR INTEGER)");
 	conn->execute("CREATE TABLE DEPT (DEPTNO INTEGER, DNAME VARCHAR, LOC VARCHAR)");
 	// SMITH has a department; JONES does not (exercises OPTIONAL/MINUS).
-	conn->execute("INSERT INTO EMP VALUES (7369, 'SMITH', 10), (7400, 'JONES', NULL)");
+	// SMITH reports to JONES, who reports to nobody - so ex:knows+ from SMITH
+	// reaches exactly JONES, and a NULL MGR emits no triple at all.
+	conn->execute("INSERT INTO EMP VALUES (7369, 'SMITH', 10, 7400), (7400, 'JONES', NULL, NULL)");
 	// SALES has no employees (exercises UNION/MINUS asymmetry).
 	conn->execute("INSERT INTO DEPT VALUES (10, 'APPSERVER', 'NEW YORK'), (20, 'SALES', 'BOSTON')");
 
@@ -744,8 +749,9 @@ TEST_CASE("emp_dept_path_nps.rq: a negated property set keeps every predicate it
 	auto conn = makeSeededDatabase();
 	auto rows = translateAndRun(*conn, "emp_dept_path_nps.rq", "example_emp_dept.ttl");
 	// !(ex:name|ex:staff) leaves rdf:type (from both rr:class assertions),
-	// ex:location and ex:department.
-	REQUIRE(rows.size() == 7);
+	// ex:location, ex:department, and SMITH's one ex:knows edge (JONES has a
+	// NULL MGR, so contributes none).
+	REQUIRE(rows.size() == 8);
 	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_V", "NEW YORK"}}));
 	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/20"}, {"V_V", "BOSTON"}}));
 	CHECK(containsRow(rows,
@@ -764,8 +770,9 @@ TEST_CASE("emp_dept_path_nps_inverse.rq: an all-inverse negated property set onl
 	auto rows = translateAndRun(*conn, "emp_dept_path_nps_inverse.rq", "example_emp_dept.ttl");
 	// !(^ex:department) reverses every triple whose predicate is not
 	// ex:department: 2 rdf:type + 2 ex:name for departments, 2 ex:location,
-	// 2 ex:staff, 2 rdf:type + 2 ex:name for employees.
-	REQUIRE(rows.size() == 12);
+	// 2 ex:staff, 2 rdf:type + 2 ex:name for employees, plus SMITH's one
+	// ex:knows edge (JONES has a NULL MGR, so contributes none).
+	REQUIRE(rows.size() == 13);
 	CHECK(containsRow(rows, {{"V_S", "APPSERVER"}, {"V_O", "http://data.example.com/department/10"}}));
 	CHECK(containsRow(rows, {{"V_S", "SMITH"}, {"V_O", "http://data.example.com/employee/7369"}}));
 	CHECK(containsRow(rows,
@@ -1332,4 +1339,157 @@ TEST_CASE("dyn_group_types.rq: GROUP BY keeps two terms with one lexical form bu
 		REQUIRE(c != row.end());
 		CHECK(c->second == "1");
 	}
+}
+
+// --- DDL constraint facts: loaded, and safe to act on -------------------
+
+namespace {
+
+// A dedicated database for the constraint tests: KEYED.ID is a PRIMARY KEY and
+// LABEL repeats, which is what makes key-proven DISTINCT elimination observable
+// in result rows rather than only in SQL text.
+std::unique_ptr<DuckDBConnection> makeKeyedDatabase() {
+	std::unique_ptr<DuckDBConnection> conn(new DuckDBConnection(":memory:"));
+	conn->execute("CREATE TABLE KEYED (ID INTEGER PRIMARY KEY, LABEL VARCHAR NOT NULL)");
+	conn->execute("INSERT INTO KEYED VALUES (1, 'DUP'), (2, 'DUP'), (3, 'UNIQUE')");
+	// No key, and two FULLY identical rows: R2RML forward generation yields a set
+	// of triples, so these two rows denote one triple and the arm's DISTINCT is
+	// load-bearing. The rewrite must decline here.
+	conn->execute("CREATE TABLE UNKEYED (ID INTEGER, LABEL VARCHAR)");
+	conn->execute("INSERT INTO UNKEYED VALUES (1, 'SAME'), (1, 'SAME')");
+	return conn;
+}
+
+// containsRow is order-insensitive by design, but comparing two whole result
+// sets needs a canonical order: nothing constrains the row order of either
+// query, and the rewrite is not expected to preserve it.
+std::vector<Row> sorted(std::vector<Row> rows) {
+	std::sort(rows.begin(), rows.end());
+	return rows;
+}
+
+std::vector<Row> runWithCatalog(DuckDBConnection &conn, const std::string &queryText, const R2RMLMapping &mapping,
+                                const sparql2sql::TypeCatalog *catalog) {
+	Parser parser;
+	auto query = parser.parseString(queryText);
+	DuckDbDialect dialect;
+	std::string sql = translateQuery(*query, mapping, dialect, catalog);
+	INFO("SQL: " << sql);
+	std::unique_ptr<r2rml::SQLResultSet> rs = conn.execute(sql);
+	return collectRows(*rs);
+}
+
+} // namespace
+
+TEST_CASE("loadTypeCatalog: reads NOT NULL and PRIMARY KEY from a real information_schema") {
+	auto conn = makeKeyedDatabase();
+	sparql2sql::TypeCatalog cat;
+	sql2rdf::loadTypeCatalog(*conn, nullptr, cat);
+
+	// This is where the "does DuckDB actually expose these views" question is
+	// settled empirically rather than by assumption.
+	CHECK(cat.isNotNull("KEYED", "ID"));
+	CHECK(cat.isNotNull("KEYED", "LABEL"));
+
+	std::set<std::string> justId;
+	justId.insert("ID");
+	CHECK(cat.coversUniqueKey("KEYED", justId));
+
+	// LABEL alone is not a declared key, however non-null it is.
+	std::set<std::string> justLabel;
+	justLabel.insert("LABEL");
+	CHECK_FALSE(cat.coversUniqueKey("KEYED", justLabel));
+}
+
+TEST_CASE("constraints: dropping a key-proven DISTINCT does not change the result rows") {
+	auto conn = makeKeyedDatabase();
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_keyed.ttl");
+	REQUIRE(mapping.isValid());
+
+	const char *const kQuery = "PREFIX ex: <http://example.com/ns#>\n"
+	                           "SELECT ?s ?l WHERE { ?s ex:label ?l }";
+
+	sparql2sql::TypeCatalog cat;
+	sql2rdf::loadTypeCatalog(*conn, &mapping, cat);
+
+	// The projection contains the whole key (ID, via the subject template), so
+	// the arm's DISTINCT is provably redundant and gets dropped.
+	auto withCatalog = runWithCatalog(*conn, kQuery, mapping, &cat);
+	// Same query with no catalog at all: the DISTINCT stays.
+	auto withoutCatalog = runWithCatalog(*conn, kQuery, mapping, nullptr);
+
+	// The point of the whole rewrite: identical rows either way. Three subjects,
+	// two of which share a label - the duplicate labels must NOT collapse, since
+	// they belong to different subjects.
+	REQUIRE(withCatalog.size() == 3);
+	REQUIRE(withoutCatalog.size() == 3);
+	CHECK(sorted(withCatalog) == sorted(withoutCatalog));
+	CHECK(containsRow(withCatalog, {{"V_S", "http://data.example.com/keyed/1"}, {"V_L", "DUP"}}));
+	CHECK(containsRow(withCatalog, {{"V_S", "http://data.example.com/keyed/2"}, {"V_L", "DUP"}}));
+	CHECK(containsRow(withCatalog, {{"V_S", "http://data.example.com/keyed/3"}, {"V_L", "UNIQUE"}}));
+
+	// And the rewrite really did fire - otherwise the equality above would be
+	// vacuous.
+	Parser parser;
+	auto query = parser.parseString(kQuery);
+	DuckDbDialect dialect;
+	CHECK(translateQuery(*query, mapping, dialect, &cat).find("SELECT DISTINCT") == std::string::npos);
+	CHECK(translateQuery(*query, mapping, dialect, nullptr).find("SELECT DISTINCT") != std::string::npos);
+}
+
+TEST_CASE("constraints: an unkeyed table keeps its DISTINCT, so duplicate rows stay one triple") {
+	auto conn = makeKeyedDatabase();
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_unkeyed.ttl");
+	REQUIRE(mapping.isValid());
+
+	sparql2sql::TypeCatalog cat;
+	sql2rdf::loadTypeCatalog(*conn, &mapping, cat);
+	// The catalog is fully populated - UNKEYED just has no key to find, so the
+	// rewrite must decline rather than fire on a table it cannot prove.
+	std::set<std::string> both;
+	both.insert("ID");
+	both.insert("LABEL");
+	REQUIRE_FALSE(cat.coversUniqueKey("UNKEYED", both));
+
+	const char *const kQuery = "PREFIX ex: <http://example.com/ns#>\n"
+	                           "SELECT ?s ?l WHERE { ?s ex:label ?l }";
+	Parser parser;
+	auto query = parser.parseString(kQuery);
+	DuckDbDialect dialect;
+	CHECK(translateQuery(*query, mapping, dialect, &cat).find("SELECT DISTINCT") != std::string::npos);
+
+	// Two fully identical rows denote ONE triple. If the rewrite ever over-fired
+	// here, this would return 2 - this is the test that catches it.
+	auto rows = runWithCatalog(*conn, kQuery, mapping, &cat);
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_S", "http://data.example.com/unkeyed/1"}, {"V_L", "SAME"}}));
+}
+
+TEST_CASE("constraints: a NOT NULL column's guard is dropped without changing results") {
+	auto conn = makeKeyedDatabase();
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_keyed.ttl");
+	REQUIRE(mapping.isValid());
+
+	const char *const kQuery = "PREFIX ex: <http://example.com/ns#>\n"
+	                           "SELECT ?s ?l WHERE { ?s ex:label ?l }";
+
+	sparql2sql::TypeCatalog cat;
+	sql2rdf::loadTypeCatalog(*conn, &mapping, cat);
+	Parser parser;
+	auto query = parser.parseString(kQuery);
+	DuckDbDialect dialect;
+	std::string sql = translateQuery(*query, mapping, dialect, &cat);
+	INFO("SQL: " << sql);
+	// KEYED.LABEL is declared NOT NULL, so the guard R2RML's null-column rule
+	// would otherwise require is unconditionally true and never emitted.
+	CHECK(sql.find("\"LABEL\" IS NOT NULL") == std::string::npos);
+	// Control: without the catalog it is emitted.
+	CHECK(translateQuery(*query, mapping, dialect, nullptr).find("\"LABEL\" IS NOT NULL") != std::string::npos);
+
+	std::unique_ptr<r2rml::SQLResultSet> rs = conn->execute(sql);
+	auto rows = collectRows(*rs);
+	CHECK(rows.size() == 3);
 }

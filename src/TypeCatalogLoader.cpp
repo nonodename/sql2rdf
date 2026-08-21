@@ -5,7 +5,9 @@
 #include <exception>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "r2rml/R2RMLMapping.h"
@@ -64,23 +66,87 @@ bool readPair(const r2rml::SQLRow &row, const char *nameColumn, const char *type
 	return true;
 }
 
+// Read one named result column as a string. Resolved by name,
+// case-insensitively, for the same reason readPair is. Returns false when the
+// column is absent from the result or NULL in this row.
+bool readColumn(const r2rml::SQLRow &row, const char *wanted, std::string &out) {
+	std::vector<std::string> names = row.columnNames();
+	const std::string *col = findResultColumn(names, wanted);
+	if (col == nullptr) {
+		return false;
+	}
+	std::unique_ptr<r2rml::SQLValue> value = row.getValue(*col);
+	if (value->isNull()) {
+		return false;
+	}
+	out = value->asString();
+	return true;
+}
+
+// True for information_schema's 'NO' spelling of is_nullable, case-insensitively
+// and ignoring surrounding whitespace. Anything else - 'YES', an unexpected
+// spelling, an absent column - reads as "not known to be non-nullable", which is
+// the conservative direction: a guard we would have emitted anyway stays.
+bool isNoNullable(const std::string &raw) {
+	std::string trimmed;
+	for (char c : raw) {
+		if (c != ' ' && c != '\t') {
+			trimmed += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		}
+	}
+	return trimmed == "no";
+}
+
 void loadBaseTableTypes(r2rml::SQLConnection &conn, sparql2sql::TypeCatalog &catalog) {
+	// is_nullable rides along on the sweep we already run - the NOT NULL facts
+	// cost no extra round trip and no rows read.
 	std::unique_ptr<r2rml::SQLResultSet> rs =
-	    conn.execute("SELECT table_name, column_name, data_type FROM information_schema.columns");
+	    conn.execute("SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns");
 	while (rs->next()) {
 		const r2rml::SQLRow &row = rs->getCurrentRow();
-		std::vector<std::string> names = row.columnNames();
-		const std::string *tableCol = findResultColumn(names, "table_name");
-		if (tableCol == nullptr) {
-			continue;
-		}
-		std::unique_ptr<r2rml::SQLValue> table = row.getValue(*tableCol);
+		std::string table;
 		std::string column;
 		std::string type;
-		if (table->isNull() || !readPair(row, "column_name", "data_type", column, type)) {
+		if (!readColumn(row, "table_name", table) || !readPair(row, "column_name", "data_type", column, type)) {
 			continue;
 		}
-		catalog.columnTypes[table->asString()][column] = type;
+		catalog.columnTypes[table][column] = type;
+		std::string nullable;
+		if (readColumn(row, "is_nullable", nullable) && isNoNullable(nullable)) {
+			catalog.notNullColumns[table].insert(column);
+		}
+	}
+}
+
+// Read the PRIMARY KEY / UNIQUE constraints of every base table, grouping
+// key_column_usage's per-column rows by constraint name. Best-effort: the caller
+// swallows any failure, since these two information_schema views are less
+// universally implemented than `columns` and a backend without them simply
+// leaves every key-dependent rewrite declining.
+void loadUniqueKeys(r2rml::SQLConnection &conn, sparql2sql::TypeCatalog &catalog) {
+	std::unique_ptr<r2rml::SQLResultSet> rs = conn.execute(
+	    "SELECT tc.table_name AS table_name, kcu.constraint_name AS constraint_name, kcu.column_name AS column_name "
+	    "FROM information_schema.table_constraints AS tc "
+	    "JOIN information_schema.key_column_usage AS kcu ON tc.constraint_name = kcu.constraint_name "
+	    "WHERE tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE')");
+
+	// (table, constraint) -> its column set. Grouped here rather than trusting
+	// row order: a composite key arrives as several rows, and nothing guarantees
+	// they are adjacent.
+	std::map<std::pair<std::string, std::string>, std::set<std::string>> keys;
+	while (rs->next()) {
+		const r2rml::SQLRow &row = rs->getCurrentRow();
+		std::string table;
+		std::string constraint;
+		std::string column;
+		if (!readColumn(row, "table_name", table) || !readColumn(row, "constraint_name", constraint) ||
+		    !readColumn(row, "column_name", column)) {
+			continue;
+		}
+		keys[std::make_pair(table, constraint)].insert(column);
+	}
+	for (const auto &entry : keys) {
+		catalog.uniqueKeys[entry.first.first].push_back(entry.second);
 	}
 }
 
@@ -113,6 +179,14 @@ void loadViewTypes(r2rml::SQLConnection &conn, const sparql2sql::ViewSource &vie
 
 void loadTypeCatalog(r2rml::SQLConnection &conn, const r2rml::R2RMLMapping *mapping, sparql2sql::TypeCatalog &catalog) {
 	loadBaseTableTypes(conn, catalog);
+	try {
+		loadUniqueKeys(conn, catalog);
+	} catch (const std::exception &) {
+		// A backend without information_schema.table_constraints /
+		// key_column_usage leaves `uniqueKeys` empty, which every consumer reads
+		// as "no key is known" and declines on. Non-fatal for the same reason a
+		// view that won't describe is: correct, just less optimizable.
+	}
 	if (mapping == nullptr) {
 		return;
 	}

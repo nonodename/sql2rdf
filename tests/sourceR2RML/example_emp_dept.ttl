@@ -43,6 +43,17 @@ FROM DEPT;
         rr:predicate ex:name;
         rr:objectMap [ rr:column "ENAME" ];
     ];
+    # Employee-to-employee edge via the manager column, so ex:knows+ / ex:knows*
+    # have a genuinely transitive relation to close over. A NULL MGR (an employee
+    # at the top of the chain) simply produces no ex:knows triple, per R2RML's
+    # null-column rule.
+    rr:predicateObjectMap [
+        rr:predicate ex:knows;
+        rr:objectMap [
+            rr:template "http://data.example.com/employee/{MGR}";
+            rr:termType rr:IRI;
+        ];
+    ];
     rr:predicateObjectMap [
         rr:predicate ex:department;
         rr:objectMap [

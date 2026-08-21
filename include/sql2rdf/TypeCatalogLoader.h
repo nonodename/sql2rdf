@@ -14,10 +14,17 @@ struct TypeCatalog;
 namespace sql2rdf {
 
 /// Fill a TypeCatalog from a live connection, so the SPARQL-to-SQL translator
-/// can (a) emit native (uncast) join keys for type-comparable columns and
+/// can (a) emit native (uncast) join keys for type-comparable columns,
 /// (b) apply R2RML Section 10.2's natural mapping to a bare rr:column literal,
 /// which is what lets DATATYPE() answer for a mapping that declares no
-/// rr:datatype.
+/// rr:datatype, (c) skip the "IS NOT NULL" guard on a column the DDL declares
+/// NOT NULL, and (d) drop a candidate arm's DISTINCT once a declared PRIMARY KEY
+/// / UNIQUE constraint proves its projected rows are already distinct.
+///
+/// Everything read here is a schema fact, never a data statistic - no row
+/// counts, no cardinality estimates. That is what makes a rewrite proved against
+/// this catalog stay valid as rows change; cardinality is deliberately left to
+/// the target engine, which has better numbers than this sweep could get.
 ///
 /// Two sources of types, because they cover disjoint ground:
 ///   - every base table's columns, read in one sweep of information_schema;
@@ -30,6 +37,15 @@ namespace sql2rdf {
 ///
 /// Describing a query binds it without executing it, so this costs a plan per
 /// view and reads no rows.
+///
+/// Constraint facts come from base tables only: `is_nullable` rides along on the
+/// information_schema.columns sweep at no extra cost, and keys come from one
+/// extra query over information_schema.table_constraints / key_column_usage.
+/// An rr:sqlQuery view gets neither - no backend reports constraints for an
+/// arbitrary query's result columns - so key- and NOT NULL-dependent rewrites
+/// always decline on a view-backed source. The key query is best-effort: those
+/// two views are less universally implemented than `columns`, and a backend
+/// lacking them just leaves `uniqueKeys` empty.
 ///
 /// Lives in its own target (sql2rdf_type_catalog_loader), separate from
 /// sql2rdf_sparql2sql: it issues SQL of its own (information_schema /

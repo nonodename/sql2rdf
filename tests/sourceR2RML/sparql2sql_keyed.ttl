@@ -1,0 +1,21 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# A single keyed table, for the key-proven-DISTINCT rewrite.
+#
+# KEYED.ID is the PRIMARY KEY and the subject template's only placeholder, so a
+# candidate arm projecting the subject is provably duplicate-free. LABEL is
+# deliberately NOT unique (two rows share 'DUP'), so an arm projecting only the
+# label still needs its DISTINCT - which is what makes the two cases
+# distinguishable by result count rather than only by SQL text.
+
+<#Keyed>
+    rr:logicalTable [ rr:tableName "KEYED" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/keyed/{ID}";
+        rr:class ex:Keyed;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:label;
+        rr:objectMap [ rr:column "LABEL" ];
+    ].

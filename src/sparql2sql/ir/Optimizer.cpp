@@ -1504,6 +1504,260 @@ RelNodePtr pruneUnionBranches(RelNodePtr node) {
 	return node;
 }
 
+// --- Empty-relation propagation -----------------------------------------
+
+// An EmptyNode declaring `schema`. Every value column renders as a typed NULL
+// and the block as "WHERE FALSE" (renderEmpty), so the schema must be preserved
+// exactly - an ancestor projection still names these variables even though no
+// row will ever carry them.
+RelNodePtr emptyWithSchema(std::vector<ColumnInfo> schema) {
+	RelNodePtr node(new EmptyNode());
+	node->schema() = std::move(schema);
+	return node;
+}
+
+// Fold provably-empty subtrees away.
+//
+// EmptyNode is produced upstream whenever a triple pattern has no viable
+// candidate at all (TriplePatternTranslator's no-arms case) or a path's
+// zero-length half is unsatisfiable (PropertyPathTranslator), but until this
+// pass every optimizer walk treated it as an opaque leaf - so an empty operand
+// still got rendered, joined against and unioned into the result. Needs no
+// catalog and no statistics: emptiness here is a *structural* fact the mapping
+// already proved, not a claim about the data.
+//
+// Deliberately conservative. In particular a LeftOuter join with an empty RIGHT
+// side is NOT reduced to its left operand: that is sound, but only after
+// synthesizing NULL columns for the right's variables to keep the schema, which
+// is a schema-extension change of its own rather than a special case here.
+RelNodePtr propagateEmpty(RelNodePtr node) {
+	switch (node->kind()) {
+	case RelKind::Join: {
+		JoinNode &j = static_cast<JoinNode &>(*node);
+		j.left = propagateEmpty(std::move(j.left));
+		j.right = propagateEmpty(std::move(j.right));
+		if (j.left->kind() == RelKind::Empty) {
+			// Either kind of join: no left row survives, so nothing does. (For
+			// LeftOuter the left side is what's preserved, so an empty left is
+			// exactly as fatal as for Inner.)
+			return emptyWithSchema(std::move(j.schema()));
+		}
+		if (j.joinKind == JoinKind::Inner && j.right->kind() == RelKind::Empty) {
+			return emptyWithSchema(std::move(j.schema()));
+		}
+		return node;
+	}
+	case RelKind::AntiJoin: {
+		AntiJoinNode &a = static_cast<AntiJoinNode &>(*node);
+		a.left = propagateEmpty(std::move(a.left));
+		a.right = propagateEmpty(std::move(a.right));
+		if (a.left->kind() == RelKind::Empty) {
+			return emptyWithSchema(std::move(a.schema()));
+		}
+		if (a.right->kind() == RelKind::Empty) {
+			// MINUS with nothing to subtract is the left operand unchanged. Safe to
+			// return the child directly: an AntiJoinNode never projects anything of
+			// its right side, so its schema is already the left's.
+			return std::move(a.left);
+		}
+		return node;
+	}
+	case RelKind::UnionByName: {
+		UnionByNameNode &u = static_cast<UnionByNameNode &>(*node);
+		for (auto &arm : u.arms) {
+			arm = propagateEmpty(std::move(arm));
+		}
+		std::size_t survivors = 0;
+		for (const auto &arm : u.arms) {
+			if (arm->kind() != RelKind::Empty) {
+				++survivors;
+			}
+		}
+		if (survivors == 0) {
+			// Every arm empty: the union is empty, but keep the union's own schema
+			// rather than any one arm's - the arms need not each bind every variable.
+			return emptyWithSchema(std::move(u.schema()));
+		}
+		// Count before moving: bailing out after a move would leave u.arms full of
+		// moved-from null pointers.
+		if (survivors == u.arms.size()) {
+			return node;
+		}
+		std::vector<RelNodePtr> kept;
+		kept.reserve(survivors);
+		for (auto &arm : u.arms) {
+			if (arm->kind() != RelKind::Empty) {
+				kept.push_back(std::move(arm));
+			}
+		}
+		u.arms = std::move(kept);
+		// A dropped arm can only sharpen what survives (a variable no remaining arm
+		// leaves unbound is now bound), so re-meet exactly as pruneUnionSide does.
+		refreshUnionSchema(u);
+		return unwrapSingletonUnion(std::move(node));
+	}
+	case RelKind::Filter: {
+		FilterNode &f = static_cast<FilterNode &>(*node);
+		f.child = propagateEmpty(std::move(f.child));
+		if (f.child->kind() == RelKind::Empty) {
+			return emptyWithSchema(std::move(f.schema()));
+		}
+		return node;
+	}
+	case RelKind::Bind: {
+		BindNode &b = static_cast<BindNode &>(*node);
+		b.child = propagateEmpty(std::move(b.child));
+		if (b.child->kind() == RelKind::Empty) {
+			// The node's own schema already includes `outVar`, so binding over no
+			// rows keeps the right shape without rebuilding it.
+			return emptyWithSchema(std::move(b.schema()));
+		}
+		return node;
+	}
+	case RelKind::TransitiveClosure: {
+		TransitiveClosureNode &t = static_cast<TransitiveClosureNode &>(*node);
+		t.step = propagateEmpty(std::move(t.step));
+		if (t.step->kind() == RelKind::Empty) {
+			// No one-hop edge exists, so the closure (minimum cardinality 1) is
+			// empty. E* is unaffected: its zero-length half is a sibling union arm,
+			// not part of this node.
+			return emptyWithSchema(std::move(t.schema()));
+		}
+		return node;
+	}
+	case RelKind::Spj:
+	case RelKind::Raw:
+	case RelKind::SingleRow:
+	case RelKind::Empty:
+		return node;
+	}
+	return node;
+}
+
+// --- DISTINCT elimination via a declared key -----------------------------
+
+// The base columns of `source` that `schema` projects injectively, or false if
+// any projected column could collapse two distinct source rows into one output
+// row (in which case the DISTINCT cannot be proven redundant and we decline).
+//
+// Only two provenances contribute. A PureColumn is the column itself (possibly
+// under CAST(... AS VARCHAR), which is injective within a single SQL type). A
+// TemplateExpr contributes its placeholder columns, but ONLY when
+// templateInvertible - a template with adjacent placeholders can render two
+// different placeholder tuples as the same string, so it proves nothing.
+//
+// Anything else - a constant, a COALESCE, a computed expression - contributes no
+// columns. That is not fatal on its own: a constant column is the same in every
+// row and so never distinguishes rows, and the key test below only needs SOME
+// declared key to be covered by what we did collect.
+bool collectKeyColumns(const std::vector<ColumnInfo> &schema, const SpjSource &source, std::set<std::string> &out) {
+	for (const auto &col : schema) {
+		switch (col.prov) {
+		case Provenance::PureColumn:
+			if (col.sourceAlias != source.alias || col.columnName.empty()) {
+				return false;
+			}
+			out.insert(col.columnName);
+			break;
+		case Provenance::TemplateExpr:
+			if (col.sourceAlias != source.alias || !col.templateInvertible) {
+				return false;
+			}
+			for (const auto &name : col.templateColumnNames) {
+				out.insert(name);
+			}
+			break;
+		case Provenance::ConstantExpr:
+			// Constant in every row; distinguishes nothing, blocks nothing.
+			break;
+		case Provenance::Coalesced:
+		case Provenance::Computed:
+			// Could map distinct rows to the same value; no proof available.
+			return false;
+		}
+	}
+	return true;
+}
+
+// Drop a candidate arm's DISTINCT when a declared PRIMARY KEY / UNIQUE
+// constraint proves its rows are already distinct.
+//
+// Every single-triple-pattern candidate is built with distinct = true, because
+// R2RML forward generation yields a *set* of triples: two duplicate table rows
+// produce the same triple once, so a BGP match must not see it twice. That
+// DISTINCT is therefore load-bearing in general - stripDistinct only removes it
+// when the enclosing query dedups anyway. But if the arm's projected columns
+// contain a whole declared key of its source table, no two rows agree on them,
+// and (given the injectivity check in collectKeyColumns) no two rows can produce
+// the same output tuple either. The dedup is then a provable no-op.
+//
+// The target engine cannot make this deduction: it does not know that the
+// constructed IRI is an injective function of those key columns.
+//
+// Restricted to a SINGLE-source block, which is exactly the shape a candidate
+// arm has before flattening - hence this pass runs before flatten(). For a
+// multi-source block the key would have to hold over the whole join spine,
+// a stronger proof left for later.
+void stripProvenDistinct(RelNode &node, const TypeCatalog *catalog) {
+	switch (node.kind()) {
+	case RelKind::Spj: {
+		SpjRelation &spj = static_cast<SpjRelation &>(node);
+		if (!spj.distinct || spj.sources.size() != 1) {
+			break;
+		}
+		const SpjSource &source = spj.sources.front();
+		// A referencing-object-map source is "child JOIN parent"; its parentAlias
+		// makes it a two-table block whose key story is the multi-source one.
+		if (source.tableIdentity.empty() || !source.parentAlias.empty()) {
+			break;
+		}
+		std::set<std::string> keyColumns;
+		if (!collectKeyColumns(spj.schema(), source, keyColumns)) {
+			break;
+		}
+		if (catalog->coversUniqueKey(source.tableIdentity, keyColumns)) {
+			spj.distinct = false;
+		}
+		break;
+	}
+	case RelKind::Join: {
+		JoinNode &j = static_cast<JoinNode &>(node);
+		stripProvenDistinct(*j.left, catalog);
+		stripProvenDistinct(*j.right, catalog);
+		break;
+	}
+	case RelKind::AntiJoin: {
+		AntiJoinNode &a = static_cast<AntiJoinNode &>(node);
+		stripProvenDistinct(*a.left, catalog);
+		stripProvenDistinct(*a.right, catalog);
+		break;
+	}
+	case RelKind::UnionByName: {
+		UnionByNameNode &u = static_cast<UnionByNameNode &>(node);
+		// Only each arm's own dedup is addressed here. The union's `all` flag is a
+		// separate question (whether two DIFFERENT arms can collide), already
+		// handled by relaxUnionDedupIfDisjoint.
+		for (auto &arm : u.arms) {
+			stripProvenDistinct(*arm, catalog);
+		}
+		break;
+	}
+	case RelKind::Filter:
+		stripProvenDistinct(*static_cast<FilterNode &>(node).child, catalog);
+		break;
+	case RelKind::Bind:
+		stripProvenDistinct(*static_cast<BindNode &>(node).child, catalog);
+		break;
+	case RelKind::TransitiveClosure:
+		stripProvenDistinct(*static_cast<TransitiveClosureNode &>(node).step, catalog);
+		break;
+	case RelKind::Raw:
+	case RelKind::SingleRow:
+	case RelKind::Empty:
+		break;
+	}
+}
+
 } // namespace
 
 bool isIdentityProjection(const std::vector<ColumnInfo> &schema, const std::vector<std::string> &outputVars) {
@@ -1519,11 +1773,23 @@ bool isIdentityProjection(const std::vector<ColumnInfo> &schema, const std::vect
 }
 
 RelNodePtr optimize(RelNodePtr root, const OptimizerOptions &opts) {
-	// Union-branch pruning first: dropping a provably-dead candidate (and, when
+	// Empty-relation folding before anything else: every later pass then walks a
+	// tree with no provably-dead subtrees in it, which is both less work and
+	// strictly more precise (a union that loses an empty arm may sharpen a
+	// variable the pruning pass below then reasons about).
+	root = propagateEmpty(std::move(root));
+	// Union-branch pruning next: dropping a provably-dead candidate (and, when
 	// that leaves only one, unwrapping the UNION entirely) can only make more
 	// SpjRelations directly visible to every later pass - pushdown, flattening,
 	// self-join elimination - so it should never run after them.
 	root = pruneUnionBranches(std::move(root));
+	// Before flatten(), while each candidate arm is still its own single-source
+	// block: that is the only shape stripProvenDistinct can prove a key over, and
+	// clearing the flag now lets mergeInner's `distinct = left || right` carry the
+	// win through flattening instead of resurrecting it.
+	if (opts.catalog != nullptr) {
+		stripProvenDistinct(*root, opts.catalog);
+	}
 	// Pushdown first: a conjunct folded into an SpjRelation keeps that block
 	// mergeable, so flattening can still fuse it with its inner-join partners.
 	root = pushFilters(std::move(root), opts.ctx);

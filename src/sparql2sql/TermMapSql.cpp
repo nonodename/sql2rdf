@@ -40,17 +40,28 @@ std::string qualifiedColumnRef(const std::string &sourceAlias, const std::string
 	return sourceAlias + "." + dialect.quoteIdentifier(columnName);
 }
 
-// requiredNonNullColumns must be alias-qualified: a candidate's FROM clause
-// can join multiple tables (e.g. a ReferencingObjectMap's child and parent
-// logical tables), and an unqualified "IS NOT NULL" check on a bare column
-// name would be ambiguous - or silently resolve to the wrong table - as
-// soon as two joined tables share a column name (e.g. both sides of a join
-// on a "DEPTNO" column).
-std::vector<std::string> qualifiedColumnRefs(const std::vector<std::string> &columnNames,
-                                             const std::string &sourceAlias, const SqlDialect &dialect) {
+// The guards a term map actually needs, alias-qualified.
+//
+// Alias-qualified because a candidate's FROM clause can join multiple tables
+// (e.g. a ReferencingObjectMap's child and parent logical tables), and an
+// unqualified "IS NOT NULL" check on a bare column name would be ambiguous - or
+// silently resolve to the wrong table - as soon as two joined tables share a
+// column name (e.g. both sides of a join on a "DEPTNO" column).
+//
+// A column the DDL declares NOT NULL is dropped outright: R2RML's "null column
+// => drop this term" rule can never fire for it, so the conjunct the caller
+// would emit is unconditionally true. The catalog is optional and only ever
+// reports what it knows, so with none supplied - or a view-backed source, which
+// has no constraint metadata - this returns every ref, exactly as before.
+std::vector<std::string> requiredNonNullRefs(const std::vector<std::string> &columnNames,
+                                             const std::string &sourceAlias, const SqlDialect &dialect,
+                                             const TypeCatalog *catalog, const std::string &tableIdentity) {
 	std::vector<std::string> out;
 	out.reserve(columnNames.size());
 	for (const auto &c : columnNames) {
+		if (catalog != nullptr && !tableIdentity.empty() && catalog->isNotNull(tableIdentity, c)) {
+			continue;
+		}
 		out.push_back(qualifiedColumnRef(sourceAlias, c, dialect));
 	}
 	return out;
@@ -173,7 +184,8 @@ SqlExpr termMapToSqlExpr(const r2rml::TermMap &termMap, const std::string &sourc
 	if (const auto *col = dynamic_cast<const r2rml::ColumnTermMap *>(&termMap)) {
 		SqlExpr result;
 		result.expr = columnExpr(sourceAlias, col->columnName, dialect, catalog, tableIdentity);
-		result.requiredNonNullColumns.push_back(qualifiedColumnRef(sourceAlias, col->columnName, dialect));
+		result.requiredNonNullColumns =
+		    requiredNonNullRefs({col->columnName}, sourceAlias, dialect, catalog, tableIdentity);
 		result.term = annotate(termMap, col->columnName, catalog, tableIdentity);
 		return result;
 	}
@@ -181,7 +193,8 @@ SqlExpr termMapToSqlExpr(const r2rml::TermMap &termMap, const std::string &sourc
 		std::vector<TemplateSegment> segments = parseTemplate(tmpl->templateString);
 		SqlExpr result;
 		result.expr = buildProjectionSql(segments, sourceAlias, dialect, tmpl->termType == r2rml::TermType::IRI);
-		result.requiredNonNullColumns = qualifiedColumnRefs(referencedColumns(segments), sourceAlias, dialect);
+		result.requiredNonNullColumns =
+		    requiredNonNullRefs(referencedColumns(segments), sourceAlias, dialect, catalog, tableIdentity);
 		result.term = annotate(termMap, std::string(), catalog, tableIdentity);
 		return result;
 	}

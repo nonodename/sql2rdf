@@ -1,0 +1,21 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# The counterpart to sparql2sql_keyed.ttl: the same shape over a table with NO
+# declared key, so the candidate arm's DISTINCT is load-bearing.
+#
+# R2RML forward generation yields a SET of triples, so two fully identical rows
+# must produce one triple, not two. Nothing in the DDL rules that out here, and
+# the rewrite must therefore decline - which is what makes this the test that
+# catches over-firing.
+
+<#Unkeyed>
+    rr:logicalTable [ rr:tableName "UNKEYED" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/unkeyed/{ID}";
+        rr:class ex:Unkeyed;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:label;
+        rr:objectMap [ rr:column "LABEL" ];
+    ].

@@ -431,18 +431,35 @@ The translator builds a small relational-algebra IR (`sparql2sql/ir/RelNode.h`) 
 emitting SQL strings directly, then applies a fixed pipeline of semantics-preserving rewrites
 (`sparql2sql/ir/Optimizer.h`) before rendering once, in this order:
 
-1. **FILTER pushdown.** Each FILTER is split into its top-level conjuncts and each is routed to the
+1. **Empty-relation propagation.** A triple pattern no triples map can satisfy (an unmapped
+   predicate, a bound position no term map can produce) translates to an empty relation; this pass
+   folds away whatever that makes unsatisfiable — an inner join with an empty side, a union's empty
+   arms (unwrapping the union entirely when one arm survives), a `MINUS` with nothing to subtract, a
+   `FILTER`/`BIND` over nothing, an `E+` closure with no one-hop edge. Needs no catalog: the
+   emptiness is a structural fact the mapping already proved, not a claim about the data. A LEFT
+   OUTER JOIN with an empty *right* side is deliberately **not** reduced — sound, but it needs NULL
+   columns synthesized to preserve the schema.
+2. **Key-proven DISTINCT elimination.** A single-source candidate arm's `SELECT DISTINCT` is dropped
+   when the `TypeCatalog`'s declared PRIMARY KEY / UNIQUE constraints prove its projected columns
+   already determine the row — so no two source rows can produce the same output tuple. Unlike pass
+   7 below this does **not** require the enclosing query to dedup, which is what makes it worth
+   having: a plain `SELECT` otherwise pays a per-arm dedup on every pattern. Requires injectivity of
+   each projected expression, so it declines on a non-invertible `rr:template` (adjacent
+   placeholders can render two placeholder tuples as one string) and on any computed or `COALESCE`d
+   column. The engine cannot make this deduction — it does not know the constructed IRI is an
+   injective function of the key columns.
+3. **FILTER pushdown.** Each FILTER is split into its top-level conjuncts and each is routed to the
    smallest relation supplying its variables (inner-join sides, every arm of a UNION, an anti-join's
    left side; LEFT OUTER JOIN, BIND and EXISTS-bearing conjuncts are boundaries). A conjunct that
    reaches an SPJ block is **folded into that block's `WHERE` list** rather than wrapping it in
    another subquery — which is the point of the pass: it keeps the block mergeable by the next
    step. (Merely re-parenting a filter lower buys nothing against an engine that already pushes
    predicates through derived tables; keeping blocks mergeable does.)
-2. **Inner-join SPJ flattening.** An N-triple BGP becomes one flat `SELECT ... FROM a, b, c WHERE
+4. **Inner-join SPJ flattening.** An N-triple BGP becomes one flat `SELECT ... FROM a, b, c WHERE
    ...` instead of N−1 nested subqueries.
-3. **Self-join elimination.** Two patterns over the same table bound to the same subject variable
+5. **Self-join elimination.** Two patterns over the same table bound to the same subject variable
    collapse to a single scan — the subject map is assumed row-unique.
-4. **Redundant-predicate removal.** Two provably vacuous WHERE conjuncts, each arising because the
+6. **Redundant-predicate removal.** Two provably vacuous WHERE conjuncts, each arising because the
    two conjuncts are generated independently rather than as a single decision:
    - an `<x> IS NOT NULL` guard is dropped once `<x> = '<literal>'` (optionally
      `CAST(... AS VARCHAR)`-wrapped) is already a conjunct of the same block — the equality itself
@@ -455,7 +472,7 @@ emitting SQL strings directly, then applies a fixed pipeline of semantics-preser
      else (a real column, a function call) is left alone. This half of the pass runs only when a
      `TranslationContext` is supplied (it needs a `SqlDialect` to render the expected column
      reference).
-5. **DISTINCT elimination.** The per-pattern `SELECT DISTINCT` is dropped when the enclosing query
+7. **DISTINCT elimination.** The per-pattern `SELECT DISTINCT` is dropped when the enclosing query
    is `SELECT DISTINCT`/`ASK`, and likewise inside an EXISTS body (an existence check cannot see
    duplicates).
 
@@ -647,13 +664,39 @@ sparql2sql::TermInfo sparql2sql::inferExprTermInfo(const sparql::ast::Expression
 // precision-insensitive ("DECIMAL(18,2)" == "decimal"); returns "" for an unmapped or unrecognised
 // type, meaning "no datatype can be inferred" - never a guess.
 std::string sparql2sql::naturalXsdDatatype(const std::string& sqlTypeName);
+
+// Alongside `columnTypes`, the catalog carries the DDL constraint facts. Both are keyed on the same
+// logicalTableIdentity() as columnTypes, and both are looked up case-insensitively.
+std::map<std::string, std::set<std::string>> notNullColumns;
+std::map<std::string, std::vector<std::set<std::string>>> uniqueKeys;
+
+// True iff the DDL declares the column NOT NULL, so R2RML's "null column => drop this term" rule
+// can never fire and the "IS NOT NULL" guard is unconditionally true.
+bool sparql2sql::TypeCatalog::isNotNull(const std::string& table, const std::string& column) const;
+
+// True iff some declared PRIMARY KEY / UNIQUE constraint of `table` has every one of its columns
+// present in `columns` - i.e. `columns` determines the row. Conservative: an unknown table, an
+// empty constraint, or no contained key all return false.
+bool sparql2sql::TypeCatalog::coversUniqueKey(const std::string& table,
+                                              const std::set<std::string>& columns) const;
 ```
+
+Everything in the catalog is a **schema** fact, never a data statistic — no row counts, no
+cardinality estimates. That is deliberate: a rewrite proved against DDL stays valid as rows come and
+go, whereas a cardinality snapshot baked into generated SQL goes stale. Cardinality is left to the
+target engine, which has better numbers than an `information_schema` sweep could get (see the
+closing paragraph of the optimizer pass list above).
+
+Only base tables ever carry constraint facts. An `rr:sqlQuery` view has no constraint metadata in
+any backend, so `isNotNull`/`coversUniqueKey` always decline on one and every dependent rewrite
+declines with them.
 
 The CLI exposes this via `-T <file.rq> [--dialect <name>]` (default dialect: `duckdb`), paired
 with the mapping-file positional argument. If the database-file positional is also given, the CLI
 reads that database's column types into a `TypeCatalog` (base tables from `information_schema`, plus
 a `DESCRIBE` of each `rr:sqlQuery` view, so native-typed join keys and §10.2 datatype inference are
-both enabled),
+both enabled, plus the base tables' NOT NULL and PRIMARY KEY / UNIQUE constraints, which enable
+guard suppression and key-proven DISTINCT elimination),
 translates against it, then executes the SQL via `r2rml::DuckDBConnection` and prints the result
 rows; see `-h` for exact stdout/stderr routing. Without a database file, the SQL alone is printed
 and joins use the VARCHAR-cast fallback.

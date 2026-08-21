@@ -160,7 +160,7 @@ TEST_CASE("pushdown: a FILTER reaching an SPJ block is folded into its WHERE", "
 	// the comparison and falls back to the lexical form. Supplying a catalog
 	// (as the CLI does) would legitimately change it. This case is also
 	// literalsPerFilter()'s calibration fixture - exactly one instantiation.
-	CHECK(sql.find("(CAST(t5.\"LOC\" AS VARCHAR)) = 'NEW YORK'") != std::string::npos);
+	CHECK(sql.find("(CAST(t6.\"LOC\" AS VARCHAR)) = 'NEW YORK'") != std::string::npos);
 	CHECK(countFilterInstances(sql, "'NEW YORK'") == 1);
 }
 
