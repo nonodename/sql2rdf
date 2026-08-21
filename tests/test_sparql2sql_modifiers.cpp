@@ -38,6 +38,28 @@ std::string translate(const std::string &queryBody, R2RMLMapping &mapping) {
 	return translateQuery(*q, mapping, dialect);
 }
 
+// Skip a leading WITH clause (the hoisted rr:sqlQuery views) to reach the
+// top-level statement, so an assertion about the outer projection is not
+// answered by text inside a CTE body - the union arms carry their own
+// SELECT DISTINCT. Depth counting ignores string literals, which is fine for
+// the mappings used here (no parenthesis inside a literal).
+std::string bodyAfterWith(const std::string &sql) {
+	if (sql.compare(0, 5, "WITH ") != 0) {
+		return sql;
+	}
+	std::size_t depth = 0;
+	for (std::size_t i = 0; i < sql.size(); ++i) {
+		if (sql[i] == '(') {
+			++depth;
+		} else if (sql[i] == ')') {
+			--depth;
+		} else if (depth == 0 && sql.compare(i, 7, "SELECT ") == 0) {
+			return sql.substr(i);
+		}
+	}
+	return sql;
+}
+
 } // namespace
 
 TEST_CASE("SELECT DISTINCT emits SQL DISTINCT") {
@@ -58,8 +80,12 @@ TEST_CASE("plain SELECT has no DISTINCT") {
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
 	std::string sql = translate("SELECT ?e WHERE { ?e ex:name ?n . }", mapping);
-	REQUIRE(sql.substr(0, 6) == "SELECT");
-	CHECK(sql.substr(0, 15) != "SELECT DISTINCT");
+	// The statement opens with the WITH clause hoisting TriplesMap2's
+	// rr:sqlQuery view, so the projection under test is the one after it.
+	REQUIRE(sql.compare(0, 5, "WITH ") == 0);
+	const std::string body = bodyAfterWith(sql);
+	REQUIRE(body.compare(0, 6, "SELECT") == 0);
+	CHECK(body.compare(0, 15, "SELECT DISTINCT") != 0);
 }
 
 TEST_CASE("GROUP BY / COUNT aggregate") {

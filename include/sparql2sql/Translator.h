@@ -55,4 +55,16 @@ std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMa
 /// variables it projected.
 TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, TranslationContext &ctx, bool nested = false);
 
+/// Close `body` - a rendered relation, valid apart from its CTE references -
+/// over the WITH-clause entries `ctx` accumulated while producing it: the
+/// hoisted rr:sqlQuery views first, then any property-path closure CTEs,
+/// dropping entries nothing references and adding RECURSIVE only if a closure
+/// needs it. Returns `body` unchanged when there is nothing to prepend.
+///
+/// translateQuery() applies this to its own result, so callers of that need not.
+/// It is exposed for the other direction: code that drives translateTriplePattern
+/// or renderRelation itself gets SQL referring to CTEs that only this function
+/// emits, and so must call it to obtain a runnable statement.
+std::string prependCtes(const TranslationContext &ctx, const std::string &body);
+
 } // namespace sparql2sql

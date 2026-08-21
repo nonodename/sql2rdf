@@ -24,6 +24,7 @@
 #include "sparql2sql/DuckDbDialect.h"
 #include "sparql2sql/TermInfo.h"
 #include "sparql2sql/TranslatedPattern.h"
+#include "sparql2sql/Translator.h"
 #include "sparql2sql/TranslationError.h"
 #include "sparql2sql/TriplePatternTranslator.h"
 #include "sparql2sql/ir/RelNode.h"
@@ -34,6 +35,7 @@ using r2rml::R2RMLParser;
 using sparql::Parser;
 using sparql::ast::BasicGraphPattern;
 using sparql2sql::DuckDbDialect;
+using sparql2sql::prependCtes;
 using sparql2sql::renderRelation;
 using sparql2sql::TranslatedPattern;
 using sparql2sql::translateTriplePattern;
@@ -96,9 +98,17 @@ TEST_CASE("translateTriplePattern: a ReferencingObjectMap POM generates a real S
 	CHECK(result.sql.find("JOIN") != std::string::npos);
 	CHECK(result.sql.find("\"DEPTNO\"") != std::string::npos);
 	CHECK(result.sql.find("\"EMP\"") != std::string::npos);
-	// The parent (DEPT) side's logical table is an R2RMLView; its embedded
-	// query text must appear (trailing ';' stripped) as a wrapped subquery.
-	CHECK(result.sql.find("FROM DEPT") != std::string::npos);
+	// The parent (DEPT) side's logical table is an R2RMLView, so the relation
+	// itself only names the CTE the view was hoisted into - the query text lives
+	// in the WITH clause, which renderRelation does not emit.
+	CHECK(result.sql.find("FROM DEPT") == std::string::npos);
+	CHECK(result.sql.find("cte1 AS ") != std::string::npos);
+	// Closing over the context supplies it (trailing ';' stripped), and that is
+	// the only place it appears.
+	const std::string full = prependCtes(ctx, result.sql);
+	CHECK(full.compare(0, 5, "WITH ") == 0);
+	CHECK(full.find("FROM DEPT") != std::string::npos);
+	CHECK(full.find("FROM DEPT") == full.rfind("FROM DEPT"));
 }
 
 TEST_CASE("translateTriplePattern: rr:class candidates for a constant rdf:type predicate") {

@@ -425,7 +425,17 @@ std::string sparql2sql::translateQuery(const sparql::ast::Query& query,
                                         const r2rml::R2RMLMapping& mapping,
                                         const sparql2sql::SqlDialect& dialect,
                                         const sparql2sql::TypeCatalog* catalog = nullptr);
+
+// Close a rendered relation over the WITH-clause entries its TranslationContext
+// accumulated: the hoisted rr:sqlQuery views, then any property-path closure CTEs.
+std::string sparql2sql::prependCtes(const sparql2sql::TranslationContext& ctx,
+                                     const std::string& body);
 ```
+
+`translateQuery()` applies `prependCtes()` to its own result, so ordinary callers never need it. It
+matters for the other direction: code driving `translateTriplePattern()`/`renderRelation()` itself
+gets a relation that *references* CTEs only this function emits, so it must call `prependCtes()` to
+obtain a runnable statement.
 
 The translator builds a small relational-algebra IR (`sparql2sql/ir/RelNode.h`) rather than
 emitting SQL strings directly, then applies a fixed pipeline of semantics-preserving rewrites
@@ -476,16 +486,26 @@ emitting SQL strings directly, then applies a fixed pipeline of semantics-preser
    is `SELECT DISTINCT`/`ASK`, and likewise inside an EXISTS body (an existence check cannot see
    duplicates).
 
-**Duplicated view text is left alone on purpose.** An `rr:sqlQuery` view's SQL is inlined once per
-candidate arm, so a mapping with a variable-predicate triples map (a candidate for *every* pattern)
-can inline the same body ten or more times. Hoisting each distinct body into one shared `WITH` CTE
-was tried and **reverted**: the arms filter that shared view on *different* values (one per
-predicate IRI), and only the inlined copies let the engine push each arm's predicate down into its
-own base-table scan. On a 1.6M-row triple table, replacing three inlined bodies with three CTEs took
-one benchmark query from 0.2s to unbounded — DuckDB scanned the whole million-row slice instead of a
-filtered sliver, with or without an `AS MATERIALIZED` hint. The redundant text is the price of
-per-arm pushdown. Any future attempt needs to hoist the *filtered* relation, not the bare view, and
-must be judged on measured execution time rather than SQL size.
+**Each distinct `rr:sqlQuery` view is hoisted into one shared `WITH` CTE** and referenced by name,
+rather than inlined as a derived table at every use site. One view commonly backs many sites — each
+predicate-object map of its triples map, both sides of a referencing object map, and every arm of a
+variable-predicate expansion — so inlining duplicated a substantial body ten or more times and left
+the engine no syntactic signal that the occurrences were one relation. Deduplication is keyed on
+`logicalTableIdentity()`, i.e. the exact query text, so two triples maps declaring the same query
+also share one CTE. Base tables are not hoisted (already a bare name), and an entry nothing
+references — a view whose only candidate arm was later pruned — is dropped rather than emitted.
+
+No `AS MATERIALIZED` hint is emitted, and there is no `SqlDialect` seam for one: whether to
+materialize is left to the engine, which only does so where it can prove evaluation is unaffected.
+
+An earlier attempt at this was reverted (see commit `40a8f79`): on a 1.6M-row triple table, replacing
+three inlined bodies with three CTEs took one benchmark query from 0.2s to unbounded, because the
+arms filter a shared view on *different* predicate IRIs and only the inlined copies let the engine
+push each arm's predicate down into its own base-table scan. Current DuckDB no longer regresses
+there — the reference workload was re-benchmarked before this landed, and the motivating
+variable-predicate query is unchanged in wall time (3.19s → 3.07s) while returning identical rows.
+That history is the reason the guidance stands: judge any change here on **measured execution time**,
+not on SQL size, and re-measure on a real workload rather than assuming pushdown survives.
 
 Everything below the level of these structural simplifications — join ordering, physical join
 choice, index selection — is deliberately left to the target engine's own optimizer, which does it

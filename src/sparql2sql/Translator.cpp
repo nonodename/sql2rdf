@@ -1,5 +1,6 @@
 #include "sparql2sql/Translator.h"
 
+#include <algorithm>
 #include <set>
 #include <vector>
 
@@ -265,32 +266,65 @@ std::string translateOrderBy(const Query &query, const TranslatedPattern &source
 	return ctx.clauseSep() + "ORDER BY" + joinColumnList(keys, ctx);
 }
 
-// Prepend the query's collected WITH-clause entries (registered by
-// TransitiveClosureNode rendering) ahead of the final top-level statement.
-// Called only at the two actual outermost sites (the ASK branch and the
-// SELECT-form return below), never inside translateQueryPattern itself,
-// which is reentrant for SubSelectElement subqueries sharing the same ctx -
-// a CTE registered while rendering a nested query still belongs to the one
-// outermost WITH clause, not a WITH clause of its own.
+} // namespace
+
+// Prepend the query's collected WITH-clause entries - the hoisted rr:sqlQuery
+// views, then the CTEs registered by TransitiveClosureNode rendering - ahead of
+// the final top-level statement. Called only at the actual outermost sites (the
+// ASK branch and the SELECT-form return below), never inside
+// translateQueryPattern itself, which is reentrant for SubSelectElement
+// subqueries sharing the same ctx - a CTE registered while rendering a nested
+// query still belongs to the one outermost WITH clause, not a WITH clause of
+// its own.
 //
-// One "WITH RECURSIVE ..." prefix covers every entry even though not all of
-// them self-reference (e.g. a closure's non-recursive step CTE): RECURSIVE
-// is a clause-level flag enabling recursive self-reference for whichever
-// CTEs in the list use it, not a per-entry requirement, in both Postgres and
-// DuckDB.
+// Views come first because a closure CTE may reference one, and the reverse
+// never happens: a view body is raw user SQL from the mapping and cannot name a
+// CTE. Insertion order alone would not guarantee it, since a nested subquery is
+// rendered (registering its closure CTEs) before the enclosing tree finishes
+// building its view sources.
+//
+// RECURSIVE is emitted only when some closure CTE is present. One such prefix
+// then covers every entry even though not all of them self-reference (e.g. a
+// closure's non-recursive step CTE): RECURSIVE is a clause-level flag enabling
+// recursive self-reference for whichever CTEs in the list use it, not a
+// per-entry requirement, in both Postgres and DuckDB. Leaving it off otherwise
+// keeps view bodies out of a recursive name scope, where a real table named
+// "cteN" inside one would be shadowed by our own CTE of that name.
+//
+// Entries no longer referenced are dropped: view CTEs are registered while the
+// IR is built, so union branch pruning can afterwards remove the only arm that
+// referenced one, and emitting a dead view would let an error in SQL the query
+// no longer evaluates surface anyway. The scan runs in reverse so an entry kept
+// only by a later entry's body is itself kept; matching a name as a substring
+// can over-retain (finding "cte3" inside "cte30") but never wrongly drops.
 std::string prependCtes(const TranslationContext &ctx, const std::string &body) {
-	if (ctx.pendingCtes().empty()) {
+	std::vector<CteDef> all;
+	all.reserve(ctx.viewCtes().size() + ctx.pendingCtes().size());
+	all.insert(all.end(), ctx.viewCtes().begin(), ctx.viewCtes().end());
+	all.insert(all.end(), ctx.pendingCtes().begin(), ctx.pendingCtes().end());
+	if (all.empty()) {
 		return body;
 	}
-	std::vector<std::string> cteDefs;
-	cteDefs.reserve(ctx.pendingCtes().size());
-	for (const auto &cte : ctx.pendingCtes()) {
-		cteDefs.push_back(cte.name + " AS (" + cte.bodySql + ")");
-	}
-	return "WITH RECURSIVE" + joinColumnList(cteDefs, ctx) + ctx.clauseSep() + body;
-}
 
-} // namespace
+	std::vector<std::string> cteDefs;
+	cteDefs.reserve(all.size());
+	std::string referencing = body;
+	for (std::size_t i = all.size(); i > 0; --i) {
+		const CteDef &cte = all[i - 1];
+		if (referencing.find(cte.name) == std::string::npos) {
+			continue;
+		}
+		cteDefs.push_back(cte.name + " AS (" + cte.bodySql + ")");
+		referencing += cte.bodySql;
+	}
+	if (cteDefs.empty()) {
+		return body;
+	}
+	std::reverse(cteDefs.begin(), cteDefs.end());
+
+	const std::string keyword = ctx.needsRecursiveWith() ? "WITH RECURSIVE" : "WITH";
+	return keyword + joinColumnList(cteDefs, ctx) + ctx.clauseSep() + body;
+}
 
 TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, TranslationContext &ctx, bool nested) {
 	if (query.form != QueryForm::Select) {

@@ -102,12 +102,19 @@ InversionResult resolveInversion(const TermSource &src, const sparql::ast::Term 
 	return invertTermMapAgainstBoundTerm(*src.termMap, boundTerm, src.alias, dialect, catalog, src.tableIdentity);
 }
 
-std::string logicalTableFromSql(const r2rml::LogicalTable &lt, const std::string &alias, const SqlDialect &dialect) {
+// A base table is already a bare name, so it is referenced directly. An
+// rr:sqlQuery view is instead hoisted into a top-level CTE and referenced by
+// name: this function is reached once per use site, and a single view commonly
+// backs many of them (every predicate-object map of its TriplesMap, and every
+// arm of a variable-predicate expansion), so inlining the text here duplicated
+// it across the whole statement and left the engine no way to see that the
+// occurrences were one relation.
+std::string logicalTableFromSql(const r2rml::LogicalTable &lt, const std::string &alias, TranslationContext &ctx) {
 	if (const auto *base = dynamic_cast<const r2rml::BaseTableOrView *>(&lt)) {
-		return dialect.quoteIdentifier(base->tableName) + " AS " + alias;
+		return ctx.dialect().quoteIdentifier(base->tableName) + " AS " + alias;
 	}
 	if (const auto *view = dynamic_cast<const r2rml::R2RMLView *>(&lt)) {
-		return "(" + stripTrailingSemicolon(view->sqlQuery) + ") AS " + alias;
+		return ctx.viewCteName(logicalTableIdentity(lt), stripTrailingSemicolon(view->sqlQuery)) + " AS " + alias;
 	}
 	throw std::logic_error("logicalTableFromSql: unrecognized LogicalTable subtype");
 }
@@ -515,7 +522,7 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 		// --- rr:class candidates: synthetic (subject, rdf:type, classIRI) ---
 		if (predicateCouldBeRdfType && !tm.subjectMap->classIRIs.empty()) {
 			std::string alias = ctx.nextAlias();
-			std::string fromSql = logicalTableFromSql(*tm.logicalTable, alias, ctx.dialect());
+			std::string fromSql = logicalTableFromSql(*tm.logicalTable, alias, ctx);
 			TermSource subjectSrc;
 			subjectSrc.termMap = subjectValueMap;
 			subjectSrc.alias = alias;
@@ -560,8 +567,8 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 
 						std::string childAlias = ctx.nextAlias();
 						std::string parentAlias = ctx.nextAlias();
-						std::string fromSql = logicalTableFromSql(*tm.logicalTable, childAlias, ctx.dialect());
-						fromSql += " JOIN " + logicalTableFromSql(*parentTm.logicalTable, parentAlias, ctx.dialect());
+						std::string fromSql = logicalTableFromSql(*tm.logicalTable, childAlias, ctx);
+						fromSql += " JOIN " + logicalTableFromSql(*parentTm.logicalTable, parentAlias, ctx);
 						fromSql += " ON ";
 						for (std::size_t i = 0; i < refObjMap->joinConditions.size(); ++i) {
 							const r2rml::JoinCondition &jc = refObjMap->joinConditions[i];
@@ -604,7 +611,7 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 					}
 
 					std::string alias = ctx.nextAlias();
-					std::string fromSql = logicalTableFromSql(*tm.logicalTable, alias, ctx.dialect());
+					std::string fromSql = logicalTableFromSql(*tm.logicalTable, alias, ctx);
 					TermSource subjectSrc;
 					subjectSrc.termMap = subjectValueMap;
 					subjectSrc.alias = alias;
@@ -679,7 +686,7 @@ RelNodePtr allTermsRelation(const std::vector<std::string> &varNames, Translatio
 		const std::string identity = logicalTableIdentity(*tm.logicalTable);
 
 		std::string subjectAlias = ctx.nextAlias();
-		addTermArm(arms, logicalTableFromSql(*tm.logicalTable, subjectAlias, ctx.dialect()), subjectAlias, identity,
+		addTermArm(arms, logicalTableFromSql(*tm.logicalTable, subjectAlias, ctx), subjectAlias, identity,
 		           *subjectValueMap, varNames, ctx);
 
 		for (const std::string &classIri : tm.subjectMap->classIRIs) {
@@ -698,8 +705,8 @@ RelNodePtr allTermsRelation(const std::vector<std::string> &varNames, Translatio
 					continue;
 				}
 				std::string alias = ctx.nextAlias();
-				addTermArm(arms, logicalTableFromSql(*tm.logicalTable, alias, ctx.dialect()), alias, identity,
-				           *objMapPtr, varNames, ctx);
+				addTermArm(arms, logicalTableFromSql(*tm.logicalTable, alias, ctx), alias, identity, *objMapPtr,
+				           varNames, ctx);
 			}
 		}
 	}

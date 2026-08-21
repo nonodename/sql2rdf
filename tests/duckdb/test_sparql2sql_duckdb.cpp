@@ -254,6 +254,25 @@ TEST_CASE("emp_dept_join.rq: only the employee with a non-null department joins"
 	    rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_D", "http://data.example.com/department/10"}}));
 }
 
+TEST_CASE("emp_dept_path_plus_view.rq: a hoisted view CTE and recursive closure CTEs execute in one statement") {
+	auto conn = makeSeededDatabase();
+	// The mapping's rr:sqlQuery view is hoisted into the same WITH clause as
+	// ex:knows+'s closure CTEs. A closure body can reference the view CTE but
+	// never the reverse, so the view has to be defined first - get that ordering
+	// wrong and DuckDB rejects the statement outright rather than returning
+	// wrong rows, which is what makes executing this worth doing.
+	auto rows = translateAndRun(*conn, "emp_dept_path_plus_view.rq", "example_emp_dept.ttl");
+	// ex:knows+ contributes exactly SMITH -> JONES; ex:location contributes both
+	// departments; the patterns are disjoint, so the cross product is 1 x 2.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_S", "http://data.example.com/employee/7369"},
+	                         {"V_O", "http://data.example.com/employee/7400"},
+	                         {"V_LOC", "NEW YORK"}}));
+	CHECK(containsRow(rows, {{"V_S", "http://data.example.com/employee/7369"},
+	                         {"V_O", "http://data.example.com/employee/7400"},
+	                         {"V_LOC", "BOSTON"}}));
+}
+
 TEST_CASE("emp_dept_simple_select.rq: employee and department names both match ex:name") {
 	auto conn = makeSeededDatabase();
 	auto rows = translateAndRun(*conn, "emp_dept_simple_select.rq", "example_emp_dept.ttl");

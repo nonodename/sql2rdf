@@ -210,19 +210,61 @@ public:
 		return "cte" + std::to_string(++cteCounter_);
 	}
 
-	/// Register one WITH-clause entry (name already minted via
+	/// Register one *recursive* WITH-clause entry (name already minted via
 	/// nextCteName()). Shared across the whole translation of one query,
 	/// including reentrant nested-subquery translation (SubSelectElement
 	/// folding calls translateQueryPattern with this same ctx and splices the
 	/// result as literal text into the outer tree), so a CTE registered while
 	/// rendering a nested query is still valid at the single top-level WITH
 	/// clause the outermost caller emits.
+	///
+	/// Property-path closure rendering is the only caller; hoisted rr:sqlQuery
+	/// views go through viewCteName() into a separate list instead (see there).
 	void addCte(const std::string &name, const std::string &bodySql) {
 		pendingCtes_.push_back(CteDef {name, bodySql});
 	}
 
 	const std::vector<CteDef> &pendingCtes() const {
 		return pendingCtes_;
+	}
+
+	/// Name of the CTE hoisting one rr:sqlQuery logical table, minting and
+	/// registering the entry on first use. Keyed by logicalTableIdentity() -
+	/// i.e. the exact rr:sqlQuery text - so every use site of one view, and
+	/// equally two TriplesMaps that declare the identical query, all share a
+	/// single CTE rather than re-inlining the text as a derived table apiece.
+	/// That is what gives the engine a syntactic signal these are one relation,
+	/// which it needs before it can consider materialising the view once.
+	///
+	/// Names come from the same nextCteName() counter as addCte()'s, so a view
+	/// CTE and a closure CTE can never collide.
+	const std::string &viewCteName(const std::string &identity, const std::string &bodySql) {
+		std::map<std::string, std::string>::iterator it = viewCteNames_.find(identity);
+		if (it != viewCteNames_.end()) {
+			return it->second;
+		}
+		std::string name = nextCteName();
+		viewCtes_.push_back(CteDef {name, bodySql});
+		return viewCteNames_.insert(std::make_pair(identity, name)).first->second;
+	}
+
+	/// The hoisted view entries, in mint order. Held separately from
+	/// pendingCtes_ rather than interleaved because they must be *emitted*
+	/// first: a nested subquery is rendered (registering its closure CTEs)
+	/// before the enclosing tree finishes constructing its own view sources, so
+	/// one insertion-ordered list would not reliably put views ahead of the
+	/// closures that may reference them. A view body is raw user SQL and never
+	/// references another CTE, so front-placing them is always safe.
+	const std::vector<CteDef> &viewCtes() const {
+		return viewCtes_;
+	}
+
+	/// Whether the emitted WITH clause needs the RECURSIVE keyword: true iff
+	/// some closure CTE was registered. Hoisted views alone do not need it, and
+	/// are better off without - under RECURSIVE a real table named "cteN"
+	/// inside a view body would be shadowed by our own CTE of that name.
+	bool needsRecursiveWith() const {
+		return !pendingCtes_.empty();
 	}
 
 	/// SPARQL 1.1 §17.4.1.7 requires NOW() to return the same value for every
@@ -259,6 +301,8 @@ private:
 	std::string nowLiteral_;
 	std::size_t cteCounter_ = 0;
 	std::vector<CteDef> pendingCtes_;
+	std::map<std::string, std::string> viewCteNames_;
+	std::vector<CteDef> viewCtes_;
 	bool prettyPrint_;
 	std::size_t subqueryDepth_ = 0;
 };

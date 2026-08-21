@@ -1,0 +1,10 @@
+PREFIX ex: <http://example.com/ns#>
+# One statement needing both kinds of WITH entry: ex:knows+ builds recursive
+# closure CTEs, while ex:location comes off <#DeptTableView>'s hoisted view CTE.
+# The two patterns share no variable, so the result is their cross product -
+# which keeps the row count sensitive to both sides.
+SELECT ?s ?o ?loc
+WHERE {
+  ?s ex:knows+ ?o .
+  ?d ex:location ?loc .
+}
