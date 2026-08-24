@@ -10,7 +10,7 @@ set(DUCKDB_SHA256 "43645e15419c6539bae6915ba397de6569e4a7ca0d502be95d653a78fdb0b
 
 # Expected commit hash for Serd submodule
 # To update: run: git -C external/serd rev-parse HEAD
-set(SERD_EXPECTED_COMMIT "24474530f8acef5c6cdcefa00b0049367e5d3079")
+set(SERD_EXPECTED_COMMIT "849b9ecd8d6c87da79f14e2630daa084002d7555")
 
 # Function to verify git submodule commit hash
 function(verify_submodule_commit SUBMODULE_PATH EXPECTED_COMMIT)
