@@ -8,8 +8,10 @@
 #include "r2rml/BaseTableOrView.h"
 #include "r2rml/ColumnTermMap.h"
 #include "r2rml/ConstantTermMap.h"
+#include "r2rml/GraphMap.h"
 #include "r2rml/JoinCondition.h"
 #include "r2rml/LogicalTable.h"
+#include "r2rml/MapSQLRow.h"
 #include "r2rml/PredicateObjectMap.h"
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/R2RMLView.h"
@@ -19,6 +21,7 @@
 #include "r2rml/TermMap.h"
 #include "r2rml/TriplesMap.h"
 #include "sparql-parser/ast/Term.h"
+#include "sparql2sql/GraphConstraint.h"
 #include "sparql2sql/LogicalTableSource.h"
 #include "sparql2sql/PropertyPathTranslator.h"
 #include "sparql2sql/SqlDialect.h"
@@ -217,6 +220,191 @@ bool applyPredicateExclusions(const TermSource &predicateSrc, const std::vector<
 	return true;
 }
 
+// --- R2RML Section 12 graph sets ------------------------------------------
+//
+// One graph a candidate's triples can land in. A candidate with N applicable
+// graph maps produces N of these (plus possibly a default-graph one), and
+// translateAtomicPattern emits one SpjRelation per (candidate, branch): a row
+// genuinely does produce the same triple in every one of its graphs, and under
+// `GRAPH ?g` each is a distinct solution with a distinct ?g value, which a
+// single branch with a disjunction could not express.
+struct GraphBranch {
+	bool isDefaultGraph = false;
+	TermSource graphSrc;                 ///< valid iff !isDefaultGraph
+	std::vector<std::string> extraConds; ///< guards; see graphBranchesFor
+};
+
+// A default-graph branch. Spelled as a named helper rather than a bare
+// `GraphBranch()` because the flag's default is false: a value-initialised
+// instance is a *named* branch with no term map, which resolves to a null
+// dereference rather than to anything meaningful.
+GraphBranch defaultGraphBranch() {
+	GraphBranch b;
+	b.isDefaultGraph = true;
+	return b;
+}
+
+// The rr:defaultGraph IRI, as a SQL string literal comparison target. A graph
+// map that *dynamically* produces this IRI denotes the default graph, not a
+// named graph called "...#defaultGraph", so it needs a runtime test rather than
+// the static classification a constant term map gets.
+const char *const kDefaultGraphIri = "http://www.w3.org/ns/r2rml#defaultGraph";
+
+// Whether a graph map is a constant term map naming exactly rr:defaultGraph.
+bool isStaticDefaultGraph(const r2rml::GraphMap &gm) {
+	const auto *constant = dynamic_cast<const r2rml::ConstantTermMap *>(gm.valueTermMap());
+	if (constant == nullptr) {
+		return false;
+	}
+	SerdEnv *env = serd_env_new(nullptr);
+	r2rml::MapSQLRow empty;
+	SerdNode node = constant->generateRDFTerm(empty, *env);
+	bool isDefault = node.type == SERD_URI &&
+	                 std::string(reinterpret_cast<const char *>(node.buf), node.n_bytes) == kDefaultGraphIri;
+	serd_env_free(env);
+	return isDefault;
+}
+
+// Whether a graph map's value is fixed at translation time (rr:constant), as
+// opposed to derived per row (rr:column/rr:template).
+bool isStaticGraph(const r2rml::GraphMap &gm) {
+	return dynamic_cast<const r2rml::ConstantTermMap *>(gm.valueTermMap()) != nullptr;
+}
+
+// Decompose a candidate's applicable graph set - per R2RML Section 12, the
+// union of its subject map's and its predicate-object map's graph maps - into
+// the branches translateAtomicPattern should emit, then filter that list by the
+// active graph constraint.
+//
+// An **empty** set yields exactly one default-graph branch with no conditions
+// and no projected graph column, which is the code path a mapping that never
+// mentions rr:graph takes. That is what keeps this whole feature SQL-neutral
+// for such mappings.
+//
+// rr:defaultGraph is a *member* of the set, not a suppressor (matching
+// r2rml::forEachGraphNode), so a set of {rr:defaultGraph, ex:g1} yields both a
+// named branch for ex:g1 and a default branch.
+std::vector<GraphBranch> graphBranchesFor(const std::vector<std::unique_ptr<r2rml::GraphMap>> &subjectGraphMaps,
+                                          const std::vector<std::unique_ptr<r2rml::GraphMap>> &pomGraphMaps,
+                                          const std::string &alias, const std::string &tableIdentity,
+                                          TranslationContext &ctx) {
+	const SqlDialect &dialect = ctx.dialect();
+	const GraphConstraint &active = ctx.activeGraph();
+
+	// Gather the set, skipping null entries and any graph map whose value
+	// strategy the parser never supplied (a test double, per GraphMap's docs).
+	std::vector<const r2rml::GraphMap *> set;
+	for (const auto *list : {&subjectGraphMaps, &pomGraphMaps}) {
+		for (const auto &gm : *list) {
+			if (gm && gm->valueTermMap() != nullptr) {
+				set.push_back(gm.get());
+			}
+		}
+	}
+
+	std::vector<GraphBranch> branches;
+
+	// --- the default-graph branch ---------------------------------------
+	// Only reachable without a GRAPH block: inside one, the default graph is
+	// not a named graph and cannot be matched.
+	if (active.isDefault()) {
+		if (set.empty()) {
+			branches.push_back(defaultGraphBranch()); // no conditions, no graph column
+			return branches;
+		}
+		GraphBranch def = defaultGraphBranch();
+		// A candidate reaches the default graph iff some entry denotes
+		// rr:defaultGraph, OR every entry resolves to NULL (an all-NULL set is
+		// indistinguishable from an empty one under R2RML's set formulation, and
+		// forEachGraphNode reads it the same way).
+		bool alwaysApplies = false;
+		bool allNullPossible = true; // a constant named graph rules it out
+		std::vector<std::string> disjuncts;
+		std::vector<std::string> nullConj;
+		sparql::ast::Iri defaultGraphTerm(kDefaultGraphIri, kDefaultGraphIri);
+		for (const auto *gm : set) {
+			TermSource src;
+			src.termMap = gm->valueTermMap();
+			src.alias = alias;
+			src.tableIdentity = tableIdentity;
+
+			// Ask the same inversion machinery the named branches use, rather
+			// than emitting a raw string comparison: it can *statically* rule out
+			// a template like "http://ex.org/g/{ID}" ever denoting
+			// rr:defaultGraph, which prunes this branch instead of leaving the
+			// engine an always-false predicate to discover.
+			InversionResult inv = resolveInversion(src, defaultGraphTerm, dialect, ctx.catalog());
+			if (inv.possible && inv.whereConditions.empty()) {
+				alwaysApplies = true; // statically rr:defaultGraph
+				break;
+			}
+			if (inv.possible) {
+				std::string conj;
+				for (std::size_t i = 0; i < inv.whereConditions.size(); ++i) {
+					conj += (i > 0 ? " AND " : "") + inv.whereConditions[i];
+				}
+				disjuncts.push_back("(" + conj + ")");
+			}
+
+			if (isStaticGraph(*gm)) {
+				allNullPossible = false; // a constant is never NULL
+				continue;
+			}
+			Resolved r = resolveSource(src, dialect, ctx.catalog());
+			nullConj.push_back(r.expr + " IS NULL");
+		}
+		if (alwaysApplies) {
+			branches.push_back(def);
+			return branches;
+		}
+		if (allNullPossible && !nullConj.empty()) {
+			std::string conj;
+			for (std::size_t i = 0; i < nullConj.size(); ++i) {
+				conj += (i > 0 ? " AND " : "") + nullConj[i];
+			}
+			disjuncts.push_back("(" + conj + ")");
+		}
+		if (disjuncts.empty()) {
+			return branches; // provably never in the default graph: branch pruned
+		}
+		std::string ors;
+		for (std::size_t i = 0; i < disjuncts.size(); ++i) {
+			ors += (i > 0 ? " OR " : "") + disjuncts[i];
+		}
+		def.extraConds.push_back("(" + ors + ")");
+		branches.push_back(def);
+		return branches;
+	}
+
+	// --- named-graph branches -------------------------------------------
+	for (const auto *gm : set) {
+		if (isStaticDefaultGraph(*gm)) {
+			continue; // denotes the default graph, never a named one
+		}
+		GraphBranch b;
+		b.graphSrc.termMap = gm->valueTermMap();
+		b.graphSrc.alias = alias;
+		b.graphSrc.tableIdentity = tableIdentity;
+
+		if (active.kind == GraphConstraint::Kind::BoundIri) {
+			sparql::ast::Iri wanted(active.iri, active.iri);
+			InversionResult inv = resolveInversion(b.graphSrc, wanted, dialect, ctx.catalog());
+			if (!inv.possible) {
+				continue; // this graph map can never produce the requested IRI
+			}
+			addUnique(b.extraConds, inv.whereConditions);
+		} else if (!isStaticGraph(*gm)) {
+			// GRAPH ?g over a per-row graph name: a row whose graph column
+			// happens to hold rr:defaultGraph is in the default graph, so it is
+			// not a named-graph solution and must be excluded here.
+			Resolved r = resolveSource(b.graphSrc, dialect, ctx.catalog());
+			b.extraConds.push_back(r.expr + " <> " + dialect.stringLiteral(kDefaultGraphIri));
+		}
+		branches.push_back(b);
+	}
+	return branches;
+}
+
 // Copy a resolved position's structured provenance onto a projected column.
 void fillColumnFromResolved(ColumnInfo &col, const Resolved &r, const SqlDialect &dialect) {
 	col.renderedExpr = r.expr;
@@ -311,13 +499,18 @@ void addConstantTermArm(std::vector<RelNodePtr> &arms, const std::string &value,
 // is identical (see SpjSource::subjectKeySig).
 void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromSql, const std::string &fromAlias,
                      const std::string &fromIdentity, const TermSource &subjectSrc, const TermSource &predicateSrc,
-                     const TermSource &objectSrc, const TermSpec &subjectSpec, const PredicateConstraint &predicateSpec,
-                     const TermSpec &objectSpec, bool mergeableSubject, TranslationContext &ctx,
-                     const std::string &parentAlias = std::string(), const std::string &parentJoinSig = std::string()) {
+                     const TermSource &objectSrc, const GraphBranch &graphBranch, const TermSpec &subjectSpec,
+                     const PredicateConstraint &predicateSpec, const TermSpec &objectSpec, bool mergeableSubject,
+                     TranslationContext &ctx, const std::string &parentAlias = std::string(),
+                     const std::string &parentJoinSig = std::string()) {
 	const SqlDialect &dialect = ctx.dialect();
 
 	std::vector<std::string> whereConditions;
 	std::vector<std::string> requiredNonNull;
+
+	// The branch's own guards (graph-IRI inversion, or the default-graph
+	// disjunction) apply regardless of the three term positions.
+	addUnique(whereConditions, graphBranch.extraConds);
 
 	Resolved subjectR = resolveSource(subjectSrc, dialect, ctx.catalog());
 	addUnique(requiredNonNull, subjectR.requiredNonNull);
@@ -355,6 +548,24 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 		addUnique(whereConditions, inv.whereConditions);
 	}
 
+	// A named-graph branch resolves its graph term like any other position. Its
+	// nullness guard joins requiredNonNull; the *default* branch is deliberately
+	// exempt, because its graph nullness is inverted (a NULL graph column is one
+	// of the ways a row lands in the default graph) and is already expressed in
+	// graphBranch.extraConds.
+	Resolved graphR;
+	const bool graphIsVar = ctx.activeGraph().kind == GraphConstraint::Kind::Variable;
+	if (!graphBranch.isDefaultGraph) {
+		graphR = resolveSource(graphBranch.graphSrc, dialect, ctx.catalog());
+		addUnique(requiredNonNull, graphR.requiredNonNull);
+		// A graph name is always an IRI, whatever the term map declares: export
+		// writes it in the quad's graph position regardless. Asserting that here
+		// keeps requiredKindFor's union pruning honest on a malformed mapping.
+		graphR.term.kind = RdfTermKind::Iri;
+		graphR.term.datatypeIri.clear();
+		graphR.term.lang.clear();
+	}
+
 	// Self-join guard: the same variable in more than one position must
 	// resolve to equal source expressions, and is projected exactly once.
 	struct PositionEntry {
@@ -363,14 +574,19 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 		const Resolved *resolved;
 	};
 	const bool predicateIsVar = predicateSpec.kind == PredicateConstraint::Variable;
-	PositionEntry positions[3] = {
+	// Graph LAST, so varOrder and projection order are untouched when there is
+	// no graph variable, and so `GRAPH ?s { ?s :p ?o }` treats the subject as
+	// the first occurrence (the graph then equates to it) rather than the
+	// reverse.
+	PositionEntry positions[4] = {
 	    {subjectSpec.isVar, subjectSpec.varName, &subjectR},
 	    {predicateIsVar, predicateSpec.varName, &predicateR},
 	    {objectSpec.isVar, objectSpec.varName, &objectR},
+	    {graphIsVar && !graphBranch.isDefaultGraph, ctx.activeGraph().varName, &graphR},
 	};
 
 	std::vector<ColumnInfo> projections; // first occurrence of each var wins
-	for (int i = 0; i < 3; ++i) {
+	for (int i = 0; i < 4; ++i) {
 		if (!positions[i].isVar) {
 			continue;
 		}
@@ -503,6 +719,10 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 	if (objectSpec.isVar) {
 		addVar(objectSpec.varName);
 	}
+	// Appended last, matching tryAddCandidate's positions[] order.
+	if (ctx.activeGraph().kind == GraphConstraint::Kind::Variable) {
+		addVar(ctx.activeGraph().varName);
+	}
 
 	std::vector<RelNodePtr> branches;
 	branches.reserve(ctx.mapping().triplesMaps.size() * 2); // rough guess to avoid too many reallocs
@@ -527,6 +747,15 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 			subjectSrc.termMap = subjectValueMap;
 			subjectSrc.alias = alias;
 			subjectSrc.tableIdentity = childIdentity;
+			// Only the SUBJECT map's graph maps apply to an rr:class triple - it
+			// has no predicate-object map to contribute any (matching
+			// TriplesMap::generateTriples, which passes an empty pom list). So a
+			// mapping with rr:graph on a POM but not on its subject map puts its
+			// rdf:type triples in the DEFAULT graph while the POM's triples are
+			// named. Spec-correct, and surprising.
+			static const std::vector<std::unique_ptr<r2rml::GraphMap>> kNoGraphMaps;
+			std::vector<GraphBranch> graphBranches =
+			    graphBranchesFor(tm.subjectMap->graphMaps, kNoGraphMaps, alias, childIdentity, ctx);
 			for (const std::string &classIri : tm.subjectMap->classIRIs) {
 				TermSource predicateSrc;
 				predicateSrc.isConstant = true;
@@ -534,8 +763,10 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 				TermSource objectSrc;
 				objectSrc.isConstant = true;
 				objectSrc.constantValue = classIri;
-				tryAddCandidate(branches, fromSql, alias, childIdentity, subjectSrc, predicateSrc, objectSrc,
-				                subjectSpec, predicateSpec, objectSpec, /*mergeableSubject=*/true, ctx);
+				for (const auto &gb : graphBranches) {
+					tryAddCandidate(branches, fromSql, alias, childIdentity, subjectSrc, predicateSrc, objectSrc, gb,
+					                subjectSpec, predicateSpec, objectSpec, /*mergeableSubject=*/true, ctx);
+				}
 			}
 		}
 
@@ -604,9 +835,17 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 						for (const auto &jc : refObjMap->joinConditions) {
 							parentJoinSig += "\x1f" + jc.childColumn + "=" + jc.parentColumn;
 						}
-						tryAddCandidate(branches, fromSql, childAlias, childIdentity, subjectSrc, predicateSrc,
-						                objectSrc, subjectSpec, predicateSpec, objectSpec,
-						                /*mergeableSubject=*/true, ctx, parentAlias, parentJoinSig);
+						// Child subject map ∪ this POM. The PARENT's subject graph
+						// maps deliberately do not apply: PredicateObjectMap::
+						// processRow receives the child triples map's, not the
+						// parent's. Graph terms come off the child alias for the
+						// same reason.
+						for (const auto &gb : graphBranchesFor(tm.subjectMap->graphMaps, pom.graphMaps, childAlias,
+						                                       childIdentity, ctx)) {
+							tryAddCandidate(branches, fromSql, childAlias, childIdentity, subjectSrc, predicateSrc,
+							                objectSrc, gb, subjectSpec, predicateSpec, objectSpec,
+							                /*mergeableSubject=*/true, ctx, parentAlias, parentJoinSig);
+						}
 						continue;
 					}
 
@@ -625,8 +864,11 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 					objectSrc.alias = alias;
 					objectSrc.tableIdentity = childIdentity;
 
-					tryAddCandidate(branches, fromSql, alias, childIdentity, subjectSrc, predicateSrc, objectSrc,
-					                subjectSpec, predicateSpec, objectSpec, /*mergeableSubject=*/true, ctx);
+					for (const auto &gb :
+					     graphBranchesFor(tm.subjectMap->graphMaps, pom.graphMaps, alias, childIdentity, ctx)) {
+						tryAddCandidate(branches, fromSql, alias, childIdentity, subjectSrc, predicateSrc, objectSrc,
+						                gb, subjectSpec, predicateSpec, objectSpec, /*mergeableSubject=*/true, ctx);
+					}
 				}
 			}
 		}

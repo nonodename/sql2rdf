@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+# ex:name is mapped twice: by EmpMap (whose subject map puts it in <graph/g1>)
+# and by DeptMap (no graph at all). With no GRAPH block only the latter is
+# visible, so the employees must not appear.
+SELECT ?d ?n
+WHERE { ?d ex:name ?n . }

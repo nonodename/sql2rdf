@@ -59,6 +59,18 @@ R2RMLMapping empDept() {
 	return mapping;
 }
 
+// A mapping that really does declare <http://example.com/graph/g1>. Needed by
+// any test that folds under a BoundIri constraint: candidate enumeration now
+// prunes a graph the mapping cannot produce, so folding `GRAPH <g1>` against a
+// graph-less mapping correctly yields an empty relation - and then there is no
+// FilterNode left to inspect.
+R2RMLMapping graphMapping() {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_graphs.ttl");
+	REQUIRE(mapping.isValid());
+	return mapping;
+}
+
 // Collect every FilterNode's captured constraint in the tree, so a test does
 // not depend on where pushdown chose to re-parent the filter.
 void collectFilterGraphs(const RelNode &node, std::vector<GraphConstraint> &out) {
@@ -142,14 +154,14 @@ TEST_CASE("ActiveGraphGuard: saves and restores, and a nested guard replaces rat
 }
 
 TEST_CASE("fold: a FILTER captures the active graph, because its predicate is translated after the guard is gone") {
-	R2RMLMapping mapping = empDept();
+	R2RMLMapping mapping = graphMapping();
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
 
 	std::unique_ptr<sparql::ast::Query> query;
 	RelNodePtr root;
 	{
-		TranslationContext::ActiveGraphGuard guard(ctx, boundGraph("http://example.com/g1"));
+		TranslationContext::ActiveGraphGuard guard(ctx, boundGraph("http://example.com/graph/g1"));
 		root = foldFixture("emp_dept_filter_exists.rq", ctx, query);
 	}
 	// Guard is now destroyed - exactly the situation renderFilter runs in.
@@ -159,7 +171,7 @@ TEST_CASE("fold: a FILTER captures the active graph, because its predicate is tr
 	collectFilterGraphs(*root, graphs);
 	REQUIRE(graphs.size() == 1);
 	CHECK(graphs[0].kind == GraphConstraint::Kind::BoundIri);
-	CHECK(graphs[0].iri == "http://example.com/g1");
+	CHECK(graphs[0].iri == "http://example.com/graph/g1");
 }
 
 TEST_CASE("fold: a BIND captures the active graph too") {
@@ -196,14 +208,14 @@ TEST_CASE("optimize: filter pushdown carries the captured graph onto every repla
 	// union arms, or folded into an Spj (pushConjuncts' containsExists guards),
 	// so it always survives as a FilterNode - which is precisely the node whose
 	// deferred translation needs the graph.
-	R2RMLMapping mapping = empDept();
+	R2RMLMapping mapping = graphMapping();
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
 
 	std::unique_ptr<sparql::ast::Query> query;
 	RelNodePtr root;
 	{
-		TranslationContext::ActiveGraphGuard guard(ctx, boundGraph("http://example.com/g1"));
+		TranslationContext::ActiveGraphGuard guard(ctx, boundGraph("http://example.com/graph/g1"));
 		root = foldFixture("emp_dept_filter_exists.rq", ctx, query);
 	}
 
@@ -217,6 +229,6 @@ TEST_CASE("optimize: filter pushdown carries the captured graph onto every repla
 	REQUIRE_FALSE(graphs.empty());
 	for (const auto &g : graphs) {
 		CHECK(g.kind == GraphConstraint::Kind::BoundIri);
-		CHECK(g.iri == "http://example.com/g1");
+		CHECK(g.iri == "http://example.com/graph/g1");
 	}
 }

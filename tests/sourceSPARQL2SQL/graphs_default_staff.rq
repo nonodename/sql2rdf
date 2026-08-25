@@ -1,0 +1,5 @@
+PREFIX ex: <http://example.com/ns#>
+# ex:staff declares BOTH <graph/g1> and rr:defaultGraph, so it is visible here
+# too - rr:defaultGraph is a member of the target graph set, not a suppressor.
+SELECT ?d ?s
+WHERE { ?d ex:staff ?s . }

@@ -1,0 +1,63 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# The named-graph workhorse for the SPARQL-to-SQL translator tests. Deliberately
+# covers every shape graphBranchesFor has to classify, over the EMP/DEPT tables
+# the DuckDB suite already seeds (so it needs no new toy data):
+#
+#   <#EmpMap>
+#     - a subject-level CONSTANT rr:graph, so every triple it generates -
+#       including the rr:class rdf:type triple - is in <graph/g1>;
+#     - a POM whose rr:graphMap is a TEMPLATE, so per R2RML Section 12 its
+#       triples are in the UNION of <graph/g1> and a per-row graph.
+#   <#DeptMap>
+#     - NO subject-level graph, so its rr:class rdf:type triple is in the
+#       default graph. Paired with <#EmpMap> above, this is what makes the
+#       "rr:class takes only the SUBJECT map's graphs" rule observable.
+#     - ex:name with no graph at all      -> default graph only;
+#     - ex:location with a constant graph -> <graph/g1> only;
+#     - ex:staff with BOTH a named graph and rr:defaultGraph -> in <graph/g1>
+#       *and* the default graph, since rr:defaultGraph is a member of the
+#       target graph set rather than a suppressor.
+
+<#EmpMap>
+    rr:logicalTable [ rr:tableName "EMP" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/employee/{EMPNO}";
+        rr:class ex:Employee;
+        rr:graph <http://example.com/graph/g1>;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:name;
+        rr:objectMap [ rr:column "ENAME" ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:dept;
+        rr:objectMap [
+            rr:template "http://data.example.com/department/{DEPTNO}";
+            rr:termType rr:IRI;
+        ];
+        rr:graphMap [ rr:template "http://example.com/graph/dept/{DEPTNO}" ];
+    ].
+
+<#DeptMap>
+    rr:logicalTable [ rr:tableName "DEPT" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/department/{DEPTNO}";
+        rr:class ex:Department;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:name;
+        rr:objectMap [ rr:column "DNAME" ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:location;
+        rr:objectMap [ rr:column "LOC" ];
+        rr:graph <http://example.com/graph/g1>;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:staff;
+        rr:objectMap [ rr:column "DEPTNO" ];
+        rr:graph <http://example.com/graph/g1>;
+        rr:graph rr:defaultGraph;
+    ].

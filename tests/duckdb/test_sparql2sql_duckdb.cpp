@@ -897,6 +897,55 @@ TEST_CASE("sparql2sql_path_cycle_plus.rq: a one-or-more path over a 3-cycle term
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Strict RDF-dataset semantics, on real rows. sparql2sql_graphs.ttl declares
+// named graphs; a query with no GRAPH block must see ONLY the triples whose
+// applicable graph set is empty or names rr:defaultGraph.
+//
+// The GRAPH-block side of this cannot be executed yet - fold() does not accept
+// GraphGraphPattern until the next step - so these cover the default-graph half,
+// which is exactly where the deliberate behaviour change lives.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("graphs_default_name.rq: a predicate mapped into a named graph is invisible in the default graph") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graphs_default_name.rq", "sparql2sql_graphs.ttl");
+	// DeptMap's ex:name only. EmpMap's is in <graph/g1> via its subject map, so
+	// SMITH and JONES must be absent - that is the strict-semantics change.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_N", "APPSERVER"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/20"}, {"V_N", "SALES"}}));
+}
+
+TEST_CASE("graphs_default_location.rq: a wholly named-graph predicate yields no rows in the default graph") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graphs_default_location.rq", "sparql2sql_graphs.ttl");
+	CHECK(rows.empty());
+}
+
+TEST_CASE("graphs_default_staff.rq: rr:defaultGraph keeps a named-graph predicate visible in the default graph") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graphs_default_staff.rq", "sparql2sql_graphs.ttl");
+	// ex:staff declares <graph/g1> AND rr:defaultGraph. Contrast with
+	// ex:location above, which declares only the named graph - so this is not
+	// passing merely because the graph filter is inert.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_S", "10"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/20"}, {"V_S", "20"}}));
+}
+
+TEST_CASE("graphs_default_class.rq: rr:class triples follow the subject map's graphs, not the POM's") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graphs_default_class.rq", "sparql2sql_graphs.ttl");
+	// DeptMap has no subject-level graph, so its rdf:type is in the default
+	// graph; EmpMap's subject map has rr:graph, so its rdf:type is not.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows,
+	                  {{"V_S", "http://data.example.com/department/10"}, {"V_C", "http://example.com/ns#Department"}}));
+	CHECK(containsRow(rows,
+	                  {{"V_S", "http://data.example.com/department/20"}, {"V_C", "http://example.com/ns#Department"}}));
+}
+
 TEST_CASE("sparql2sql_path_cycle_plus_same_var.rq: the same variable on both ends projects the closure diagonal") {
 	// Guards renderTransitiveClosure's diagonal projection, which is selected by
 	// TransitiveClosureNode::sameEndpointVar. That decision used to be inferred
