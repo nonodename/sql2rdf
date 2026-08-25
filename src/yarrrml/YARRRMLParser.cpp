@@ -48,6 +48,8 @@ using r2rml::vocab::RR_CLASS;
 using r2rml::vocab::RR_COLUMN;
 using r2rml::vocab::RR_CONSTANT;
 using r2rml::vocab::RR_DATATYPE;
+using r2rml::vocab::RR_GRAPH;
+using r2rml::vocab::RR_GRAPH_MAP;
 using r2rml::vocab::RR_IRI_TERM_TYPE;
 using r2rml::vocab::RR_JOIN_CONDITION;
 using r2rml::vocab::RR_LANGUAGE;
@@ -594,6 +596,40 @@ NodeRef emitObjectNode(r2rml::TripleCollector &collector, BlankNodeMinter &blank
 	return NodeRef();
 }
 
+/// Attach YARRRML `graph`/`graphs` entries to `target`, which is either a
+/// subject-map node (mapping-level graphs) or a predicate-object-map node
+/// (per-`po` graphs) - the two places R2RML allows a graph map.
+///
+/// A constant IRI uses the `rr:graph` shortcut rather than a full
+/// `rr:graphMap [ rr:constant ... ]`, matching how a human would write the
+/// Turtle and how R2RMLParser::buildGraphMaps reads it back. A `$(COL)` or
+/// mixed-text value needs the general form, so it goes through
+/// emitValueSpecAsMap with rr:termType rr:IRI forced: a graph name is always
+/// an IRI, and without the explicit term type a bare rr:column would be read
+/// back as a literal.
+void emitGraphMaps(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const YAML::Node &graphNode,
+                   const NodeRef &target, const std::string &mappingName,
+                   const std::map<std::string, std::string> &prefixes) {
+	if (!graphNode || !target.valid) {
+		return;
+	}
+	for (const YAML::Node &entry : flattenList(graphNode)) {
+		if (!entry.IsScalar()) {
+			collector.addError("YARRRML parser: mapping '" + mappingName + "': graph value must be a string, skipped");
+			continue;
+		}
+		VSpec vs = classifyValue(entry.as<std::string>(), /*allowIriSuffix=*/false,
+		                         /*literalsAllowed=*/false, prefixes);
+		if (vs.kind == VKind::ConstIri) {
+			emitUriTriple(collector, target, RR_GRAPH, NodeRef::uri(resolveIri(vs.text, prefixes)));
+			continue;
+		}
+		vs.forceIri = true;
+		NodeRef graphMap = emitValueSpecAsMap(collector, blanks, vs, prefixes, ValueExtra());
+		emitUriTriple(collector, target, RR_GRAPH_MAP, graphMap);
+	}
+}
+
 /// Accumulated result of translating a mapping's `po`/`predicateobjects`
 /// entries: rdf:type shortcuts fold into subjectMap rr:class assertions,
 /// everything else becomes a regular rr:predicateObjectMap blank node.
@@ -604,7 +640,10 @@ struct PoResult {
 
 void emitPredObjPair(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const YAML::Node &predNode,
                      const YAML::Node &objNode, const ValueExtra &extra, const std::string &mappingName,
-                     const std::map<std::string, std::string> &prefixes, PoResult &res) {
+                     const std::map<std::string, std::string> &prefixes, PoResult &res,
+                     // Undefined, not a default-constructed Node: the latter is
+                     // Null, which is truthy, so `!graphNode` would never fire.
+                     const YAML::Node &graphNode = YAML::Node(YAML::NodeType::Undefined)) {
 	std::vector<std::string> preds = flattenScalarList(predNode);
 	std::vector<YAML::Node> objs = flattenList(objNode);
 
@@ -619,7 +658,14 @@ void emitPredObjPair(r2rml::TripleCollector &collector, BlankNodeMinter &blanks,
 		PredicateResult predResult = buildPredicateResult(collector, blanks, predRaw, prefixes);
 
 		for (const YAML::Node &obj : objs) {
-			if (isRdfType && extra.datatypeIri.empty() && extra.language.empty() && obj.IsScalar()) {
+			// The `a`-with-constant-class shortcut normally folds into rr:class on
+			// the subject map - but only when this pair carries no graph of its
+			// own. rr:class triples take the *subject map's* graphs, so folding
+			// would either drop this graph or (if moved to the subject map) widen
+			// it to every triple the mapping generates. Emitting a real
+			// rdf:type predicate-object map instead keeps the graph exactly where
+			// it was written.
+			if (isRdfType && extra.datatypeIri.empty() && extra.language.empty() && obj.IsScalar() && !graphNode) {
 				VSpec vs = classifyValue(obj.as<std::string>(), false, false, prefixes);
 				if (vs.kind == VKind::ConstIri) {
 					res.classIris.push_back(resolveIri(vs.text, prefixes));
@@ -635,6 +681,9 @@ void emitPredObjPair(r2rml::TripleCollector &collector, BlankNodeMinter &blanks,
 					emitUriTriple(collector, pom, RR_PREDICATE_MAP, predResult.mapNode);
 				}
 				emitUriTriple(collector, pom, RR_OBJECT_MAP, objMap);
+				// Per-po graphs apply to this pair's triples only, on top of any
+				// mapping-level graphs carried by the subject map.
+				emitGraphMaps(collector, blanks, graphNode, pom, mappingName, prefixes);
 				res.pomNodes.push_back(pom);
 			}
 		}
@@ -674,7 +723,8 @@ PoResult emitPredicateObjectMaps(r2rml::TripleCollector &collector, BlankNodeMin
 				                   "': po entry missing predicates/objects key, skipped");
 				continue;
 			}
-			emitPredObjPair(collector, blanks, predNode, objNode, ValueExtra(), mappingName, prefixes, res);
+			emitPredObjPair(collector, blanks, predNode, objNode, ValueExtra(), mappingName, prefixes, res,
+			                firstOf(item, {"graphs", "graph", "g"}));
 		} else {
 			collector.addError("YARRRML parser: mapping '" + mappingName + "': unrecognised po entry, skipped");
 		}
@@ -808,9 +858,11 @@ void emitOneMapping(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, 
 	PoResult poResult = emitPredicateObjectMaps(collector, blanks, mNode, name, prefixes);
 	NodeRef subjectMap = emitSubjectMap(collector, blanks, mNode, poResult.classIris, name, prefixes);
 
-	if (firstOf(mNode, {"graphs", "graph"})) {
-		collector.addError("YARRRML parser: mapping '" + name + "': graphs not supported, skipped");
-	}
+	// Mapping-level graphs attach to the subject map, so they apply to every
+	// triple this mapping generates (including the rr:class rdf:type triples) -
+	// per R2RML §12 a triple's graphs are the union of its subject map's and its
+	// predicate-object map's.
+	emitGraphMaps(collector, blanks, firstOf(mNode, {"graphs", "graph"}), subjectMap, name, prefixes);
 
 	for (YAML::const_iterator it = mNode.begin(); it != mNode.end(); ++it) {
 		std::string key = it->first.as<std::string>();

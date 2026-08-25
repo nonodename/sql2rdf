@@ -197,9 +197,10 @@ Supported subset:
 - `po`/`predicateobjects`, in shortcut array form (`[predicates, objects]` or `[predicates, objects, datatype-or-language]`) or map form (`predicates`/`predicate`/`p`, `objects`/`object`/`o`). The `a` predicate with a constant class object is folded into `rr:class` on the subject map.
 - Object values: `$(COL)` → column (literal by default; `~iri` forces an IRI), mixed text → template, a CURIE/absolute IRI → constant IRI, any other plain string → constant literal. Per-object `{value:|v:, datatype:|language:}` maps and `[value, datatype-or-language]` pairs are supported.
 - Mapping references (joins): `{mapping: OTHER, condition(s): {function: equal, parameters: [[str1, $(CHILD)], [str2, $(PARENT)]]}}`.
-- `graphs`/`graph`, unknown per-mapping keys, and unknown top-level keys (e.g. `functions`, `targets`) are not supported and are reported as non-fatal warnings (`authors` is ignored silently).
+- `graphs`/`graph` (single entry or list), both per-mapping and per-`po` entry (where `g` is also accepted). A plain IRI or CURIE becomes an `rr:graph` constant; `$(COL)` or mixed text becomes an `rr:graphMap` with `rr:termType rr:IRI`. A per-mapping graph attaches to the subject map, so it applies to every triple the mapping generates (including `rr:class` `rdf:type` triples); a per-`po` graph attaches to that predicate-object map only. One exception to the `a`-shortcut folding: `a` with a constant class normally folds into `rr:class`, but when that `po` entry carries its own graph it stays a real `rdf:type` predicate-object map instead, since `rr:class` triples would otherwise take the subject map's graphs. Named graphs are only visible in a quad output format — see `-f nquads|trig` under [Usage](#usage).
+- Unknown per-mapping keys and unknown top-level keys (e.g. `functions`, `targets`) are not supported and are reported as non-fatal warnings (`authors` is ignored silently).
 
-Non-fatal issues (unsupported keys, a mapping with no/multiple sources, an unresolved join-condition function, skipped `graphs`, ...) are collected into `R2RMLMapping::parseErrors` in the default lenient mode, or raised as a `std::runtime_error` when parsing in strict mode (`ignoreNonFatalErrors=false`). Fatal problems (unreadable file, YAML syntax errors, a missing `mappings` key) always throw.
+Non-fatal issues (unsupported keys, a mapping with no/multiple sources, an unresolved join-condition function, a non-string graph value, ...) are collected into `R2RMLMapping::parseErrors` in the default lenient mode, or raised as a `std::runtime_error` when parsing in strict mode (`ignoreNonFatalErrors=false`). Fatal problems (unreadable file, YAML syntax errors, a missing `mappings` key) always throw.
 
 ## SPARQL query parsing
 
@@ -253,7 +254,11 @@ Arguments:
   output.nt                 Output RDF file
 
 Options:
-  -f ntriples|turtle   Output format (default: ntriples); ignored with -T
+  -f <format>          Output format (default: ntriples); ignored with -T.
+                       One of: ntriples, turtle, nquads, trig. Only the
+                       quad formats (nquads, trig) can represent named
+                       graphs, so rr:graph/rr:graphMap is silently dropped
+                       by ntriples and turtle.
   -y                   Force the mapping file to be parsed as YARRRML,
                        regardless of its extension
   -P                   Print the parsed mapping to stderr

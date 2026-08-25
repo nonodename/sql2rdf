@@ -32,6 +32,7 @@
 #include "r2rml/BaseTableOrView.h"
 #include "r2rml/ColumnTermMap.h"
 #include "r2rml/ConstantTermMap.h"
+#include "r2rml/GraphMap.h"
 #include "r2rml/JoinCondition.h"
 #include "r2rml/MappingParser.h"
 #include "r2rml/PredicateObjectMap.h"
@@ -105,6 +106,29 @@ std::string runProcessDatabase(R2RMLMapping &mapping, MockSQLConnection &conn) {
 	serd_writer_free(writer);
 	serd_env_free(env);
 	return result;
+}
+
+/// Evaluate a graph map against `columns` and return the resulting IRI text.
+/// REQUIREs the term really is a URI, which is what pins down that a bare
+/// rr:column graph map carries rr:termType rr:IRI rather than defaulting to a
+/// literal.
+std::string graphIriOf(const r2rml::GraphMap &gm, const std::map<std::string, std::string> &columns = {}) {
+	std::map<std::string, std::unique_ptr<r2rml::SQLValue>> cells;
+	for (const auto &kv : columns) {
+		cells[kv.first] = std::unique_ptr<r2rml::SQLValue>(new StringSQLValue(kv.second));
+	}
+	r2rml::MapSQLRow row(std::move(cells));
+
+	SerdEnv *env = serd_env_new(nullptr);
+	SerdNode node = gm.generateRDFTerm(row, *env);
+	std::string out;
+	bool isUri = (node.type == SERD_URI);
+	if (isUri) {
+		out = nodeUri(node);
+	}
+	serd_env_free(env);
+	REQUIRE(isUri);
+	return out;
 }
 
 bool hasError(const R2RMLMapping &mapping, const std::string &substring) {
@@ -796,21 +820,107 @@ TEST_CASE("YARRRML parse - missing 'mappings' key throws std::runtime_error") {
 	REQUIRE_THROWS_AS(parser.parse(SOURCE_YARRRML_DIR "missing_mappings.yml"), std::runtime_error);
 }
 
-TEST_CASE("YARRRML parse - graphs key produces a non-fatal warning (lenient mode)") {
+// ---------------------------------------------------------------------------
+// YARRRML `graph`/`graphs` translation. These previously produced a
+// "graphs not supported, skipped" warning (and threw in strict mode); they now
+// emit real rr:graph / rr:graphMap, so named graphs are authorable from YAML
+// rather than only from hand-written R2RML Turtle.
+// ---------------------------------------------------------------------------
+TEST_CASE("YARRRML mapping-level graphs become a constant rr:graph on the subject map") {
 	YARRRMLParser parser;
-	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "graphs_warning.yml", true);
-	bool found = false;
-	for (const auto &e : mapping.parseErrors) {
-		if (e.find("graphs not supported") != std::string::npos) {
-			found = true;
-		}
-	}
-	REQUIRE(found);
+	// Strict mode: what was previously a throw must now parse cleanly.
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "graphs.yml", false);
+	REQUIRE(mapping.parseErrors.empty());
+
+	TriplesMap *tm = findById(mapping, "m1");
+	REQUIRE(tm != nullptr);
+	REQUIRE(tm->subjectMap != nullptr);
+	REQUIRE(tm->subjectMap->graphMaps.size() == 1);
+	// A plain IRI takes the rr:graph shortcut, i.e. a constant term map.
+	REQUIRE(dynamic_cast<const ConstantTermMap *>(tm->subjectMap->graphMaps[0]->valueTermMap()) != nullptr);
+	REQUIRE(graphIriOf(*tm->subjectMap->graphMaps[0]) == "http://example.com/graph1");
+
+	// Mapping-level graphs go on the subject map, never on the POM.
+	REQUIRE(tm->predicateObjectMaps.size() == 1);
+	REQUIRE(tm->predicateObjectMaps[0]->graphMaps.empty());
 }
 
-TEST_CASE("YARRRML parse - graphs key throws in strict mode") {
+TEST_CASE("YARRRML graph as a CURIE resolves against the prefixes block") {
 	YARRRMLParser parser;
-	REQUIRE_THROWS_AS(parser.parse(SOURCE_YARRRML_DIR "graphs_warning.yml", false), std::runtime_error);
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "graphs_forms.yml", false);
+	REQUIRE(mapping.parseErrors.empty());
+
+	TriplesMap *tm = findById(mapping, "m_curie");
+	REQUIRE(tm != nullptr);
+	REQUIRE(tm->subjectMap->graphMaps.size() == 1);
+	REQUIRE(graphIriOf(*tm->subjectMap->graphMaps[0]) == "http://example.com/ns#g");
+}
+
+TEST_CASE("YARRRML graph as a bare column becomes an IRI-typed rr:graphMap") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "graphs_forms.yml", false);
+
+	TriplesMap *tm = findById(mapping, "m_column");
+	REQUIRE(tm != nullptr);
+	REQUIRE(tm->subjectMap->graphMaps.size() == 1);
+	const auto *col = dynamic_cast<const ColumnTermMap *>(tm->subjectMap->graphMaps[0]->valueTermMap());
+	REQUIRE(col != nullptr);
+	REQUIRE(col->columnName == "DEPTNO");
+	// A graph name is always an IRI. Without the forced rr:termType rr:IRI a
+	// bare rr:column would read back as a literal, which is not a legal graph.
+	REQUIRE(graphIriOf(*tm->subjectMap->graphMaps[0], {{"DEPTNO", "10"}}) == "10");
+}
+
+TEST_CASE("YARRRML graph with mixed text becomes an rr:template rr:graphMap") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "graphs_forms.yml", false);
+
+	TriplesMap *tm = findById(mapping, "m_template");
+	REQUIRE(tm != nullptr);
+	REQUIRE(tm->subjectMap->graphMaps.size() == 1);
+	const auto *tmpl = dynamic_cast<const TemplateTermMap *>(tm->subjectMap->graphMaps[0]->valueTermMap());
+	REQUIRE(tmpl != nullptr);
+	REQUIRE(tmpl->templateString == "http://example.com/graph/dept/{DEPTNO}");
+	REQUIRE(graphIriOf(*tm->subjectMap->graphMaps[0], {{"DEPTNO", "10"}}) == "http://example.com/graph/dept/10");
+}
+
+TEST_CASE("YARRRML per-po graph lands on that predicate-object map only") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "graphs_forms.yml", false);
+
+	TriplesMap *tm = findById(mapping, "m_po");
+	REQUIRE(tm != nullptr);
+	// A per-po graph must not be promoted to the subject map, which would widen
+	// it to every triple the mapping generates.
+	REQUIRE(tm->subjectMap->graphMaps.empty());
+	REQUIRE(tm->predicateObjectMaps.size() == 2);
+
+	// The ex:job POM (declared first) carries the graph.
+	REQUIRE(tm->predicateObjectMaps[0]->graphMaps.size() == 1);
+	REQUIRE(graphIriOf(*tm->predicateObjectMaps[0]->graphMaps[0]) == "http://example.com/graph/jobs");
+
+	// The ex:name POM declares none, and must not inherit its sibling's.
+	REQUIRE(tm->predicateObjectMaps[1]->graphMaps.empty());
+}
+
+TEST_CASE("YARRRML a-shortcut with its own graph stays a real rdf:type predicate-object map") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "graphs_forms.yml", false);
+
+	TriplesMap *tm = findById(mapping, "m_class_graph");
+	REQUIRE(tm != nullptr);
+
+	// Not folded into rr:class: doing so would put the rdf:type triple under
+	// the subject map's graphs (here, none) and silently lose the declared one.
+	REQUIRE(tm->subjectMap->classIRIs.empty());
+	REQUIRE(tm->subjectMap->graphMaps.empty());
+
+	REQUIRE(tm->predicateObjectMaps.size() == 1);
+	const PredicateObjectMap &pom = *tm->predicateObjectMaps[0];
+	const auto *pred = dynamic_cast<const ConstantTermMap *>(pom.predicateMaps[0].get());
+	REQUIRE(pred != nullptr);
+	REQUIRE(pom.graphMaps.size() == 1);
+	REQUIRE(graphIriOf(*pom.graphMaps[0]) == "http://example.com/graph/types");
 }
 
 TEST_CASE("YARRRML parse - multiple sources produces a non-fatal warning (lenient mode)") {

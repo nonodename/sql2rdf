@@ -89,7 +89,7 @@ Key abstractions in the core:
 - Output is written through Serd (`SerdWriter`); `R2RMLMapping::processDatabase(db, writer)` drives generation.
 - "Inside-out" mode (`isValidInsideOut()`) validates mappings for a future SQL-export scenario where row data comes from outside rather than a query: `rr:logicalTable`, `rr:sqlQuery`, and referencing object maps / join conditions are prohibited.
 
-Error-handling convention: the YARRRML parser collects non-fatal issues (unsupported keys, skipped graphs, etc.) into `R2RMLMapping::parseErrors` in lenient mode (default) or throws `std::runtime_error` in strict mode (`ignoreNonFatalErrors=false`); fatal problems (unreadable file, YAML syntax error, missing `mappings` key) always throw. Preserve this split when extending the parser.
+Error-handling convention: the YARRRML parser collects non-fatal issues (unsupported keys, a mapping with no/multiple sources, etc.) into `R2RMLMapping::parseErrors` in lenient mode (default) or throws `std::runtime_error` in strict mode (`ignoreNonFatalErrors=false`); fatal problems (unreadable file, YAML syntax error, missing `mappings` key) always throw. Preserve this split when extending the parser.
 
 `doc/api.md` is a hand-written API reference for the core library — update it when changing public headers. The README documents the supported YARRRML subset in detail; keep it in sync when extending YARRRML support.
 

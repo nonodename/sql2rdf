@@ -331,7 +331,7 @@ public:
 | `SubjectMap` | `rr:subjectMap` | Abstract; carries `classIRIs`/`graphMaps` plus `valueTermMap()`, returning the underlying `rr:template`/`rr:column`/`rr:constant` strategy that actually determines the subject's value |
 | `PredicateMap` | `rr:predicateMap` | No additional behaviour |
 | `ObjectMap` | `rr:objectMap` | No additional behaviour |
-| `GraphMap` | `rr:graphMap` | Generates named-graph IRIs |
+| `GraphMap` | `rr:graphMap` | Generates named-graph IRIs. Like `SubjectMap`, exposes `valueTermMap()` returning the underlying `rr:template`/`rr:column`/`rr:constant` strategy, so a consumer can inspect the strategy's *shape* rather than only evaluate it. Unlike `SubjectMap`'s, it is non-pure (defaulting to `nullptr`) because `GraphMap` is directly derivable |
 | `ReferencingObjectMap` | `rr:refObjectMap` | Joins to a parent `TriplesMap`; prohibited in inside-out mode |
 
 ### `ReferencingObjectMap`
@@ -750,8 +750,10 @@ and joins use the VARCHAR-cast fallback.
     **both endpoints unbound** (`?x :p+ ?y`) forces the expensive general case, a full `(subject,
     object)` pairs closure with no size/depth guard — this can be costly on a densely-connected
     graph, the same cost tradeoff `E?`'s both-unbound case already has above.
-- **No `GRAPH`/named graphs**: this R2RML mapping model never populates `rr:graph`/`rr:graphMap`,
-  so `GRAPH` patterns have nothing to translate against and always throw.
+- **No `GRAPH`/named graphs**: `rr:graph`/`rr:graphMap` *are* parsed into the mapping model
+  (`SubjectMap::graphMaps`/`PredicateObjectMap::graphMaps`) and honoured by RDF generation, but
+  the translator does not read them — it treats every triples map as default-graph-only, so
+  `GRAPH` patterns always throw.
 - **No `FROM`/`FROM NAMED` (dataset clauses)**: always throws `TranslationError`. A query is always
   translated against the entire R2RML mapping's default graph; there is no notion of a queryable
   named-graph dataset to restrict against (see the `GRAPH` limitation above).

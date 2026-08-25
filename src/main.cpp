@@ -37,7 +37,11 @@ static void printHelp(const char *programName) {
 	          << "  output.nt                 Output RDF file\n"
 	          << "\n"
 	          << "Options:\n"
-	          << "  -f ntriples|turtle   Output format (default: ntriples); ignored with -T\n"
+	          << "  -f <format>          Output format (default: ntriples); ignored with -T.\n"
+	          << "                       One of: ntriples, turtle, nquads, trig. Only the\n"
+	          << "                       quad formats (nquads, trig) can represent named\n"
+	          << "                       graphs, so rr:graph/rr:graphMap is silently dropped\n"
+	          << "                       by ntriples and turtle.\n"
 	          << "  -y                   Force the mapping file to be parsed as YARRRML,\n"
 	          << "                       regardless of its extension\n"
 	          << "  -P                   Print the parsed mapping to stderr\n"
@@ -108,15 +112,19 @@ int main(int argc, char *argv[]) {
 		} else if (std::strcmp(argv[i], "-f") == 0) {
 			if (++i >= argc) {
 				std::cerr << "Error: -f requires a format argument"
-				             " (ntriples|turtle)\n";
+				             " (ntriples|turtle|nquads|trig)\n";
 				return 1;
 			}
 			if (std::strcmp(argv[i], "ntriples") == 0) {
 				outputFormat = SERD_NTRIPLES;
 			} else if (std::strcmp(argv[i], "turtle") == 0) {
 				outputFormat = SERD_TURTLE;
+			} else if (std::strcmp(argv[i], "nquads") == 0) {
+				outputFormat = SERD_NQUADS;
+			} else if (std::strcmp(argv[i], "trig") == 0) {
+				outputFormat = SERD_TRIG;
 			} else {
-				std::cerr << "Error: unknown format '" << argv[i] << "' (use ntriples or turtle)\n";
+				std::cerr << "Error: unknown format '" << argv[i] << "' (use ntriples, turtle, nquads or trig)\n";
 				return 1;
 			}
 		} else if (argv[i][0] != '-') {

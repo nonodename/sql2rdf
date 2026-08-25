@@ -1,0 +1,15 @@
+prefixes:
+  ex: http://example.com/ns#
+
+# Mapping-level `graphs` attaches to the subject map, so it applies to every
+# triple this mapping generates. A list, to exercise flattenList; the scalar
+# `graph:` spelling and the dynamic forms are in graphs_forms.yml.
+mappings:
+  m1:
+    sources:
+      - table: EMP
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - [ex:name, $(ENAME)]
+    graphs:
+      - http://example.com/graph1
