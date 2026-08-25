@@ -117,7 +117,7 @@ jobs:
       run: |
         cd external/serd
         ACTUAL_COMMIT=$(git rev-parse HEAD)
-        EXPECTED_COMMIT="24474530f8acef5c6cdcefa00b0049367e5d3079"
+        EXPECTED_COMMIT="849b9ecd8d6c87da79f14e2630daa084002d7555"
         if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
           echo "Submodule commit hash mismatch!"
           echo "Expected: $EXPECTED_COMMIT"
@@ -235,7 +235,7 @@ jobs:
       run: |
         cd external/serd
         ACTUAL_COMMIT=$(git rev-parse HEAD)
-        EXPECTED_COMMIT="24474530f8acef5c6cdcefa00b0049367e5d3079"
+        EXPECTED_COMMIT="849b9ecd8d6c87da79f14e2630daa084002d7555"
         if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
           echo "Submodule commit hash mismatch!"
           echo "Expected: $EXPECTED_COMMIT"
