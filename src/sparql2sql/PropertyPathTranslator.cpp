@@ -164,7 +164,8 @@ RelNodePtr translateOneOrMore(const sparql::ast::PropertyPathExpr &child, const 
 		s.term = fromCol != nullptr ? fromCol->term : TermInfo();
 		s.tagExpr = tagLiteral(s.term, dialect);
 		tc.schema().push_back(s);
-		if (object.varName != subject.varName) {
+		tc.sameEndpointVar = (object.varName == subject.varName);
+		if (!tc.sameEndpointVar) {
 			ColumnInfo o;
 			o.var = object.varName;
 			o.nonNull = true;

@@ -427,7 +427,7 @@ std::string renderTransitiveClosure(const TransitiveClosureNode &tc, Translation
 		ctx.addCte(closureCte, seed + " UNION " + recursive);
 
 		std::string c = ctx.nextAlias();
-		if (tc.schema().size() == 1) {
+		if (tc.sameEndpointVar) {
 			// Subject and object share one variable (`?x p+ ?x`): only the
 			// diagonal of the pairs closure satisfies the pattern.
 			return "SELECT " + c + "." + cteFrom + " AS " + mangleVar(tc.schema()[0].var, dialect) +

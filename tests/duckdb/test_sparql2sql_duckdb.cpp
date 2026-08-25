@@ -897,6 +897,25 @@ TEST_CASE("sparql2sql_path_cycle_plus.rq: a one-or-more path over a 3-cycle term
 	}
 }
 
+TEST_CASE("sparql2sql_path_cycle_plus_same_var.rq: the same variable on both ends projects the closure diagonal") {
+	// Guards renderTransitiveClosure's diagonal projection, which is selected by
+	// TransitiveClosureNode::sameEndpointVar. That decision used to be inferred
+	// from schema().size() == 1, which held only because the node's projected
+	// width is fully determined by its mode - so adding any column to a closure
+	// (e.g. a carried named-graph invariant) would silently emit the
+	// two-endpoint form here, dropping the diagonal WHERE and returning the
+	// wrong rows. This pins the correct answer so that can't happen unnoticed.
+	//
+	// The sibling test above shows the *pairs* closure over this same 3-cycle is
+	// all 9 combinations; the diagonal of that is exactly the 3 nodes.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_path_cycle_plus_same_var.rq", "sparql2sql_path_cycle.ttl");
+	REQUIRE(rows.size() == 3);
+	for (int i = 1; i <= 3; ++i) {
+		CHECK(containsRow(rows, {{"V_X", "http://ex.org/cycle/" + std::to_string(i)}}));
+	}
+}
+
 TEST_CASE("sparql2sql_path_cycle_star.rq: a zero-or-more path over a 3-cycle dedups against the already-reflexive "
           "E+ closure") {
 	// E* = E+ union zero-length, but in a full cycle E+ already contains every

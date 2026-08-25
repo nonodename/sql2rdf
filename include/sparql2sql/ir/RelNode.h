@@ -350,6 +350,17 @@ public:
 	/// closure membership via EXISTS rather than projected.
 	std::string targetLiteral;
 
+	/// BothVars only: subject and object are the *same* variable (`?x :p+ ?x`),
+	/// so only the diagonal of the pairs closure satisfies the pattern.
+	///
+	/// Recorded explicitly rather than inferred from schema().size(), which the
+	/// renderer used to do. That test was only ever correct because this node's
+	/// projected width is fully determined by `mode` - so any future feature
+	/// that adds a column to a closure (a carried invariant, say) would silently
+	/// turn `?x :p+ ?x` into the two-endpoint form and return wrong rows rather
+	/// than fail. The producer already knows the answer; ask it.
+	bool sameEndpointVar = false;
+
 	// schema_ (inherited) declares exactly what this node projects:
 	//  - BothBound:            0 columns.
 	//  - ForwardFromSubject:   1 column, var = object's real SPARQL var name.
