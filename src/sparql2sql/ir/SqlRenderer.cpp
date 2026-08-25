@@ -357,6 +357,10 @@ std::string renderFilter(const FilterNode &f, TranslationContext &ctx) {
 		childSql = renderNode(*f.child, ctx);
 	}
 	TranslatedPattern scope = scopeOf(*f.child);
+	// Reinstate the graph this FILTER was written under before translating it:
+	// an EXISTS in the predicate folds its own graph pattern, and must do so
+	// against that graph rather than whatever is active at render time.
+	TranslationContext::ActiveGraphGuard graphGuard(ctx, f.activeGraph);
 	std::string cond = translateExpression(*f.predicate, scope, alias, ctx);
 	return "SELECT *" + ctx.clauseSep() + "FROM (" + childSql + ") AS " + alias + ctx.clauseSep() + "WHERE " + cond;
 }
@@ -369,6 +373,7 @@ std::string renderBind(const BindNode &b, TranslationContext &ctx) {
 		childSql = renderNode(*b.child, ctx);
 	}
 	TranslatedPattern scope = scopeOf(*b.child);
+	TranslationContext::ActiveGraphGuard graphGuard(ctx, b.activeGraph); // see renderFilter
 	TermSql bound = translateTerm(*b.expr, scope, alias, ctx);
 	std::string extra;
 	if (ctx.needsTag(b.outVar)) {

@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "sparql2sql/GraphConstraint.h"
 #include "sparql2sql/TermInfo.h"
 
 namespace r2rml {
@@ -132,6 +133,42 @@ public:
 	std::string onSep() const {
 		return prettyPrint_ ? (nl() + indent(1)) : std::string(" ");
 	}
+
+	/// The RDF graph triple patterns are currently being matched against -
+	/// SPARQL's active graph. `Default` (no enclosing GRAPH block) unless an
+	/// ActiveGraphGuard is in scope.
+	const GraphConstraint &activeGraph() const {
+		return activeGraph_;
+	}
+
+	/// Make `graph` the active graph for as long as the guard is alive.
+	///
+	/// Save/restore rather than the increment/decrement SubqueryDepthGuard uses,
+	/// because a nested GRAPH block *replaces* the active graph outright rather
+	/// than composing with the enclosing one (SPARQL 1.1 Section 13.3) - and the
+	/// enclosing one must come back when the inner block ends.
+	///
+	/// Covers every reentrant path that runs *inside* fold(), including a
+	/// sub-select folded partway through a GRAPH block (which is correctly
+	/// evaluated against that same active graph). It deliberately does NOT
+	/// cover FILTER/BIND expressions, whose AST is borrowed and rendered after
+	/// fold() has returned and every guard has been destroyed - those carry
+	/// their own copy on FilterNode/BindNode and reinstate it at render time.
+	class ActiveGraphGuard {
+	public:
+		ActiveGraphGuard(TranslationContext &ctx, GraphConstraint graph) : ctx_(ctx), saved_(ctx.activeGraph_) {
+			ctx_.activeGraph_ = std::move(graph);
+		}
+		~ActiveGraphGuard() {
+			ctx_.activeGraph_ = saved_;
+		}
+		ActiveGraphGuard(const ActiveGraphGuard &) = delete;
+		ActiveGraphGuard &operator=(const ActiveGraphGuard &) = delete;
+
+	private:
+		TranslationContext &ctx_;
+		GraphConstraint saved_;
+	};
 
 	/// One more level of subquery nesting for as long as the guard is alive -
 	/// a no-op in compact mode, since indent() always returns "" there.
@@ -305,6 +342,7 @@ private:
 	std::vector<CteDef> viewCtes_;
 	bool prettyPrint_;
 	std::size_t subqueryDepth_ = 0;
+	GraphConstraint activeGraph_;
 };
 
 /// Mangle a SPARQL variable name into its projected SQL column name

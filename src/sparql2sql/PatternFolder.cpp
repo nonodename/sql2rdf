@@ -355,6 +355,9 @@ RelNodePtr fold(const sparql::ast::GroupGraphPattern &pattern, TranslationContex
 			FilterNode &fn = static_cast<FilterNode &>(*node);
 			fn.schema() = acc->schema();
 			fn.predicate = f.constraint.get();
+			// Captured now, while the guard is still in scope: `predicate` is
+			// translated at render time, when it is long gone.
+			fn.activeGraph = ctx.activeGraph();
 			fn.child = std::move(acc);
 			acc = std::move(node);
 			break;
@@ -378,6 +381,7 @@ RelNodePtr fold(const sparql::ast::GroupGraphPattern &pattern, TranslationContex
 			bn.schema().push_back(col);
 			bn.outVar = b.var->name;
 			bn.expr = b.expr.get();
+			bn.activeGraph = ctx.activeGraph(); // see FilterNode above
 			bn.child = std::move(acc);
 			acc = std::move(node);
 			break;
