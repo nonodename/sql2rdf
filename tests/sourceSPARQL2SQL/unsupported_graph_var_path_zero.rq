@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+# GRAPH ?g with a zero-length path: per Section 18.4 the zero-length match holds
+# in every graph, so ?g would have to be enumerated over the dataset's named
+# graphs rather than read off a matched triple. Refused for now.
+SELECT ?g ?s ?o
+WHERE { GRAPH ?g { ?s ex:dept? ?o . } }

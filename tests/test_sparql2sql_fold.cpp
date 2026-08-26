@@ -307,16 +307,76 @@ TEST_CASE("fold: a subquery element's guaranteed-bound variables join with a pla
 	CHECK(result.sql.find("COALESCE") == std::string::npos);
 }
 
-TEST_CASE("fold: GRAPH throws a clear TranslationError (no named-graph support)") {
+TEST_CASE("fold: a GRAPH block folds its pattern against that graph and inner-joins the result") {
+	// Was a refusal test until named-graph support landed. graph_var.rq
+	// is `GRAPH ?g { ?e ex:name ?n }`, so folding it must bind ?g alongside the
+	// pattern's own variables.
 	Parser parser;
-	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "unsupported_graph.rq");
+	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "graph_var.rq");
 	R2RMLParser mappingParser;
-	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_graphs.ttl");
 	REQUIRE(mapping.isValid());
 
 	DuckDbDialect dialect;
 	TranslationContext ctx(mapping, dialect);
-	CHECK_THROWS_AS(fold(*q->where, ctx), TranslationError);
+	TranslatedPattern result = renderRelation(*fold(*q->where, ctx), ctx);
+
+	// ?g is a real query variable, not an internal one: it is bound and
+	// projected like any other.
+	CHECK(result.boundVars.count("g") == 1);
+	CHECK(result.boundVars.count("e") == 1);
+	CHECK(result.boundVars.count("n") == 1);
+	CHECK(result.sql.find("\"v_g\"") != std::string::npos);
+	// EmpMap's ex:name is the one in <graph/g1>; DeptMap's is default-graph only.
+	CHECK(result.sql.find("http://example.com/graph/g1") != std::string::npos);
+	CHECK(result.sql.find("\"ENAME\"") != std::string::npos);
+	CHECK(result.sql.find("\"DNAME\"") == std::string::npos);
+}
+
+TEST_CASE("fold: the active graph is restored after a GRAPH block ends") {
+	// A GRAPH block must not leak its graph onto a sibling pattern outside it.
+	// Here ?d ex:name ?n sits after the block and so is default-graph only,
+	// which for this mapping means DeptMap (DNAME) and not EmpMap (ENAME).
+	Parser parser;
+	auto q = parser.parseString("PREFIX ex: <http://example.com/ns#>\n"
+	                            "SELECT * WHERE {\n"
+	                            "  GRAPH <http://example.com/graph/g1> { ?x ex:location ?l . }\n"
+	                            "  ?d ex:name ?n .\n"
+	                            "}");
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_graphs.ttl");
+	REQUIRE(mapping.isValid());
+
+	DuckDbDialect dialect;
+	TranslationContext ctx(mapping, dialect);
+	TranslatedPattern result = renderRelation(*fold(*q->where, ctx), ctx);
+
+	CHECK(result.sql.find("\"LOC\"") != std::string::npos);   // inside the block
+	CHECK(result.sql.find("\"DNAME\"") != std::string::npos); // outside it, default graph
+	CHECK(result.sql.find("\"ENAME\"") == std::string::npos); // would mean the graph leaked
+}
+
+TEST_CASE("fold: a nested GRAPH block replaces the enclosing graph rather than composing with it") {
+	// SPARQL 1.1 Section 13.3. The inner block names a graph the mapping can
+	// produce, so it must match even though the outer graph differs - an
+	// intersecting (rather than replacing) implementation would find nothing.
+	Parser parser;
+	auto q = parser.parseString("PREFIX ex: <http://example.com/ns#>\n"
+	                            "SELECT * WHERE {\n"
+	                            "  GRAPH <http://example.com/graph/dept/10> {\n"
+	                            "    GRAPH <http://example.com/graph/g1> { ?d ex:location ?l . }\n"
+	                            "  }\n"
+	                            "}");
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_graphs.ttl");
+	REQUIRE(mapping.isValid());
+
+	DuckDbDialect dialect;
+	TranslationContext ctx(mapping, dialect);
+	TranslatedPattern result = renderRelation(*fold(*q->where, ctx), ctx);
+
+	CHECK(result.sql.find("\"LOC\"") != std::string::npos);
+	CHECK(result.sql.find("WHERE FALSE") == std::string::npos);
 }
 
 TEST_CASE("fold: SERVICE throws a clear TranslationError (no federated query support)") {

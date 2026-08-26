@@ -907,6 +907,57 @@ TEST_CASE("sparql2sql_path_cycle_plus.rq: a one-or-more path over a 3-cycle term
 // which is exactly where the deliberate behaviour change lives.
 // ---------------------------------------------------------------------------
 
+TEST_CASE("graph_iri_location.rq: naming the graph finds the triples the default graph cannot see") {
+	// The mirror of graphs_default_location.rq below, which finds nothing. Both
+	// directions are asserted so neither can pass by the filter being inert.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_iri_location.rq", "sparql2sql_graphs.ttl");
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_L", "NEW YORK"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/20"}, {"V_L", "BOSTON"}}));
+}
+
+TEST_CASE("graph_var_staff.rq: GRAPH ?g binds the graph name alongside the pattern's own variables") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_var_staff.rq", "sparql2sql_graphs.ttl");
+	// ex:staff's set is {<graph/g1>, rr:defaultGraph}; only the named member is
+	// a GRAPH solution, so each department appears exactly once, with ?g bound.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(
+	    rows,
+	    {{"V_G", "http://example.com/graph/g1"}, {"V_D", "http://data.example.com/department/10"}, {"V_S", "10"}}));
+	CHECK(containsRow(
+	    rows,
+	    {{"V_G", "http://example.com/graph/g1"}, {"V_D", "http://data.example.com/department/20"}, {"V_S", "20"}}));
+}
+
+TEST_CASE("graph_var_dept.rq: a two-member graph set yields one solution per graph") {
+	// The reason enumeration emits one branch per graph rather than one branch
+	// with a disjunction: SMITH's ex:dept triple is in BOTH <graph/g1> and
+	// <graph/dept/10>, so it must appear twice under GRAPH ?g with different ?g.
+	// (JONES has a NULL DEPTNO, so the template yields no triple at all.)
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_var_dept.rq", "sparql2sql_graphs.ttl");
+	REQUIRE(rows.size() == 2);
+	CHECK(
+	    containsRow(rows, {{"V_G", "http://example.com/graph/g1"}, {"V_E", "http://data.example.com/employee/7369"}}));
+	CHECK(containsRow(rows,
+	                  {{"V_G", "http://example.com/graph/dept/10"}, {"V_E", "http://data.example.com/employee/7369"}}));
+}
+
+TEST_CASE("graph_iri_path_plus.rq: an arbitrary-length path inside a NAMED graph executes") {
+	// A bound graph IRI needs no invariant column through the closure - its
+	// condition is inside the step relation. The graph-VARIABLE form is refused
+	// instead (see the structural refusal tests); this is the supported half.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_iri_path_plus.rq", "sparql2sql_graphs.ttl");
+	// ex:dept in <graph/g1> is employee/7369 -> department/10, one hop, no
+	// further edge out of a department, so the closure is that single pair.
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(
+	    rows, {{"V_S", "http://data.example.com/employee/7369"}, {"V_O", "http://data.example.com/department/10"}}));
+}
+
 TEST_CASE("graphs_default_name.rq: a predicate mapped into a named graph is invisible in the default graph") {
 	auto conn = makeSeededDatabase();
 	auto rows = translateAndRun(*conn, "graphs_default_name.rq", "sparql2sql_graphs.ttl");

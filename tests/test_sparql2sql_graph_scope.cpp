@@ -34,6 +34,7 @@
 #include "sparql2sql/GraphConstraint.h"
 #include "sparql2sql/PatternFolder.h"
 #include "sparql2sql/TranslatedPattern.h"
+#include "sparql2sql/Translator.h"
 #include "sparql2sql/ir/Optimizer.h"
 #include "sparql2sql/ir/RelNode.h"
 
@@ -231,4 +232,61 @@ TEST_CASE("optimize: filter pushdown carries the captured graph onto every repla
 		CHECK(g.kind == GraphConstraint::Kind::BoundIri);
 		CHECK(g.iri == "http://example.com/graph/g1");
 	}
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end proof of the deferred-expression capture. Until GRAPH blocks
+// folded, the capture could only be asserted structurally (above); these are
+// the observable consequences.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::string translateWith(const char *ttlFile, const std::string &queryText) {
+	R2RMLParser mappingParser;
+	R2RMLMapping mapping = mappingParser.parse(std::string(SOURCE_R2RML_DIR) + ttlFile);
+	REQUIRE(mapping.isValid());
+	Parser parser;
+	auto q = parser.parseString("PREFIX ex: <http://example.com/ns#>\n" + queryText);
+	DuckDbDialect dialect;
+	return sparql2sql::translateQuery(*q, mapping, dialect);
+}
+
+bool has(const std::string &haystack, const std::string &needle) {
+	return haystack.find(needle) != std::string::npos;
+}
+
+} // namespace
+
+TEST_CASE("GRAPH: an EXISTS inside a GRAPH block is evaluated against that graph") {
+	// The hazard the FilterNode capture exists for. The EXISTS body folds at
+	// *render* time, after every ActiveGraphGuard is gone, so without the
+	// capture it would resolve ex:name against the default graph.
+	//
+	// In sparql2sql_graphs.ttl, ex:name is mapped twice: EmpMap's is in
+	// <graph/g1> (ENAME), DeptMap's is default-graph only (DNAME). Which table
+	// the EXISTS body reads is therefore a direct readout of which graph it was
+	// folded against.
+	std::string sql =
+	    translateWith("sparql2sql_graphs.ttl", "SELECT ?d WHERE { GRAPH <http://example.com/graph/g1> {\n"
+	                                           "  ?d ex:location ?l . FILTER(EXISTS { ?d ex:name ?n . }) } }");
+	CHECK(has(sql, "EXISTS"));
+	CHECK(has(sql, "\"ENAME\""));       // g1's ex:name - correct
+	CHECK_FALSE(has(sql, "\"DNAME\"")); // default graph's - would mean the capture was lost
+}
+
+TEST_CASE("GRAPH: a sub-select inside a GRAPH block inherits the active graph") {
+	// A sub-select folds inside fold(), so the guard is still live and
+	// inheritance is automatic - which is also the correct semantics.
+	std::string sql = translateWith("sparql2sql_graphs.ttl", "SELECT ?n WHERE { GRAPH <http://example.com/graph/g1> {\n"
+	                                                         "  { SELECT ?n WHERE { ?e ex:name ?n . } } } }");
+	CHECK(has(sql, "\"ENAME\""));
+	CHECK_FALSE(has(sql, "\"DNAME\""));
+}
+
+TEST_CASE("GRAPH ?g: the graph name is projected as an ordinary query variable") {
+	// ?g must reach the SELECT list; a constant graph map folds it to a literal.
+	std::string sql = translateWith("sparql2sql_graphs.ttl", "SELECT ?g ?d WHERE { GRAPH ?g { ?d ex:staff ?s . } }");
+	CHECK(has(sql, "\"v_g\""));
+	CHECK(has(sql, "'http://example.com/graph/g1'"));
 }

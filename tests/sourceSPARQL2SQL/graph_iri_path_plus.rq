@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+# The supported counterpart to unsupported_graph_var_path_plus.rq: a NAMED graph
+# needs no invariant column, because its condition sits inside the step
+# relation's own WHERE, identically in every arm of it.
+SELECT ?s ?o
+WHERE { GRAPH <http://example.com/graph/g1> { ?s ex:dept+ ?o . } }

@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.com/ns#>
+# ex:dept's graph set has TWO members: <graph/g1> (from EmpMap's subject map)
+# and a per-row <graph/dept/{DEPTNO}> (from the POM's rr:graphMap). One row
+# therefore yields two solutions, one per graph - which is why enumeration emits
+# one branch per graph rather than a single branch with a disjunction.
+SELECT ?g ?e
+WHERE { GRAPH ?g { ?e ex:dept ?d . } }

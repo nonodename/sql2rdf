@@ -1,0 +1,5 @@
+PREFIX ex: <http://example.com/ns#>
+# ex:location lives only in <graph/g1>, so naming that graph must find it -
+# the mirror of graphs_default_location.rq, which must find nothing.
+SELECT ?d ?l
+WHERE { GRAPH <http://example.com/graph/g1> { ?d ex:location ?l . } }

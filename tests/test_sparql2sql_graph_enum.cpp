@@ -19,6 +19,9 @@
 #ifndef SOURCE_R2RML_DIR
 #define SOURCE_R2RML_DIR ""
 #endif
+#ifndef SOURCE_SPARQL2SQL_DIR
+#define SOURCE_SPARQL2SQL_DIR ""
+#endif
 
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/R2RMLParser.h"
@@ -26,6 +29,8 @@
 #include "sparql2sql/DuckDbDialect.h"
 #include "sparql2sql/GraphConstraint.h"
 #include "sparql2sql/TranslatedPattern.h"
+#include "sparql2sql/Translator.h"
+#include "sparql2sql/TranslationError.h"
 #include "sparql2sql/TriplePatternTranslator.h"
 #include "sparql2sql/ir/SqlRenderer.h"
 
@@ -230,4 +235,45 @@ TEST_CASE("graph enum: GRAPH ?g unified with the subject position equates the tw
 	CHECK(contains(tp.sql, kG1));
 	CHECK(contains(tp.sql, "department/"));
 	CHECK(contains(tp.sql, " = "));
+}
+
+// ---------------------------------------------------------------------------
+// Refusals. A graph VARIABLE combined with a path operator that is not anchored
+// on a matched triple cannot bind the graph name, so it is refused rather than
+// answered wrongly. Both were reachable the moment GRAPH blocks started
+// folding, and the `+`/`*` form previously emitted SQL referencing a column the
+// closure had dropped - invalid, not merely wrong.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::string translateFull(const char *ttlFile, const char *rqFile) {
+	R2RMLMapping mapping = parseMapping(ttlFile);
+	Parser parser;
+	auto q = parser.parseFile(std::string(SOURCE_SPARQL2SQL_DIR) + rqFile);
+	DuckDbDialect dialect;
+	return sparql2sql::translateQuery(*q, mapping, dialect);
+}
+
+} // namespace
+
+TEST_CASE("graph refusal: GRAPH ?g with an arbitrary-length path throws", "[sparql2sql]") {
+	CHECK_THROWS_AS(translateFull("sparql2sql_graphs.ttl", "unsupported_graph_var_path_plus.rq"),
+	                sparql2sql::TranslationError);
+}
+
+TEST_CASE("graph refusal: GRAPH ?g with a zero-length path throws", "[sparql2sql]") {
+	CHECK_THROWS_AS(translateFull("sparql2sql_graphs.ttl", "unsupported_graph_var_path_zero.rq"),
+	                sparql2sql::TranslationError);
+}
+
+TEST_CASE("graph refusal: the same path inside a NAMED graph is supported", "[sparql2sql]") {
+	// The contrast that makes the two refusals above precise rather than a
+	// blanket "no paths inside GRAPH": a bound IRI carries its condition inside
+	// the step relation, so it needs no invariant column.
+	std::string sql = translateFull("sparql2sql_graphs.ttl", "graph_iri_path_plus.rq");
+	CHECK(contains(sql, "WITH RECURSIVE"));
+	CHECK(contains(sql, "cte_from"));
+	// And crucially it does not reference a graph column the closure dropped.
+	CHECK_FALSE(contains(sql, "v_g"));
 }

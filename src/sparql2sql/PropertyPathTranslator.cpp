@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "sparql-parser/ast/Term.h"
+#include "sparql2sql/GraphConstraint.h"
 #include "sparql2sql/PatternFolder.h"
 #include "sparql2sql/SqlDialect.h"
 #include "sparql2sql/TagSql.h"
@@ -122,6 +123,22 @@ StepRelation buildStep(const sparql::ast::PropertyPathExpr &child, TranslationCo
 // (from, to) pairs closure (see TransitiveClosureNode/renderTransitiveClosure).
 RelNodePtr translateOneOrMore(const sparql::ast::PropertyPathExpr &child, const TermSpec &subject,
                               const TermSpec &object, TranslationContext &ctx) {
+	// A graph VARIABLE would have to be held constant across every hop of the
+	// closure, which means carrying it as an extra invariant column through the
+	// recursive CTE. TransitiveClosureNode projects only its endpoints today, so
+	// the step relation's graph column would be dropped by the closure and then
+	// dangle in the outer projection - invalid SQL, and before that a silently
+	// wrong answer if the outer query never mentioned it.
+	//
+	// A bound graph IRI needs none of this: its condition lives inside the step
+	// relation's own WHERE, identically in every arm, so the invariant holds for
+	// free and `+`/`*` work normally.
+	if (ctx.activeGraph().kind == GraphConstraint::Kind::Variable) {
+		throw TranslationError(
+		    "unsupported: an arbitrary-length property path (`*`/`+`) inside GRAPH ?" + ctx.activeGraph().varName +
+		    " - the graph name would have to be carried through the path's recursive closure, which is not yet "
+		    "implemented. Name the graph explicitly (GRAPH <iri>) to use a `*`/`+` path inside it.");
+	}
 	StepRelation sr = buildStep(child, ctx);
 	RelNodePtr node(new TransitiveClosureNode());
 	TransitiveClosureNode &tc = static_cast<TransitiveClosureNode &>(*node);
@@ -207,6 +224,18 @@ RelNodePtr translateZeroOrMore(const sparql::ast::ZeroOrMorePath &path, const Te
 } // namespace
 
 RelNodePtr zeroLengthPath(const TermSpec &subject, const TermSpec &object, TranslationContext &ctx) {
+	// Per Section 18.4 the zero-length path holds in every graph, whether or not
+	// the term occurs in it - so under a graph VARIABLE the graph name should
+	// range over the dataset's named graphs. None of the relations below bind a
+	// graph at all (they are anchored on terms, not on triples), so `?`/`*` here
+	// would leave ?g unbound or NULL-padded rather than enumerated. Refuse
+	// rather than answer wrongly; a bound graph IRI is unaffected.
+	if (ctx.activeGraph().kind == GraphConstraint::Kind::Variable) {
+		throw TranslationError(
+		    "unsupported: a zero-length property path (`?`/`*`) inside GRAPH ?" + ctx.activeGraph().varName +
+		    " - the zero-length match holds in every graph, so the graph name would have to be enumerated over the "
+		    "dataset, which is not yet implemented. Name the graph explicitly (GRAPH <iri>) instead.");
+	}
 	if (!subject.isVar && !object.isVar) {
 		// Both endpoints fixed: the zero-length path holds exactly when they
 		// are the same term, and binds nothing either way.

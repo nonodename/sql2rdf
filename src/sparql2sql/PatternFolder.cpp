@@ -6,7 +6,9 @@
 #include <utility>
 
 #include "sparql-parser/ast/Expression.h"
+#include "sparql-parser/ast/Term.h"
 #include "sparql2sql/ExprAnalysis.h"
+#include "sparql2sql/GraphConstraint.h"
 #include "sparql2sql/ExpressionTranslator.h"
 #include "sparql2sql/SqlDialect.h"
 #include "sparql2sql/TagSql.h"
@@ -305,6 +307,7 @@ RelNodePtr fold(const sparql::ast::GroupGraphPattern &pattern, TranslationContex
 	using sparql::ast::Bind;
 	using sparql::ast::ElementKind;
 	using sparql::ast::Filter;
+	using sparql::ast::GraphGraphPattern;
 	using sparql::ast::GroupGraphPattern;
 	using sparql::ast::InlineData;
 	using sparql::ast::MinusGraphPattern;
@@ -424,11 +427,35 @@ RelNodePtr fold(const sparql::ast::GroupGraphPattern &pattern, TranslationContex
 			acc = innerJoin(std::move(acc), std::move(node), ctx);
 			break;
 		}
-		case ElementKind::GraphGraphPattern:
-			throw TranslationError(
-			    "unsupported: GRAPH patterns require named-graph support, which sparql2sql's translation algebra "
-			    "does not yet provide (rr:graph/rr:graphMap are parsed and honoured by RDF generation, but "
-			    "SPARQL-to-SQL translation still treats every triples map as default-graph only)");
+		case ElementKind::GraphGraphPattern: {
+			const auto &gg = static_cast<const GraphGraphPattern &>(el);
+			// The grammar admits only an IRI or a variable here.
+			GraphConstraint graph;
+			if (gg.graphNameOrVar->kind() == sparql::ast::TermKind::Var) {
+				const auto &var = static_cast<const sparql::ast::Var &>(*gg.graphNameOrVar);
+				graph = variableGraph(var.name);
+			} else {
+				const auto &iri = static_cast<const sparql::ast::Iri &>(*gg.graphNameOrVar);
+				graph = boundGraph(iri.value);
+			}
+			// Fold the block against that graph. The guard covers every reentrant
+			// path that runs inside fold(), including a nested GRAPH (which
+			// replaces rather than composes, per Section 13.3) and a sub-select
+			// (correctly evaluated against the active graph). A FILTER/BIND inside
+			// the block instead captures the constraint on its node, because its
+			// expression is translated after this guard is gone.
+			//
+			// The graph variable is deliberately NOT markInternal'd: it is an
+			// ordinary query variable, projected by SELECT * and joinable with the
+			// rest of the pattern like any other.
+			RelNodePtr inner;
+			{
+				TranslationContext::ActiveGraphGuard guard(ctx, graph);
+				inner = fold(*gg.pattern, ctx);
+			}
+			acc = innerJoin(std::move(acc), std::move(inner), ctx);
+			break;
+		}
 		case ElementKind::ServiceGraphPattern:
 			throw TranslationError("unsupported: SERVICE (federated query) is not supported");
 		}

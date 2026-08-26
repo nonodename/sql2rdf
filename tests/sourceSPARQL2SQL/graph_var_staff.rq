@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+# ex:staff's graph set is {<graph/g1>, rr:defaultGraph}. Only the named member
+# is a GRAPH solution, so each subject appears once here with ?g bound to g1 -
+# while graphs_default_staff.rq finds the same triples in the default graph.
+SELECT ?g ?d ?s
+WHERE { GRAPH ?g { ?d ex:staff ?s . } }
