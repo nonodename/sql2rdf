@@ -238,7 +238,7 @@ RelNodePtr zeroLengthPath(const TermSpec &subject, const TermSpec &object, Trans
 	// Cross-join the graph enumeration onto whatever the anchored case produces:
 	// the zero-length match itself is graph-independent, so every named graph
 	// yields a solution.
-	auto withGraphs = [&ctx, graphIsVar](RelNodePtr rel) {
+	auto withGraphs = [&ctx, graphIsVar](RelNodePtr rel) -> RelNodePtr {
 		if (!graphIsVar) {
 			return rel;
 		}

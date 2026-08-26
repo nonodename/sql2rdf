@@ -433,7 +433,7 @@ std::string renderTransitiveClosure(const TransitiveClosureNode &tc, Translation
 		const ColumnInfo *info = tc.column(var);
 		invProject += ", %C%." + col + " AS " + col + (info != nullptr ? closureTagProjection(*info, ctx) : "");
 	}
-	auto invOn = [&](const std::string &acc, const std::string &step) {
+	auto invOn = [&](const std::string &acc, const std::string &step) -> std::string {
 		std::string on;
 		for (const auto &var : tc.invariantVars) {
 			const std::string col = mangleVar(var, dialect);
@@ -441,7 +441,7 @@ std::string renderTransitiveClosure(const TransitiveClosureNode &tc, Translation
 		}
 		return on;
 	};
-	auto subst = [](std::string text, const std::string &token, const std::string &value) {
+	auto subst = [](std::string text, const std::string &token, const std::string &value) -> std::string {
 		std::size_t pos = 0;
 		while ((pos = text.find(token, pos)) != std::string::npos) {
 			text.replace(pos, token.size(), value);
