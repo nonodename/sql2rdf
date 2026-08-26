@@ -360,3 +360,32 @@ TEST_CASE("translatePath: a one-or-more path with the same variable on both ends
 	CHECK(contains(sql, "\"cte_from\" = "));
 	CHECK(contains(outerSelectList(sql), "\"v_m\""));
 }
+
+TEST_CASE("translatePath: the closure's diagonal is driven by sameEndpointVar, not by projected width") {
+	R2RMLMapping mapping = parseMapping("example_emp_dept.ttl");
+	DuckDbDialect dialect;
+	TranslationContext ctx(mapping, dialect);
+
+	Parser parser;
+	auto sameVar = parser.parseFile(SOURCE_SPARQL2SQL_DIR "emp_dept_path_plus_same_var.rq");
+	sparql2sql::RelNodePtr sameNode = translateTriplePattern(firstTriple(*sameVar), ctx);
+	REQUIRE(sameNode->kind() == sparql2sql::RelKind::TransitiveClosure);
+	const auto &sameTc = static_cast<const sparql2sql::TransitiveClosureNode &>(*sameNode);
+	CHECK(sameTc.mode == sparql2sql::TransitiveClosureNode::Mode::BothVars);
+	CHECK(sameTc.sameEndpointVar);
+
+	// The distinct-endpoint sibling must leave the flag clear. Asserting the
+	// flag directly - rather than only the rendered SQL - is the point: the
+	// renderer used to infer this from schema().size(), which is correct only
+	// while width is pinned by mode. A future carried column (e.g. a named-graph
+	// invariant) would break that inference silently, so the producer's
+	// intent is what gets pinned here.
+	// path_plus_view.rq's first triple is `?s ex:knows+ ?o` - both endpoints
+	// variables, but distinct ones.
+	auto twoVar = parser.parseFile(SOURCE_SPARQL2SQL_DIR "emp_dept_path_plus_view.rq");
+	sparql2sql::RelNodePtr twoNode = translateTriplePattern(firstTriple(*twoVar), ctx);
+	REQUIRE(twoNode->kind() == sparql2sql::RelKind::TransitiveClosure);
+	const auto &twoTc = static_cast<const sparql2sql::TransitiveClosureNode &>(*twoNode);
+	CHECK(twoTc.mode == sparql2sql::TransitiveClosureNode::Mode::BothVars);
+	CHECK_FALSE(twoTc.sameEndpointVar);
+}

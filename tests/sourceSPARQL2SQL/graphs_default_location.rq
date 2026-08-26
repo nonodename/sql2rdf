@@ -1,0 +1,4 @@
+PREFIX ex: <http://example.com/ns#>
+# ex:location exists only in <graph/g1>, so the default graph has none of it.
+SELECT ?d ?l
+WHERE { ?d ex:location ?l . }

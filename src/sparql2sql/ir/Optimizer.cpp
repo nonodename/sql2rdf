@@ -939,12 +939,20 @@ bool foldConjunctIntoSpj(SpjRelation &spj, const sparql::ast::Expression &pred, 
 // Wrap `child` in a chain of single-conjunct FilterNodes (no further pushdown -
 // used at boundaries and for conjuncts that stay above a node). Each new
 // FilterNode copies the child's schema, exactly as PatternFolder builds them.
-RelNodePtr wrapFilters(RelNodePtr child, const std::vector<const sparql::ast::Expression *> &preds) {
+//
+// `graph` is the active graph of the FilterNode these conjuncts came from, and
+// must be carried onto every replacement: these nodes are the ones a deferred
+// EXISTS is eventually rendered from, and an EXISTS conjunct is precisely the
+// shape that is never pushed anywhere else (see pushConjuncts's containsExists
+// guards), so it always arrives here.
+RelNodePtr wrapFilters(RelNodePtr child, const std::vector<const sparql::ast::Expression *> &preds,
+                       const GraphConstraint &graph) {
 	for (const auto *p : preds) {
 		RelNodePtr node(new FilterNode());
 		FilterNode &f = static_cast<FilterNode &>(*node);
 		f.schema() = child->schema();
 		f.predicate = p;
+		f.activeGraph = graph;
 		f.child = std::move(child);
 		child = std::move(node);
 	}
@@ -954,7 +962,7 @@ RelNodePtr wrapFilters(RelNodePtr child, const std::vector<const sparql::ast::Ex
 // Apply `conjuncts` as filters on top of `child`, pushing each as deep as it
 // can safely go. Recurses on strictly smaller subtrees, so it terminates.
 RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::Expression *> &conjuncts,
-                         TranslationContext *ctx) {
+                         TranslationContext *ctx, const GraphConstraint &graph) {
 	if (conjuncts.empty()) {
 		return child;
 	}
@@ -963,7 +971,7 @@ RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::
 	case RelKind::Join: {
 		JoinNode &j = static_cast<JoinNode &>(*child);
 		if (j.joinKind != JoinKind::Inner) {
-			return wrapFilters(std::move(child), conjuncts); // LeftOuter: boundary.
+			return wrapFilters(std::move(child), conjuncts, graph); // LeftOuter: boundary.
 		}
 		std::set<std::string> leftVars = j.left->allVars();
 		std::set<std::string> rightVars = j.right->allVars();
@@ -1001,9 +1009,9 @@ RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::
 				keep.push_back(c);
 			}
 		}
-		j.left = pushConjuncts(std::move(j.left), leftConj, ctx);
-		j.right = pushConjuncts(std::move(j.right), rightConj, ctx);
-		return wrapFilters(std::move(child), keep);
+		j.left = pushConjuncts(std::move(j.left), leftConj, ctx, graph);
+		j.right = pushConjuncts(std::move(j.right), rightConj, ctx, graph);
+		return wrapFilters(std::move(child), keep, graph);
 	}
 	case RelKind::AntiJoin: {
 		AntiJoinNode &a = static_cast<AntiJoinNode &>(*child);
@@ -1017,8 +1025,8 @@ RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::
 				keep.push_back(c);
 			}
 		}
-		a.left = pushConjuncts(std::move(a.left), leftConj, ctx);
-		return wrapFilters(std::move(child), keep);
+		a.left = pushConjuncts(std::move(a.left), leftConj, ctx, graph);
+		return wrapFilters(std::move(child), keep, graph);
 	}
 	case RelKind::UnionByName: {
 		UnionByNameNode &u = static_cast<UnionByNameNode &>(*child);
@@ -1045,10 +1053,10 @@ RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::
 		}
 		if (!distribute.empty()) {
 			for (auto &arm : u.arms) {
-				arm = pushConjuncts(std::move(arm), distribute, ctx);
+				arm = pushConjuncts(std::move(arm), distribute, ctx, graph);
 			}
 		}
-		return wrapFilters(std::move(child), keep);
+		return wrapFilters(std::move(child), keep, graph);
 	}
 	case RelKind::Spj: {
 		// Fold what we can straight into the block's WHERE; anything that can't
@@ -1062,16 +1070,16 @@ RelNodePtr pushConjuncts(RelNodePtr child, const std::vector<const sparql::ast::
 				keep.push_back(c);
 			}
 		}
-		return wrapFilters(std::move(child), keep);
+		return wrapFilters(std::move(child), keep, graph);
 	}
 	case RelKind::TransitiveClosure:
 		// The closure's own output vars (subject/object) are unrelated to
 		// step's internal from/to vars, so a filter over the output cannot
 		// be re-expressed over step; boundary, same as Bind/Raw/SingleRow/Empty.
-		return wrapFilters(std::move(child), conjuncts);
+		return wrapFilters(std::move(child), conjuncts, graph);
 	default:
 		// Bind, Raw, SingleRow, Empty: boundary.
-		return wrapFilters(std::move(child), conjuncts);
+		return wrapFilters(std::move(child), conjuncts, graph);
 	}
 }
 
@@ -1083,7 +1091,7 @@ RelNodePtr pushFilters(RelNodePtr node, TranslationContext *ctx) {
 		FilterNode &f = static_cast<FilterNode &>(*node);
 		f.child = pushFilters(std::move(f.child), ctx);
 		std::vector<const sparql::ast::Expression *> conjuncts = splitConjuncts(*f.predicate);
-		return pushConjuncts(std::move(f.child), conjuncts, ctx);
+		return pushConjuncts(std::move(f.child), conjuncts, ctx, f.activeGraph);
 	}
 	case RelKind::Join: {
 		JoinNode &j = static_cast<JoinNode &>(*node);

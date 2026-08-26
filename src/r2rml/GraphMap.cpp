@@ -2,6 +2,8 @@
 
 #include <string>
 
+#include "r2rml/MappingParser.h"
+
 namespace r2rml {
 
 GraphMap::~GraphMap() = default;
@@ -14,8 +16,7 @@ bool isDefaultGraphNode(const SerdNode &node) {
 	if (node.type != SERD_URI) {
 		return false;
 	}
-	static const char *const kDefaultGraphIri = "http://www.w3.org/ns/r2rml#defaultGraph";
-	return std::string(reinterpret_cast<const char *>(node.buf), node.n_bytes) == kDefaultGraphIri;
+	return std::string(reinterpret_cast<const char *>(node.buf), node.n_bytes) == vocab::RR_DEFAULT_GRAPH;
 }
 
 } // namespace
@@ -23,18 +24,27 @@ bool isDefaultGraphNode(const SerdNode &node) {
 void forEachGraphNode(const std::vector<std::unique_ptr<GraphMap>> &subjectGraphMaps,
                       const std::vector<std::unique_ptr<GraphMap>> &pomGraphMaps, const SQLRow &row, const SerdEnv &env,
                       const std::function<void(const SerdNode *)> &emit) {
-	bool emitted = false;
+	bool emittedNamed = false;
+	// An explicit rr:defaultGraph is a *member* of the target graph set, not a
+	// no-op: it must still produce a default-graph statement even when a sibling
+	// graph map resolves to a real named graph. Tracked separately from
+	// `emittedNamed` so the two can both hold for one triple.
+	bool wantsDefault = false;
 
 	auto tryEmit = [&](const GraphMap *gm) {
 		if (!gm) {
 			return;
 		}
 		SerdNode node = gm->generateRDFTerm(row, env);
-		if (node.type == SERD_NOTHING || isDefaultGraphNode(node)) {
+		if (node.type == SERD_NOTHING) {
+			return;
+		}
+		if (isDefaultGraphNode(node)) {
+			wantsDefault = true;
 			return;
 		}
 		emit(&node);
-		emitted = true;
+		emittedNamed = true;
 	};
 
 	for (const auto &gm : subjectGraphMaps) {
@@ -44,7 +54,10 @@ void forEachGraphNode(const std::vector<std::unique_ptr<GraphMap>> &subjectGraph
 		tryEmit(gm.get());
 	}
 
-	if (!emitted) {
+	// No named graph at all means the default graph applies (this also covers
+	// the "no graph maps declared" case, preserving triple-only output for
+	// mappings that never mention rr:graph).
+	if (wantsDefault || !emittedNamed) {
 		emit(nullptr);
 	}
 }

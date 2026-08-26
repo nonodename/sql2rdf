@@ -897,6 +897,233 @@ TEST_CASE("sparql2sql_path_cycle_plus.rq: a one-or-more path over a 3-cycle term
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Strict RDF-dataset semantics, on real rows. sparql2sql_graphs.ttl declares
+// named graphs; a query with no GRAPH block must see ONLY the triples whose
+// applicable graph set is empty or names rr:defaultGraph.
+//
+// The GRAPH-block side of this cannot be executed yet - fold() does not accept
+// GraphGraphPattern until the next step - so these cover the default-graph half,
+// which is exactly where the deliberate behaviour change lives.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// FROM / FROM NAMED on real rows. Both cases below return a *different* answer
+// than the same pattern without the clause, so neither can pass by the dataset
+// filter being inert.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("dataset_from_g1_name.rq: FROM replaces the default graph, flipping which ex:name matches") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dataset_from_g1_name.rq", "sparql2sql_graphs.ttl");
+	// Without the FROM clause this query returns the two DEPARTMENTS
+	// (graphs_default_name.rq asserts exactly that). With it, the ungraphed
+	// DeptMap triples leave the dataset and the g1 EmpMap ones enter.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/employee/7369"}, {"V_N", "SMITH"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/employee/7400"}, {"V_N", "JONES"}}));
+}
+
+TEST_CASE("dataset_from_named_only.rq: FROM NAMED alone leaves the default graph empty") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dataset_from_named_only.rq", "sparql2sql_graphs.ttl");
+	CHECK(rows.empty());
+}
+
+TEST_CASE("dataset_from_named_graph.rq: the same FROM NAMED graph is reachable inside a GRAPH block") {
+	// The control for the case above: identical dataset clause, identical
+	// triples, but named by a GRAPH block - so the emptiness there is the
+	// default-graph rule and not the graph simply being unreachable.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dataset_from_named_graph.rq", "sparql2sql_graphs.ttl");
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_L", "NEW YORK"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/20"}, {"V_L", "BOSTON"}}));
+}
+
+// ---------------------------------------------------------------------------
+// The closure invariant column, on real rows. sparql2sql_graph_path.ttl puts
+// each edge of the 1->2->3 chain in a DIFFERENT named graph, so a path
+// evaluated within one graph can only be one hop - and a closure that failed to
+// hold the graph constant would visibly return the two-hop pair.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("graph_path_var_plus.rq: a path inside GRAPH ?g cannot hop between graphs") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_path_var_plus.rq", "sparql2sql_graph_path.ttl");
+	// Exactly the two one-hop pairs, each in its own graph.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(
+	    rows, {{"V_G", "http://ex.org/g/1"}, {"V_S", "http://ex.org/node/1"}, {"V_O", "http://ex.org/node/2"}}));
+	CHECK(containsRow(
+	    rows, {{"V_G", "http://ex.org/g/2"}, {"V_S", "http://ex.org/node/2"}, {"V_O", "http://ex.org/node/3"}}));
+	// The row count above already excludes it, but say it outright: reaching
+	// node/3 from node/1 needs two hops in two different graphs.
+	for (const auto &row : rows) {
+		auto s = row.find("V_S");
+		auto o = row.find("V_O");
+		bool crossGraph = s != row.end() && o != row.end() && s->second == "http://ex.org/node/1" &&
+		                  o->second == "http://ex.org/node/3";
+		CHECK_FALSE(crossGraph);
+	}
+}
+
+TEST_CASE("graph_path_var_zero_or_one.rq: an unbound zero-length path enumerates each graph's own nodes") {
+	// nodes(graph), per graph. sparql2sql_graph_path.ttl puts edge 1->2 in
+	// <g/1> and edge 2->3 in <g/2>, so:
+	//   <g/1> contains node/1 and node/2  -> pairs (1,2) plus (1,1) and (2,2)
+	//   <g/2> contains node/2 and node/3  -> pairs (2,3) plus (2,2) and (3,3)
+	// The reflexive pairs are per-graph: (3,3) must NOT appear under <g/1>,
+	// which is what distinguishes a graph-aware term universe from the
+	// mapping-wide one.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_path_var_zero_or_one.rq", "sparql2sql_graph_path.ttl");
+	REQUIRE(rows.size() == 6);
+
+	const std::string g1 = "http://ex.org/g/1";
+	const std::string g2 = "http://ex.org/g/2";
+	auto node = [](int i) {
+		return "http://ex.org/node/" + std::to_string(i);
+	};
+
+	CHECK(containsRow(rows, {{"V_G", g1}, {"V_S", node(1)}, {"V_O", node(2)}}));
+	CHECK(containsRow(rows, {{"V_G", g1}, {"V_S", node(1)}, {"V_O", node(1)}}));
+	CHECK(containsRow(rows, {{"V_G", g1}, {"V_S", node(2)}, {"V_O", node(2)}}));
+	CHECK(containsRow(rows, {{"V_G", g2}, {"V_S", node(2)}, {"V_O", node(3)}}));
+	CHECK(containsRow(rows, {{"V_G", g2}, {"V_S", node(2)}, {"V_O", node(2)}}));
+	CHECK(containsRow(rows, {{"V_G", g2}, {"V_S", node(3)}, {"V_O", node(3)}}));
+
+	// node/3 is not a node of <g/1>, and node/1 is not a node of <g/2>.
+	CHECK_FALSE(containsRow(rows, {{"V_G", g1}, {"V_S", node(3)}, {"V_O", node(3)}}));
+	CHECK_FALSE(containsRow(rows, {{"V_G", g2}, {"V_S", node(1)}, {"V_O", node(1)}}));
+}
+
+TEST_CASE("graph_path_var_plus_bound_both.rq: both endpoints bound under GRAPH ?g binds the connecting graph") {
+	// Mode::BothBound is no longer a pure existence check: the answer is which
+	// graphs connect the endpoints, so the graph is projected.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_path_var_plus_bound_both.rq", "sparql2sql_graph_path.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_G", "http://ex.org/g/1"}}));
+}
+
+TEST_CASE("graph_path_var_plus_cross_graph_absent.rq: the cross-graph two-hop pair has no answer") {
+	// The negative half of the pair above, asked directly. Without the invariant
+	// this returns a graph; with it, nothing.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_path_var_plus_cross_graph_absent.rq", "sparql2sql_graph_path.ttl");
+	CHECK(rows.empty());
+}
+
+TEST_CASE("graph_iri_location.rq: naming the graph finds the triples the default graph cannot see") {
+	// The mirror of graphs_default_location.rq below, which finds nothing. Both
+	// directions are asserted so neither can pass by the filter being inert.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_iri_location.rq", "sparql2sql_graphs.ttl");
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_L", "NEW YORK"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/20"}, {"V_L", "BOSTON"}}));
+}
+
+TEST_CASE("graph_var_staff.rq: GRAPH ?g binds the graph name alongside the pattern's own variables") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_var_staff.rq", "sparql2sql_graphs.ttl");
+	// ex:staff's set is {<graph/g1>, rr:defaultGraph}; only the named member is
+	// a GRAPH solution, so each department appears exactly once, with ?g bound.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(
+	    rows,
+	    {{"V_G", "http://example.com/graph/g1"}, {"V_D", "http://data.example.com/department/10"}, {"V_S", "10"}}));
+	CHECK(containsRow(
+	    rows,
+	    {{"V_G", "http://example.com/graph/g1"}, {"V_D", "http://data.example.com/department/20"}, {"V_S", "20"}}));
+}
+
+TEST_CASE("graph_var_dept.rq: a two-member graph set yields one solution per graph") {
+	// The reason enumeration emits one branch per graph rather than one branch
+	// with a disjunction: SMITH's ex:dept triple is in BOTH <graph/g1> and
+	// <graph/dept/10>, so it must appear twice under GRAPH ?g with different ?g.
+	// (JONES has a NULL DEPTNO, so the template yields no triple at all.)
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_var_dept.rq", "sparql2sql_graphs.ttl");
+	REQUIRE(rows.size() == 2);
+	CHECK(
+	    containsRow(rows, {{"V_G", "http://example.com/graph/g1"}, {"V_E", "http://data.example.com/employee/7369"}}));
+	CHECK(containsRow(rows,
+	                  {{"V_G", "http://example.com/graph/dept/10"}, {"V_E", "http://data.example.com/employee/7369"}}));
+}
+
+TEST_CASE("graph_iri_path_plus.rq: an arbitrary-length path inside a NAMED graph executes") {
+	// A bound graph IRI needs no invariant column through the closure - its
+	// condition is inside the step relation. The graph-VARIABLE form is refused
+	// instead (see the structural refusal tests); this is the supported half.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_iri_path_plus.rq", "sparql2sql_graphs.ttl");
+	// ex:dept in <graph/g1> is employee/7369 -> department/10, one hop, no
+	// further edge out of a department, so the closure is that single pair.
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(
+	    rows, {{"V_S", "http://data.example.com/employee/7369"}, {"V_O", "http://data.example.com/department/10"}}));
+}
+
+TEST_CASE("graphs_default_name.rq: a predicate mapped into a named graph is invisible in the default graph") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graphs_default_name.rq", "sparql2sql_graphs.ttl");
+	// DeptMap's ex:name only. EmpMap's is in <graph/g1> via its subject map, so
+	// SMITH and JONES must be absent - that is the strict-semantics change.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_N", "APPSERVER"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/20"}, {"V_N", "SALES"}}));
+}
+
+TEST_CASE("graphs_default_location.rq: a wholly named-graph predicate yields no rows in the default graph") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graphs_default_location.rq", "sparql2sql_graphs.ttl");
+	CHECK(rows.empty());
+}
+
+TEST_CASE("graphs_default_staff.rq: rr:defaultGraph keeps a named-graph predicate visible in the default graph") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graphs_default_staff.rq", "sparql2sql_graphs.ttl");
+	// ex:staff declares <graph/g1> AND rr:defaultGraph. Contrast with
+	// ex:location above, which declares only the named graph - so this is not
+	// passing merely because the graph filter is inert.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_S", "10"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/20"}, {"V_S", "20"}}));
+}
+
+TEST_CASE("graphs_default_class.rq: rr:class triples follow the subject map's graphs, not the POM's") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graphs_default_class.rq", "sparql2sql_graphs.ttl");
+	// DeptMap has no subject-level graph, so its rdf:type is in the default
+	// graph; EmpMap's subject map has rr:graph, so its rdf:type is not.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows,
+	                  {{"V_S", "http://data.example.com/department/10"}, {"V_C", "http://example.com/ns#Department"}}));
+	CHECK(containsRow(rows,
+	                  {{"V_S", "http://data.example.com/department/20"}, {"V_C", "http://example.com/ns#Department"}}));
+}
+
+TEST_CASE("sparql2sql_path_cycle_plus_same_var.rq: the same variable on both ends projects the closure diagonal") {
+	// Guards renderTransitiveClosure's diagonal projection, which is selected by
+	// TransitiveClosureNode::sameEndpointVar. That decision used to be inferred
+	// from schema().size() == 1, which held only because the node's projected
+	// width is fully determined by its mode - so adding any column to a closure
+	// (e.g. a carried named-graph invariant) would silently emit the
+	// two-endpoint form here, dropping the diagonal WHERE and returning the
+	// wrong rows. This pins the correct answer so that can't happen unnoticed.
+	//
+	// The sibling test above shows the *pairs* closure over this same 3-cycle is
+	// all 9 combinations; the diagonal of that is exactly the 3 nodes.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "sparql2sql_path_cycle_plus_same_var.rq", "sparql2sql_path_cycle.ttl");
+	REQUIRE(rows.size() == 3);
+	for (int i = 1; i <= 3; ++i) {
+		CHECK(containsRow(rows, {{"V_X", "http://ex.org/cycle/" + std::to_string(i)}}));
+	}
+}
+
 TEST_CASE("sparql2sql_path_cycle_star.rq: a zero-or-more path over a 3-cycle dedups against the already-reflexive "
           "E+ closure") {
 	// E* = E+ union zero-length, but in a full cycle E+ already contains every

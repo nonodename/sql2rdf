@@ -331,8 +331,32 @@ public:
 | `SubjectMap` | `rr:subjectMap` | Abstract; carries `classIRIs`/`graphMaps` plus `valueTermMap()`, returning the underlying `rr:template`/`rr:column`/`rr:constant` strategy that actually determines the subject's value |
 | `PredicateMap` | `rr:predicateMap` | No additional behaviour |
 | `ObjectMap` | `rr:objectMap` | No additional behaviour |
-| `GraphMap` | `rr:graphMap` | Generates named-graph IRIs |
+| `GraphMap` | `rr:graphMap` | Generates named-graph IRIs. Like `SubjectMap`, exposes `valueTermMap()` returning the underlying `rr:template`/`rr:column`/`rr:constant` strategy, so a consumer can inspect the strategy's *shape* rather than only evaluate it. Unlike `SubjectMap`'s, it is non-pure (defaulting to `nullptr`) because `GraphMap` is directly derivable |
 | `ReferencingObjectMap` | `rr:refObjectMap` | Joins to a parent `TriplesMap`; prohibited in inside-out mode |
+
+### Named graphs (RDF generation)
+
+`rr:graph`/`rr:graphMap` may appear on a subject map or a predicate-object map. Per R2RML §12 the
+graphs that apply to a generated triple are the **union** of both sets, and `forEachGraphNode()`
+(`include/r2rml/GraphMap.h`) is the single place that resolves it — `TriplesMap::generateTriples` and
+`PredicateObjectMap::processRow` both write through it, once per applicable graph.
+
+Three rules follow, and each has a counterpart in the SPARQL-to-SQL direction (see "Supported SPARQL
+subset" below), because both directions must agree on what the graph set is:
+
+- **A triple lands in *every* graph of its set**, so a two-member set writes the same triple twice,
+  as two quads.
+- **`rr:defaultGraph` is a member of the set, not a suppressor.** A set of
+  `{rr:defaultGraph, ex:g1}` produces both a quad in `ex:g1` *and* a default-graph statement. An
+  empty set, or one where every entry resolves to NULL, is the default graph alone — an all-NULL set
+  is indistinguishable from an empty one under the spec's set formulation.
+- **`rr:class` (`rdf:type`) triples take only the *subject* map's graphs**, since they have no
+  predicate-object map to contribute any. A mapping with `rr:graph` on a predicate-object map but
+  not on its subject map therefore leaves its `rdf:type` triples in the default graph.
+
+⚠️ Only a **quad** output syntax can represent a named graph. Serialising as N-Triples or Turtle
+silently drops the graph component (and so writes the two-member case above as two identical
+triples); use `SERD_NQUADS` or `SERD_TRIG` — `-f nquads|trig` from the CLI.
 
 ### `ReferencingObjectMap`
 
@@ -742,6 +766,9 @@ and joins use the VARCHAR-cast fallback.
     endpoint reduces it to a single constant row. The enumeration over-approximates only in that a
     `TriplesMap` whose subject appears solely as the parent of a referencing object map contributes
     its subjects via its own arm; it deliberately excludes predicate IRIs, per SPARQL's `nodes(G)`.
+    Inside a `GRAPH` block the enumeration is instead expressed as a projection of the ordinary
+    candidate enumerator over a wildcard predicate, so it is restricted to that graph (and picks up
+    dataset filtering) rather than spanning the whole mapping.
   - `E+`/`E*` are the one case that genuinely needs recursive SQL rather than a fixed algebra
     expression: `E+` translates to a `WITH RECURSIVE` closure of `E`'s one-hop relation, and `E*` is
     that closure unioned with the zero-length path (reusing the `E?` machinery above). Whichever
@@ -750,11 +777,59 @@ and joins use the VARCHAR-cast fallback.
     **both endpoints unbound** (`?x :p+ ?y`) forces the expensive general case, a full `(subject,
     object)` pairs closure with no size/depth guard — this can be costly on a densely-connected
     graph, the same cost tradeoff `E?`'s both-unbound case already has above.
-- **No `GRAPH`/named graphs**: this R2RML mapping model never populates `rr:graph`/`rr:graphMap`,
-  so `GRAPH` patterns have nothing to translate against and always throw.
-- **No `FROM`/`FROM NAMED` (dataset clauses)**: always throws `TranslationError`. A query is always
-  translated against the entire R2RML mapping's default graph; there is no notion of a queryable
-  named-graph dataset to restrict against (see the `GRAPH` limitation above).
+- **Named graphs / `GRAPH`**: supported. `rr:graph`/`rr:graphMap` on a subject map or a
+  predicate-object map are read *in reverse*, exactly as the term maps for subject/predicate/object
+  are: the graph becomes a fourth term position, so `GRAPH <iri>` prunes candidates whose graph map
+  provably cannot produce that IRI, and `GRAPH ?g` binds `?g` as an ordinary query variable
+  (always an IRI). Per R2RML §12 a candidate's graphs are the union of its subject map's and its
+  predicate-object map's, and one triple genuinely lands in *every* graph of that set — so a
+  two-member set yields two solutions under `GRAPH ?g`, one per graph.
+  - **Strict RDF-dataset semantics.** With no `FROM` clause the default graph contains only
+    triples whose applicable graph set is empty or names `rr:defaultGraph`; named-graph triples are
+    invisible outside a `GRAPH` block. ⚠️ **This is a behaviour change** for any mapping that uses
+    `rr:graph`/`rr:graphMap`: a query with no `GRAPH` clause no longer returns those triples.
+    Mappings that never mention `rr:graph` are entirely unaffected and generate byte-identical SQL.
+  - `rr:defaultGraph` is a *member* of the graph set, not a suppressor: a set of
+    `{rr:defaultGraph, ex:g1}` makes the triple reachable both from the default graph and from
+    `ex:g1`.
+  - **`rr:class` triples take only the *subject* map's graphs** (matching
+    `TriplesMap::generateTriples`), so a mapping with `rr:graph` on a predicate-object map but not
+    on its subject map leaves its `rdf:type` triples in the **default** graph while the
+    predicate-object map's triples are named. Spec-correct, and easy to be surprised by.
+  - A referencing object map uses the **child** triples map's subject graphs; the parent's do not
+    apply.
+  - **Property paths inside `GRAPH ?g`** work, including the arbitrary-length operators. The graph
+    name is held constant across every hop of the recursive closure, so a match cannot start in one
+    graph and finish in another; with both endpoints bound, `GRAPH ?g { <a> :p+ <b> }` binds `?g` to
+    each graph that connects them rather than reducing to an existence check. A zero-length match
+    (`?`/`*`) holds in every graph per §18.4, so with one endpoint bound `?g` ranges over the
+    dataset's named graphs. The paths inside `GRAPH <iri>` are unaffected and keep exactly the SQL
+    shape they had before, since a bound IRI's condition lives inside the step relation.
+    With both endpoints unbound, the zero-length half needs `nodes(graph)` — every term appearing as
+    a subject or object of a triple *in that graph* — which is enumerated per graph, so a term of one
+    named graph never appears as a reflexive answer under another. There is no `GRAPH` shape the
+    translator refuses.
+- **`FROM` / `FROM NAMED` (dataset clauses)**: supported, per SPARQL 1.1 §13.2. With no clauses the
+  dataset is the whole mapping (the pre-existing behaviour). Otherwise:
+
+  | Clauses present | Default graph (no `GRAPH` block) | What a `GRAPH` block can match |
+  |---|---|---|
+  | none | graph set empty / `rr:defaultGraph` | any graph the mapping produces |
+  | `FROM <g>`… only | the merge of the listed `g`s | **nothing** — no graphs are nameable |
+  | `FROM NAMED <g>`… only | **empty** | only the listed `g`s |
+  | both | merge of the `FROM` `g`s | only the `FROM NAMED` `g`s |
+
+  Two consequences are worth stating outright, because each makes a query legitimately return zero
+  rows in a way that reads like a bug:
+  - **`FROM` *replaces* the default graph, it does not add to it.** With `FROM <g>`, a triple that
+    has no graph map at all becomes **invisible**.
+  - **Naming only `FROM NAMED` graphs leaves the default graph empty**, so any pattern outside a
+    `GRAPH` block matches nothing.
+
+  A `FROM`/`FROM NAMED` IRI the mapping cannot produce is not an error — it simply contributes
+  nothing, consistent with a triple pattern that provably matches nothing. Listing the same graph
+  twice is one graph. The dataset is fixed once for the whole query (the grammar only allows dataset
+  clauses on the top-level query), so nested sub-selects and `EXISTS` bodies inherit it.
 - **No `SERVICE`** (federated query): always throws, matching `sql2rdf_sparql`'s own "no
   federated-query execution semantics" stance.
 - **Every SPARQL variable is a plain SQL `VARCHAR`** holding the RDF term's lexical string form

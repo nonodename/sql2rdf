@@ -1,0 +1,60 @@
+prefixes:
+  ex: http://example.com/ns#
+
+# The remaining graph spellings, one per mapping:
+#   m_curie    - singular `graph:` as a scalar, given as a CURIE (must resolve
+#                against `prefixes`, not be taken literally).
+#   m_column   - a bare `$(COL)` reference, which needs the general
+#                rr:graphMap form plus an explicit rr:termType rr:IRI, since a
+#                bare rr:column would otherwise read back as a literal.
+#   m_template - mixed text, which becomes an rr:template graph map.
+#   m_po       - a per-`po` graph (map form, `g:` alias), which must land on
+#                that predicate-object map rather than on the subject map, and
+#                must NOT leak onto the sibling po entry that declares none.
+mappings:
+  m_curie:
+    sources:
+      - table: EMP
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - [ex:name, $(ENAME)]
+    graph: ex:g
+
+  m_column:
+    sources:
+      - table: EMP
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - [ex:name, $(ENAME)]
+    graphs: $(DEPTNO)
+
+  m_template:
+    sources:
+      - table: EMP
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - [ex:name, $(ENAME)]
+    graphs: http://example.com/graph/dept/$(DEPTNO)
+
+  m_po:
+    sources:
+      - table: EMP
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - p: ex:job
+        o: $(JOB)
+        g: http://example.com/graph/jobs
+      - [ex:name, $(ENAME)]
+
+  # `a` with a constant class normally folds into rr:class on the subject map,
+  # but a graph on that entry blocks the fold: rr:class triples take the
+  # *subject map's* graphs, so folding would either drop this graph or widen it
+  # to every triple. It must stay a real rdf:type predicate-object map.
+  m_class_graph:
+    sources:
+      - table: EMP
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - p: a
+        o: ex:Employee
+        g: http://example.com/graph/types

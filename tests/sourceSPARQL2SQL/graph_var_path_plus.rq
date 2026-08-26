@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.com/ns#>
+# GRAPH ?g with an arbitrary-length path. The graph name is held constant
+# across every hop of the recursive closure (an invariant column), so a match
+# may not start in one graph and finish in another. See
+# sparql2sql_graph_path.ttl for the mapping that makes that observable.
+SELECT ?g ?s ?o
+WHERE { GRAPH ?g { ?s ex:dept+ ?o . } }

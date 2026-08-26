@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+# Asks specifically for the two-hop pair the invariant must forbid. node/1
+# reaches node/3 only by crossing from <g/1> into <g/2>, so inside a single
+# graph there is no answer at all.
+SELECT ?g
+WHERE { GRAPH ?g { <http://ex.org/node/1> ex:next+ <http://ex.org/node/3> . } }

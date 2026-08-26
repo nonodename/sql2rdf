@@ -820,6 +820,12 @@ TEST_CASE("R2RML parser populates rr:graph on a subject map as a constant GraphM
 	REQUIRE(std::string(reinterpret_cast<const char *>(graphNode.buf), graphNode.n_bytes) ==
 	        "http://example.com/graph/employees");
 	serd_env_free(env);
+
+	// valueTermMap() exposes the delegated value strategy, so a consumer can
+	// inspect its *shape* rather than only evaluate it. sparql2sql needs this:
+	// it dispatches on ColumnTermMap/TemplateTermMap/ConstantTermMap and
+	// cannot see through a GraphMap otherwise.
+	CHECK(dynamic_cast<const ConstantTermMap *>(sm->graphMaps[0]->valueTermMap()) != nullptr);
 }
 
 TEST_CASE("R2RML parser populates rr:graphMap on a predicate-object map as a template GraphMap") {
@@ -843,4 +849,11 @@ TEST_CASE("R2RML parser populates rr:graphMap on a predicate-object map as a tem
 	REQUIRE(std::string(reinterpret_cast<const char *>(graphNode.buf), graphNode.n_bytes) ==
 	        "http://example.com/graph/jobs/CLERK");
 	serd_env_free(env);
+
+	// The template shape is visible through valueTermMap(), including the
+	// original template string - which is what lets sparql2sql invert a bound
+	// graph IRI back onto the placeholder columns.
+	const auto *tmpl = dynamic_cast<const TemplateTermMap *>(poms[1]->graphMaps[0]->valueTermMap());
+	REQUIRE(tmpl != nullptr);
+	CHECK(tmpl->templateString == "http://example.com/graph/jobs/{JOB}");
 }

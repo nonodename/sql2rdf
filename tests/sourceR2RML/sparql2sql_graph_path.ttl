@@ -1,0 +1,30 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Purpose-built to make a cross-graph closure hop *observable*.
+#
+# NODES is the chain 1 -> 2 -> 3 (NEXT -> ID), and the graph map keys on the
+# CHILD id, so each edge lands in a DIFFERENT named graph:
+#
+#     edge 1 -> 2   in   <http://ex.org/g/1>
+#     edge 2 -> 3   in   <http://ex.org/g/2>
+#
+# A property path inside GRAPH ?g is evaluated within one graph, so
+# `GRAPH ?g { ?s ex:next+ ?o }` must yield exactly the two one-hop pairs. The
+# two-hop pair (node/1, node/3) is NOT an answer: reaching it would require
+# starting in g/1 and finishing in g/2. A closure that failed to hold the graph
+# constant across hops would return it, which is what makes this mapping a real
+# test of the invariant column rather than a smoke test.
+<#NodeMap>
+    rr:logicalTable [ rr:tableName "NODES" ];
+    rr:subjectMap [
+        rr:template "http://ex.org/node/{ID}";
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:next;
+        rr:objectMap [
+            rr:template "http://ex.org/node/{NEXT}";
+            rr:termType rr:IRI;
+        ];
+        rr:graphMap [ rr:template "http://ex.org/g/{ID}" ];
+    ].

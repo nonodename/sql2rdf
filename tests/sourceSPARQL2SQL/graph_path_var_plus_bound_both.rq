@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+# Both endpoints bound with a graph variable: Mode::BothBound stops being a pure
+# existence check, because the answer is *which* graphs connect them. Here only
+# <g/1> does, one hop.
+SELECT ?g
+WHERE { GRAPH ?g { <http://ex.org/node/1> ex:next+ <http://ex.org/node/2> . } }

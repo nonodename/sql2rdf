@@ -170,7 +170,7 @@ All other tests run against a mock SQL backend (`MockSQL.h`) — no DuckDB insta
 
 ## YARRRML support
 
-[YARRRML](https://rml.io/yarrrml/spec/) mapping files (`.yml`/`.yaml`/`.yarrrml`) are translated internally into R2RML Turtle and then parsed by the same R2RML engine used for `.ttl` mappings, so both formats produce identical output for equivalent mappings. Example:
+[YARRRML](https://rml.io/yarrrml/spec/) mapping files (`.yml`/`.yaml`/`.yarrrml`) are translated internally into R2RML statements and then built by the same R2RML engine used for `.ttl` mappings, so both formats produce identical output for equivalent mappings. (The statements are handed over directly rather than serialised to Turtle text and re-parsed, which avoids the escaping edge cases of a round-trip.) Example:
 
 ```yaml
 prefixes:
@@ -197,9 +197,10 @@ Supported subset:
 - `po`/`predicateobjects`, in shortcut array form (`[predicates, objects]` or `[predicates, objects, datatype-or-language]`) or map form (`predicates`/`predicate`/`p`, `objects`/`object`/`o`). The `a` predicate with a constant class object is folded into `rr:class` on the subject map.
 - Object values: `$(COL)` → column (literal by default; `~iri` forces an IRI), mixed text → template, a CURIE/absolute IRI → constant IRI, any other plain string → constant literal. Per-object `{value:|v:, datatype:|language:}` maps and `[value, datatype-or-language]` pairs are supported.
 - Mapping references (joins): `{mapping: OTHER, condition(s): {function: equal, parameters: [[str1, $(CHILD)], [str2, $(PARENT)]]}}`.
-- `graphs`/`graph`, unknown per-mapping keys, and unknown top-level keys (e.g. `functions`, `targets`) are not supported and are reported as non-fatal warnings (`authors` is ignored silently).
+- `graphs`/`graph` (single entry or list), both per-mapping and per-`po` entry (where `g` is also accepted). A plain IRI or CURIE becomes an `rr:graph` constant; `$(COL)` or mixed text becomes an `rr:graphMap` with `rr:termType rr:IRI`. A per-mapping graph attaches to the subject map, so it applies to every triple the mapping generates (including `rr:class` `rdf:type` triples); a per-`po` graph attaches to that predicate-object map only. One exception to the `a`-shortcut folding: `a` with a constant class normally folds into `rr:class`, but when that `po` entry carries its own graph it stays a real `rdf:type` predicate-object map instead, since `rr:class` triples would otherwise take the subject map's graphs. Named graphs are only visible in a quad output format — see `-f nquads|trig` under [Usage](#usage).
+- Unknown per-mapping keys and unknown top-level keys (e.g. `functions`, `targets`) are not supported and are reported as non-fatal warnings (`authors` is ignored silently).
 
-Non-fatal issues (unsupported keys, a mapping with no/multiple sources, an unresolved join-condition function, skipped `graphs`, ...) are collected into `R2RMLMapping::parseErrors` in the default lenient mode, or raised as a `std::runtime_error` when parsing in strict mode (`ignoreNonFatalErrors=false`). Fatal problems (unreadable file, YAML syntax errors, a missing `mappings` key) always throw.
+Non-fatal issues (unsupported keys, a mapping with no/multiple sources, an unresolved join-condition function, a non-string graph value, ...) are collected into `R2RMLMapping::parseErrors` in the default lenient mode, or raised as a `std::runtime_error` when parsing in strict mode (`ignoreNonFatalErrors=false`). Fatal problems (unreadable file, YAML syntax errors, a missing `mappings` key) always throw.
 
 ## SPARQL query parsing
 
@@ -235,7 +236,7 @@ std::string sql = sparql2sql::translateQuery(*query, mapping, dialect);
 // ready to hand to r2rml::DuckDBConnection::execute() or any other SQLConnection.
 ```
 
-Only `SELECT`/`ASK` query forms are supported. Property paths are translated by desugaring them into the same relational algebra: `^` (inverse), `/` (sequence), `|` (alternative), `?` (zero-or-one) and negated property sets all work that way; the arbitrary-length operators `*` and `+` are also supported, but translate to a `WITH RECURSIVE` closure rather than a fixed algebra expression, directionally seeded from whichever endpoint is bound. Every SPARQL variable is represented as a plain SQL `VARCHAR` of the term's lexical form, but the translator additionally tracks the term's dimension — kind, datatype, language — from the mapping's `rr:termType`/`rr:datatype`/`rr:language` (and, with a `TypeCatalog`, R2RML §10.2's natural mapping of the column type). Where the mapping determines it, that dimension folds to a constant: this is what lets `isIRI()`/`lang()`/`datatype()` resolve at translation time, and lets comparisons, arithmetic, `ORDER BY` and `MIN`/`MAX` work numerically and temporally rather than lexicographically. Where the mapping *cannot* determine it — a predicate whose candidate term maps disagree, so the dimension genuinely differs from row to row — the dimension is carried into the generated SQL as a companion type-tag column and evaluated per row, so those builtins, RDF term equality, SPARQL's value comparison and §15.1 ordering all still work instead of the query being refused. Tag columns are emitted only for the variables that need them, so a query over a well-typed mapping generates exactly the SQL it did before. See `doc/api.md`'s "Supported SPARQL subset / Known limitations" for the full, current list of what is and isn't translated.
+Only `SELECT`/`ASK` query forms are supported. Named graphs work in reverse too: `rr:graph`/`rr:graphMap` make the graph a fourth term position, so `GRAPH <iri>` prunes candidates statically and `GRAPH ?g` binds `?g`. `FROM`/`FROM NAMED` restrict the active dataset. Note that this uses **strict RDF-dataset semantics** — with no `FROM` clause the default graph holds only triples whose graph set is empty or names `rr:defaultGraph`, so named-graph triples are invisible outside a `GRAPH` block (mappings that never mention `rr:graph` are unaffected), and `FROM` *replaces* the default graph rather than adding to it. Property paths are translated by desugaring them into the same relational algebra: `^` (inverse), `/` (sequence), `|` (alternative), `?` (zero-or-one) and negated property sets all work that way; the arbitrary-length operators `*` and `+` are also supported, but translate to a `WITH RECURSIVE` closure rather than a fixed algebra expression, directionally seeded from whichever endpoint is bound. Every SPARQL variable is represented as a plain SQL `VARCHAR` of the term's lexical form, but the translator additionally tracks the term's dimension — kind, datatype, language — from the mapping's `rr:termType`/`rr:datatype`/`rr:language` (and, with a `TypeCatalog`, R2RML §10.2's natural mapping of the column type). Where the mapping determines it, that dimension folds to a constant: this is what lets `isIRI()`/`lang()`/`datatype()` resolve at translation time, and lets comparisons, arithmetic, `ORDER BY` and `MIN`/`MAX` work numerically and temporally rather than lexicographically. Where the mapping *cannot* determine it — a predicate whose candidate term maps disagree, so the dimension genuinely differs from row to row — the dimension is carried into the generated SQL as a companion type-tag column and evaluated per row, so those builtins, RDF term equality, SPARQL's value comparison and §15.1 ordering all still work instead of the query being refused. Tag columns are emitted only for the variables that need them, so a query over a well-typed mapping generates exactly the SQL it did before. See `doc/api.md`'s "Supported SPARQL subset / Known limitations" for the full, current list of what is and isn't translated.
 
 The CLI exposes this via `-T <file.rq> [--dialect <name>]` (default and currently only dialect: `duckdb`), paired with the mapping-file positional argument; if the database-file positional is also given, the translated SQL is additionally executed and its result rows printed. See [Usage](#usage) below.
 
@@ -253,7 +254,11 @@ Arguments:
   output.nt                 Output RDF file
 
 Options:
-  -f ntriples|turtle   Output format (default: ntriples); ignored with -T
+  -f <format>          Output format (default: ntriples); ignored with -T.
+                       One of: ntriples, turtle, nquads, trig. Only the
+                       quad formats (nquads, trig) can represent named
+                       graphs, so rr:graph/rr:graphMap is silently dropped
+                       by ntriples and turtle.
   -y                   Force the mapping file to be parsed as YARRRML,
                        regardless of its extension
   -P                   Print the parsed mapping to stderr
@@ -270,6 +275,9 @@ Options:
                        otherwise the SQL alone is printed to stdout.
   --dialect <name>     SQL dialect to translate for with -T (default: duckdb;
                        currently the only supported dialect)
+  --pretty             Pretty-print the SQL generated by -T (newlines,
+                       indentation, one column per line) for debugging;
+                       has no effect on the SQL's meaning
   -h                   Show this help message
 ```
 

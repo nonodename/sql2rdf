@@ -1,0 +1,8 @@
+PREFIX ex: <http://example.com/ns#>
+# ?x ex:next+ ?x over a pure 3-cycle: every node reaches itself, so all three
+# are answers. Distinguishes the diagonal projection from the two-endpoint one
+# (which would return all 9 reachable pairs' first column instead).
+SELECT ?x
+WHERE {
+  ?x ex:next+ ?x .
+}

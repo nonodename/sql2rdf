@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+# rr:class triples take only the SUBJECT map's graphs. EmpMap has a
+# subject-level rr:graph so its rdf:type is in <graph/g1>; DeptMap has none, so
+# only Department is visible in the default graph.
+SELECT ?s ?c
+WHERE { ?s a ?c . }

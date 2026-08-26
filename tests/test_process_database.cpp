@@ -623,3 +623,42 @@ TEST_CASE("processDatabase honours rr:graph and rr:graphMap by emitting named-gr
 	CHECK(out.find("\"CLERK\" <http://example.com/graph/employees> .") != std::string::npos);
 	CHECK(out.find("\"CLERK\" <http://example.com/graph/jobs/CLERK> .") != std::string::npos);
 }
+
+// ---------------------------------------------------------------------------
+// Regression test: rr:defaultGraph is a *member* of R2RML §12's target graph
+// set, not a self-suppressing no-op. forEachGraphNode previously emitted the
+// default-graph statement only when NO named graph resolved, so a graph set
+// like {rr:defaultGraph, ex:g1} silently lost its default-graph copy.
+//
+// Mapping (default_graph_union.ttl): the ex:name POM declares both
+// rr:defaultGraph and a named graph; the ex:job POM declares only the named
+// graph, as the control.
+// ---------------------------------------------------------------------------
+TEST_CASE("processDatabase treats rr:defaultGraph as a member of the target graph set") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "default_graph_union.ttl");
+	REQUIRE(mapping.isValid());
+
+	MockSQLConnection conn;
+	conn.addResult("EMP", {makeRow({{"EMPNO", StringSQLValue(std::string("7369"))},
+	                                {"ENAME", StringSQLValue(std::string("SMITH"))},
+	                                {"JOB", StringSQLValue(std::string("CLERK"))}})});
+
+	std::string out = runProcessDatabaseNQuads(mapping, conn);
+	INFO(out);
+
+	// ex:name: BOTH the named-graph quad and the default-graph triple. In
+	// NQuads a default-graph statement has no fourth term, so the object is
+	// followed directly by " .".
+	CHECK(out.find("\"SMITH\" <http://example.com/graph/g1> .") != std::string::npos);
+	CHECK(out.find("\"SMITH\" .") != std::string::npos);
+
+	// ex:job: named graph only. The control - if the default-graph copy were
+	// emitted unconditionally rather than only for an explicit
+	// rr:defaultGraph, this would also appear bare.
+	CHECK(out.find("\"CLERK\" <http://example.com/graph/g1> .") != std::string::npos);
+	CHECK(out.find("\"CLERK\" .") == std::string::npos);
+
+	// The rr:class triple: the subject map declares no graph, so default only.
+	CHECK(out.find("<http://example.com/ns#Employee> .") != std::string::npos);
+}

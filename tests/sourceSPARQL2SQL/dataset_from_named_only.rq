@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.com/ns#>
+# FROM NAMED alone leaves the default graph EMPTY, so this pattern - outside any
+# GRAPH block - matches nothing, even though <graph/g1> does contain ex:location
+# triples (dataset_from_named_graph.rq finds them).
+SELECT ?d ?l
+FROM NAMED <http://example.com/graph/g1>
+WHERE { ?d ex:location ?l . }

@@ -357,6 +357,10 @@ std::string renderFilter(const FilterNode &f, TranslationContext &ctx) {
 		childSql = renderNode(*f.child, ctx);
 	}
 	TranslatedPattern scope = scopeOf(*f.child);
+	// Reinstate the graph this FILTER was written under before translating it:
+	// an EXISTS in the predicate folds its own graph pattern, and must do so
+	// against that graph rather than whatever is active at render time.
+	TranslationContext::ActiveGraphGuard graphGuard(ctx, f.activeGraph);
 	std::string cond = translateExpression(*f.predicate, scope, alias, ctx);
 	return "SELECT *" + ctx.clauseSep() + "FROM (" + childSql + ") AS " + alias + ctx.clauseSep() + "WHERE " + cond;
 }
@@ -369,6 +373,7 @@ std::string renderBind(const BindNode &b, TranslationContext &ctx) {
 		childSql = renderNode(*b.child, ctx);
 	}
 	TranslatedPattern scope = scopeOf(*b.child);
+	TranslationContext::ActiveGraphGuard graphGuard(ctx, b.activeGraph); // see renderFilter
 	TermSql bound = translateTerm(*b.expr, scope, alias, ctx);
 	std::string extra;
 	if (ctx.needsTag(b.outVar)) {
@@ -413,6 +418,38 @@ std::string renderTransitiveClosure(const TransitiveClosureNode &tc, Translation
 	ctx.addCte(stepCte, renderNode(*tc.step, ctx));
 	std::string closureCte = ctx.nextCteName();
 
+	// Invariant columns (see TransitiveClosureNode::invariantVars) keep their
+	// own mangled names all the way through - unlike the endpoints, which are
+	// renamed to cte_from/cte_to/cte_node because the step relation names them
+	// after internal path variables. Held constant per hop by an added ON
+	// equality rather than walked.
+	std::string invSeed;      // ", <alias>.v_g AS v_g" for the seed term
+	std::string invRecursive; // ", <accumulator>.v_g" for the recursive term
+	std::string invProject;   // ", <c>.v_g AS v_g" for the final projection
+	for (const auto &var : tc.invariantVars) {
+		const std::string col = mangleVar(var, dialect);
+		invSeed += ", %SEED%." + col + " AS " + col;
+		invRecursive += ", %ACC%." + col;
+		const ColumnInfo *info = tc.column(var);
+		invProject += ", %C%." + col + " AS " + col + (info != nullptr ? closureTagProjection(*info, ctx) : "");
+	}
+	auto invOn = [&](const std::string &acc, const std::string &step) -> std::string {
+		std::string on;
+		for (const auto &var : tc.invariantVars) {
+			const std::string col = mangleVar(var, dialect);
+			on += " AND " + acc + "." + col + " = " + step + "." + col;
+		}
+		return on;
+	};
+	auto subst = [](std::string text, const std::string &token, const std::string &value) -> std::string {
+		std::size_t pos = 0;
+		while ((pos = text.find(token, pos)) != std::string::npos) {
+			text.replace(pos, token.size(), value);
+			pos += value.size();
+		}
+		return text;
+	};
+
 	if (tc.mode == TransitiveClosureNode::Mode::BothVars) {
 		std::string cteFrom = dialect.quoteIdentifier("cte_from");
 		std::string cteTo = dialect.quoteIdentifier("cte_to");
@@ -420,24 +457,25 @@ std::string renderTransitiveClosure(const TransitiveClosureNode &tc, Translation
 		std::string s2 = ctx.nextAlias();
 		std::string r = ctx.nextAlias();
 		std::string seed = "SELECT " + s1 + "." + fromCol + " AS " + cteFrom + ", " + s1 + "." + toCol + " AS " +
-		                   cteTo + " FROM " + stepCte + " AS " + s1;
-		std::string recursive = "SELECT " + r + "." + cteFrom + ", " + s2 + "." + toCol + " FROM " + closureCte +
-		                        " AS " + r + " JOIN " + stepCte + " AS " + s2 + " ON " + r + "." + cteTo + " = " + s2 +
-		                        "." + fromCol;
+		                   cteTo + subst(invSeed, "%SEED%", s1) + " FROM " + stepCte + " AS " + s1;
+		std::string recursive = "SELECT " + r + "." + cteFrom + ", " + s2 + "." + toCol +
+		                        subst(invRecursive, "%ACC%", r) + " FROM " + closureCte + " AS " + r + " JOIN " +
+		                        stepCte + " AS " + s2 + " ON " + r + "." + cteTo + " = " + s2 + "." + fromCol +
+		                        invOn(r, s2);
 		ctx.addCte(closureCte, seed + " UNION " + recursive);
 
 		std::string c = ctx.nextAlias();
-		if (tc.schema().size() == 1) {
+		if (tc.sameEndpointVar) {
 			// Subject and object share one variable (`?x p+ ?x`): only the
 			// diagonal of the pairs closure satisfies the pattern.
 			return "SELECT " + c + "." + cteFrom + " AS " + mangleVar(tc.schema()[0].var, dialect) +
-			       closureTagProjection(tc.schema()[0], ctx) + " FROM " + closureCte + " AS " + c + " WHERE " + c +
-			       "." + cteFrom + " = " + c + "." + cteTo;
+			       closureTagProjection(tc.schema()[0], ctx) + subst(invProject, "%C%", c) + " FROM " + closureCte +
+			       " AS " + c + " WHERE " + c + "." + cteFrom + " = " + c + "." + cteTo;
 		}
 		return "SELECT " + c + "." + cteFrom + " AS " + mangleVar(tc.schema()[0].var, dialect) +
 		       closureTagProjection(tc.schema()[0], ctx) + ", " + c + "." + cteTo + " AS " +
-		       mangleVar(tc.schema()[1].var, dialect) + closureTagProjection(tc.schema()[1], ctx) + " FROM " +
-		       closureCte + " AS " + c;
+		       mangleVar(tc.schema()[1].var, dialect) + closureTagProjection(tc.schema()[1], ctx) +
+		       subst(invProject, "%C%", c) + " FROM " + closureCte + " AS " + c;
 	}
 
 	// Unary reachable-set: ForwardFromSubject/BackwardFromObject walk the
@@ -455,21 +493,33 @@ std::string renderTransitiveClosure(const TransitiveClosureNode &tc, Translation
 	// One hop from the anchor, not the anchor itself: this node's minimum
 	// cardinality is always 1 (see class comment), so seeding with the anchor
 	// verbatim would wrongly include it as a zero-hop "reachable" result.
-	std::string seed = "SELECT " + seedAlias + "." + landCol + " AS " + cteNode + " FROM " + stepCte + " AS " +
-	                   seedAlias + " WHERE " + seedAlias + "." + walkCol + " = " + tc.anchorLiteral;
-	std::string recursive = "SELECT " + s + "." + landCol + " FROM " + closureCte + " AS " + r + " JOIN " + stepCte +
-	                        " AS " + s + " ON " + r + "." + cteNode + " = " + s + "." + walkCol;
+	std::string seed = "SELECT " + seedAlias + "." + landCol + " AS " + cteNode + subst(invSeed, "%SEED%", seedAlias) +
+	                   " FROM " + stepCte + " AS " + seedAlias + " WHERE " + seedAlias + "." + walkCol + " = " +
+	                   tc.anchorLiteral;
+	std::string recursive = "SELECT " + s + "." + landCol + subst(invRecursive, "%ACC%", r) + " FROM " + closureCte +
+	                        " AS " + r + " JOIN " + stepCte + " AS " + s + " ON " + r + "." + cteNode + " = " + s +
+	                        "." + walkCol + invOn(r, s);
 	ctx.addCte(closureCte, seed + " UNION " + recursive);
 
 	if (tc.mode == TransitiveClosureNode::Mode::BothBound) {
-		return "SELECT 1 AS " + dialect.quoteIdentifier("_dummy") + " WHERE " +
-		       dialect.existsClause(false,
-		                            "SELECT 1 FROM " + closureCte + " WHERE " + cteNode + " = " + tc.targetLiteral);
+		if (tc.invariantVars.empty()) {
+			return "SELECT 1 AS " + dialect.quoteIdentifier("_dummy") + " WHERE " +
+			       dialect.existsClause(false,
+			                            "SELECT 1 FROM " + closureCte + " WHERE " + cteNode + " = " + tc.targetLiteral);
+		}
+		// With an invariant to bind (`GRAPH ?g { <a> :p+ <b> }`), this stops being
+		// a pure existence check: the answer is *which* graphs connect the two
+		// endpoints, so the graph must be projected rather than tested away.
+		// DISTINCT because several paths through one graph are still one solution.
+		std::string c = ctx.nextAlias();
+		std::string projection = subst(invProject, "%C%", c);
+		return "SELECT DISTINCT " + projection.substr(2) + " FROM " + closureCte + " AS " + c + " WHERE " + c + "." +
+		       cteNode + " = " + tc.targetLiteral;
 	}
 
 	std::string c = ctx.nextAlias();
 	return "SELECT " + c + "." + cteNode + " AS " + mangleVar(tc.schema()[0].var, dialect) +
-	       closureTagProjection(tc.schema()[0], ctx) + " FROM " + closureCte + " AS " + c;
+	       closureTagProjection(tc.schema()[0], ctx) + subst(invProject, "%C%", c) + " FROM " + closureCte + " AS " + c;
 }
 
 // A Raw leaf's SQL was built during folding, before any tag was demanded, so it

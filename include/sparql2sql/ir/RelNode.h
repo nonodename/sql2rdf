@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "sparql2sql/GraphConstraint.h"
 #include "sparql2sql/TermInfo.h"
 
 namespace sparql {
@@ -263,6 +264,17 @@ public:
 	}
 	RelNodePtr child;
 	const sparql::ast::Expression *predicate = nullptr;
+
+	/// The active graph in force where this filter was written.
+	///
+	/// `predicate` is a borrowed AST pointer translated lazily, at render time -
+	/// long after fold() returned and any ActiveGraphGuard was destroyed. An
+	/// EXISTS inside it folds a whole graph pattern of its own at that point, so
+	/// without this the pattern would be matched against the default graph even
+	/// when the FILTER sits inside a GRAPH block. Captured here at construction
+	/// and reinstated by renderFilter. (A parameter threaded through fold()
+	/// would not help: the deferred node would not carry it either.)
+	GraphConstraint activeGraph;
 };
 
 /// A BIND: the child's columns plus one computed column `outVar`.
@@ -273,6 +285,11 @@ public:
 	RelNodePtr child;
 	std::string outVar;
 	const sparql::ast::Expression *expr = nullptr;
+
+	/// The active graph in force where this BIND was written; see
+	/// FilterNode::activeGraph, which this mirrors exactly (a BIND's defining
+	/// expression may equally contain an EXISTS).
+	GraphConstraint activeGraph;
 };
 
 /// A leaf holding a pre-rendered, self-contained "SELECT ..." string (used for
@@ -349,6 +366,31 @@ public:
 	/// BothBound only: the *other* bound endpoint's literal, tested for
 	/// closure membership via EXISTS rather than projected.
 	std::string targetLiteral;
+
+	/// BothVars only: subject and object are the *same* variable (`?x :p+ ?x`),
+	/// so only the diagonal of the pairs closure satisfies the pattern.
+	///
+	/// Recorded explicitly rather than inferred from schema().size(), which the
+	/// renderer used to do. That test was only ever correct because this node's
+	/// projected width is fully determined by `mode` - so any future feature
+	/// that adds a column to a closure (a carried invariant, say) would silently
+	/// turn `?x :p+ ?x` into the two-endpoint form and return wrong rows rather
+	/// than fail. The producer already knows the answer; ask it.
+	bool sameEndpointVar = false;
+
+	/// Variables the step relation binds that must be held **constant across
+	/// every hop** of the closure, rather than walked like the endpoints.
+	///
+	/// In practice this is 0 or 1 entries: the graph name of an enclosing
+	/// `GRAPH ?g` block. A property path inside a GRAPH block is evaluated
+	/// within that one graph, so a two-hop match may not cross from one graph
+	/// into another - which is exactly a column carried through the recursion
+	/// and equated between the accumulated row and the next step.
+	///
+	/// Each entry must also appear in schema() (appended after the endpoints, so
+	/// the endpoint columns stay at indices 0/1), and is projected out of the
+	/// closure like any other column.
+	std::vector<std::string> invariantVars;
 
 	// schema_ (inherited) declares exactly what this node projects:
 	//  - BothBound:            0 columns.

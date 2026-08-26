@@ -1,0 +1,32 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Exercises rr:defaultGraph as a *member* of R2RML §12's target graph set,
+# rather than a no-op that suppresses itself whenever a sibling graph map
+# resolves to a real named graph.
+#
+#   - ex:name's POM declares both rr:defaultGraph and a named graph, so its
+#     triple must be written TWICE: once as a quad in ex:g1, and once into the
+#     default graph.
+#   - ex:job's POM declares only a named graph, so it must NOT reach the
+#     default graph - this is the control that keeps the test from passing
+#     vacuously if the union were simply always emitted.
+#   - the subject map declares no graph of its own, so the rdf:type triple
+#     from rr:class lands in the default graph only.
+<#TriplesMap1>
+    rr:logicalTable [ rr:tableName "EMP" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/employee/{EMPNO}";
+        rr:class ex:Employee;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:name;
+        rr:objectMap [ rr:column "ENAME" ];
+        rr:graph rr:defaultGraph;
+        rr:graph <http://example.com/graph/g1>;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:job;
+        rr:objectMap [ rr:column "JOB" ];
+        rr:graph <http://example.com/graph/g1>;
+    ].

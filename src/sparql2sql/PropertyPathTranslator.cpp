@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "sparql-parser/ast/Term.h"
+#include "sparql2sql/GraphConstraint.h"
 #include "sparql2sql/PatternFolder.h"
 #include "sparql2sql/SqlDialect.h"
 #include "sparql2sql/TagSql.h"
@@ -164,7 +165,8 @@ RelNodePtr translateOneOrMore(const sparql::ast::PropertyPathExpr &child, const 
 		s.term = fromCol != nullptr ? fromCol->term : TermInfo();
 		s.tagExpr = tagLiteral(s.term, dialect);
 		tc.schema().push_back(s);
-		if (object.varName != subject.varName) {
+		tc.sameEndpointVar = (object.varName == subject.varName);
+		if (!tc.sameEndpointVar) {
 			ColumnInfo o;
 			o.var = object.varName;
 			o.nonNull = true;
@@ -172,6 +174,25 @@ RelNodePtr translateOneOrMore(const sparql::ast::PropertyPathExpr &child, const 
 			o.tagExpr = tagLiteral(o.term, dialect);
 			tc.schema().push_back(o);
 		}
+	}
+
+	// A path inside `GRAPH ?g` is evaluated within one graph, so the graph name
+	// is carried through the recursion as an invariant rather than walked: every
+	// hop must agree on it (see TransitiveClosureNode::invariantVars). Appended
+	// last so the endpoint columns stay at schema() indices 0/1.
+	//
+	// A bound graph IRI needs none of this - its condition already sits inside
+	// the step relation's WHERE, identically in every arm.
+	if (ctx.activeGraph().kind == GraphConstraint::Kind::Variable) {
+		const std::string &graphVar = ctx.activeGraph().varName;
+		const ColumnInfo *stepGraph = sr.step->column(graphVar);
+		ColumnInfo g;
+		g.var = graphVar;
+		g.nonNull = true;
+		g.term = stepGraph != nullptr ? stepGraph->term : TermInfo();
+		g.tagExpr = tagLiteral(g.term, dialect);
+		tc.schema().push_back(g);
+		tc.invariantVars.push_back(graphVar);
 	}
 
 	tc.step = std::move(sr.step);
@@ -206,11 +227,31 @@ RelNodePtr translateZeroOrMore(const sparql::ast::ZeroOrMorePath &path, const Te
 } // namespace
 
 RelNodePtr zeroLengthPath(const TermSpec &subject, const TermSpec &object, TranslationContext &ctx) {
+	// Per Section 18.4 the zero-length path holds in every graph, whether or not
+	// the term occurs in it. So under a graph VARIABLE the graph name cannot be
+	// read off a matched triple - none of the relations below match one - and
+	// must instead range over the dataset's named graphs. The two anchored cases
+	// cross-join allNamedGraphsRelation to do that; the unanchored case gets its
+	// graph from allTermsRelation, which under a non-default active graph
+	// enumerates nodes(graph) *with* the graph alongside.
+	const bool graphIsVar = ctx.activeGraph().kind == GraphConstraint::Kind::Variable;
+	// Cross-join the graph enumeration onto whatever the anchored case produces:
+	// the zero-length match itself is graph-independent, so every named graph
+	// yields a solution.
+	auto withGraphs = [&ctx, graphIsVar](RelNodePtr rel) -> RelNodePtr {
+		if (!graphIsVar) {
+			return rel;
+		}
+		return innerJoin(std::move(rel), allNamedGraphsRelation(ctx.activeGraph().varName, ctx), ctx);
+	};
+
 	if (!subject.isVar && !object.isVar) {
 		// Both endpoints fixed: the zero-length path holds exactly when they
 		// are the same term, and binds nothing either way.
 		if (termLexicalForm(*subject.boundTerm) == termLexicalForm(*object.boundTerm)) {
-			return identityRelation(ctx);
+			// Holds in every graph, so under GRAPH ?g this binds ?g rather than
+			// binding nothing - hence a relation, not the identity.
+			return withGraphs(identityRelation(ctx));
 		}
 		return RelNodePtr(new EmptyNode());
 	}
@@ -221,7 +262,7 @@ RelNodePtr zeroLengthPath(const TermSpec &subject, const TermSpec &object, Trans
 		// holds whether or not the term occurs in the graph.
 		const TermSpec &boundEnd = subject.isVar ? object : subject;
 		const TermSpec &varEnd = subject.isVar ? subject : object;
-		return singleTermRelation(varEnd.varName, *boundEnd.boundTerm, ctx);
+		return withGraphs(singleTermRelation(varEnd.varName, *boundEnd.boundTerm, ctx));
 	}
 
 	// Two variables, and so nothing to anchor to: range over every term the

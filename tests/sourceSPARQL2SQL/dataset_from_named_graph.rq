@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+# The counterpart to dataset_from_named_only.rq: the same FROM NAMED clause, but
+# now inside a GRAPH block naming that graph, so the triples are reachable.
+SELECT ?d ?l
+FROM NAMED <http://example.com/graph/g1>
+WHERE { GRAPH <http://example.com/graph/g1> { ?d ex:location ?l . } }

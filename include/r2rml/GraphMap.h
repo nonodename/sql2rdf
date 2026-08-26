@@ -15,6 +15,27 @@ class GraphMap : public TermMap {
 public:
 	GraphMap() = default;
 	~GraphMap() override;
+
+	/// The term-generation strategy (rr:template/rr:column/rr:constant) that
+	/// determines this graph map's value, mirroring
+	/// SubjectMap::valueTermMap(): the parser composes the value strategy by
+	/// delegation rather than inheritance (see R2RMLParser.cpp's
+	/// ConcreteGraphMap) so it can reuse the same term-map-building code used
+	/// for predicate/object maps.
+	///
+	/// Needed by consumers that must inspect the *shape* of the strategy
+	/// rather than just evaluate it — notably sparql2sql, whose
+	/// termMapToSqlExpr/invertTermMapAgainstBoundTerm dispatch on
+	/// ColumnTermMap/TemplateTermMap/ConstantTermMap and so cannot see through
+	/// a GraphMap otherwise.
+	///
+	/// Unlike SubjectMap's, this is deliberately NOT pure: GraphMap is
+	/// directly derivable (tests/test_coverage_gaps.cpp's TestGraphMap does
+	/// so), and a pure virtual here would break those test doubles. Returns
+	/// null only for such a double; the parser always supplies a strategy.
+	virtual const TermMap *valueTermMap() const {
+		return nullptr;
+	}
 };
 
 /**
@@ -23,10 +44,16 @@ public:
  * predicate-object map. Per R2RML §12, the graphs that apply to a triple are
  * the union of both sets.
  *
- * If that union is empty, or every entry resolves to a null term or to the
- * special rr:defaultGraph IRI, `emit` is invoked exactly once with a null
- * graph pointer, i.e. the default graph (this also preserves prior
- * quad-less-output behaviour for mappings that don't use rr:graph at all).
+ * The special rr:defaultGraph IRI denotes the default graph as a *member* of
+ * that union, so an entry resolving to it contributes a default-graph
+ * statement (`emit` called with a null graph pointer) alongside — not instead
+ * of — any sibling entry that resolves to a real named graph.
+ *
+ * If the union is empty, or every entry resolves to a null term, `emit` is
+ * likewise invoked once with a null graph pointer: an all-null set is
+ * indistinguishable from an empty one under R2RML's set formulation. This is
+ * also what preserves quad-less output for mappings that don't use rr:graph
+ * at all.
  */
 void forEachGraphNode(const std::vector<std::unique_ptr<GraphMap>> &subjectGraphMaps,
                       const std::vector<std::unique_ptr<GraphMap>> &pomGraphMaps, const SQLRow &row, const SerdEnv &env,
