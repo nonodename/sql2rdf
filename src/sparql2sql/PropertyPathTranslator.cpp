@@ -123,22 +123,6 @@ StepRelation buildStep(const sparql::ast::PropertyPathExpr &child, TranslationCo
 // (from, to) pairs closure (see TransitiveClosureNode/renderTransitiveClosure).
 RelNodePtr translateOneOrMore(const sparql::ast::PropertyPathExpr &child, const TermSpec &subject,
                               const TermSpec &object, TranslationContext &ctx) {
-	// A graph VARIABLE would have to be held constant across every hop of the
-	// closure, which means carrying it as an extra invariant column through the
-	// recursive CTE. TransitiveClosureNode projects only its endpoints today, so
-	// the step relation's graph column would be dropped by the closure and then
-	// dangle in the outer projection - invalid SQL, and before that a silently
-	// wrong answer if the outer query never mentioned it.
-	//
-	// A bound graph IRI needs none of this: its condition lives inside the step
-	// relation's own WHERE, identically in every arm, so the invariant holds for
-	// free and `+`/`*` work normally.
-	if (ctx.activeGraph().kind == GraphConstraint::Kind::Variable) {
-		throw TranslationError(
-		    "unsupported: an arbitrary-length property path (`*`/`+`) inside GRAPH ?" + ctx.activeGraph().varName +
-		    " - the graph name would have to be carried through the path's recursive closure, which is not yet "
-		    "implemented. Name the graph explicitly (GRAPH <iri>) to use a `*`/`+` path inside it.");
-	}
 	StepRelation sr = buildStep(child, ctx);
 	RelNodePtr node(new TransitiveClosureNode());
 	TransitiveClosureNode &tc = static_cast<TransitiveClosureNode &>(*node);
@@ -192,6 +176,25 @@ RelNodePtr translateOneOrMore(const sparql::ast::PropertyPathExpr &child, const 
 		}
 	}
 
+	// A path inside `GRAPH ?g` is evaluated within one graph, so the graph name
+	// is carried through the recursion as an invariant rather than walked: every
+	// hop must agree on it (see TransitiveClosureNode::invariantVars). Appended
+	// last so the endpoint columns stay at schema() indices 0/1.
+	//
+	// A bound graph IRI needs none of this - its condition already sits inside
+	// the step relation's WHERE, identically in every arm.
+	if (ctx.activeGraph().kind == GraphConstraint::Kind::Variable) {
+		const std::string &graphVar = ctx.activeGraph().varName;
+		const ColumnInfo *stepGraph = sr.step->column(graphVar);
+		ColumnInfo g;
+		g.var = graphVar;
+		g.nonNull = true;
+		g.term = stepGraph != nullptr ? stepGraph->term : TermInfo();
+		g.tagExpr = tagLiteral(g.term, dialect);
+		tc.schema().push_back(g);
+		tc.invariantVars.push_back(graphVar);
+	}
+
 	tc.step = std::move(sr.step);
 	return node;
 }
@@ -225,22 +228,36 @@ RelNodePtr translateZeroOrMore(const sparql::ast::ZeroOrMorePath &path, const Te
 
 RelNodePtr zeroLengthPath(const TermSpec &subject, const TermSpec &object, TranslationContext &ctx) {
 	// Per Section 18.4 the zero-length path holds in every graph, whether or not
-	// the term occurs in it - so under a graph VARIABLE the graph name should
-	// range over the dataset's named graphs. None of the relations below bind a
-	// graph at all (they are anchored on terms, not on triples), so `?`/`*` here
-	// would leave ?g unbound or NULL-padded rather than enumerated. Refuse
-	// rather than answer wrongly; a bound graph IRI is unaffected.
-	if (ctx.activeGraph().kind == GraphConstraint::Kind::Variable) {
+	// the term occurs in it. So under a graph VARIABLE the graph name cannot be
+	// read off a matched triple - none of the relations below match one - and
+	// must instead range over the dataset's named graphs. The three anchored
+	// cases below cross-join allNamedGraphsRelation to do that; the unanchored
+	// case (two variables, needing nodes(graph)) is refused for now.
+	const bool graphIsVar = ctx.activeGraph().kind == GraphConstraint::Kind::Variable;
+	if (graphIsVar && subject.isVar && object.isVar) {
 		throw TranslationError(
-		    "unsupported: a zero-length property path (`?`/`*`) inside GRAPH ?" + ctx.activeGraph().varName +
-		    " - the zero-length match holds in every graph, so the graph name would have to be enumerated over the "
-		    "dataset, which is not yet implemented. Name the graph explicitly (GRAPH <iri>) instead.");
+		    "unsupported: a zero-length property path (`?`/`*`) with two unbound endpoints inside GRAPH ?" +
+		    ctx.activeGraph().varName +
+		    " - the zero-length match would have to enumerate every term of every named graph, which is not yet "
+		    "implemented. Bind one endpoint, or name the graph explicitly (GRAPH <iri>).");
 	}
+	// Cross-join the graph enumeration onto whatever the anchored case produces:
+	// the zero-length match itself is graph-independent, so every named graph
+	// yields a solution.
+	auto withGraphs = [&ctx, graphIsVar](RelNodePtr rel) {
+		if (!graphIsVar) {
+			return rel;
+		}
+		return innerJoin(std::move(rel), allNamedGraphsRelation(ctx.activeGraph().varName, ctx), ctx);
+	};
+
 	if (!subject.isVar && !object.isVar) {
 		// Both endpoints fixed: the zero-length path holds exactly when they
 		// are the same term, and binds nothing either way.
 		if (termLexicalForm(*subject.boundTerm) == termLexicalForm(*object.boundTerm)) {
-			return identityRelation(ctx);
+			// Holds in every graph, so under GRAPH ?g this binds ?g rather than
+			// binding nothing - hence a relation, not the identity.
+			return withGraphs(identityRelation(ctx));
 		}
 		return RelNodePtr(new EmptyNode());
 	}
@@ -251,7 +268,7 @@ RelNodePtr zeroLengthPath(const TermSpec &subject, const TermSpec &object, Trans
 		// holds whether or not the term occurs in the graph.
 		const TermSpec &boundEnd = subject.isVar ? object : subject;
 		const TermSpec &varEnd = subject.isVar ? subject : object;
-		return singleTermRelation(varEnd.varName, *boundEnd.boundTerm, ctx);
+		return withGraphs(singleTermRelation(varEnd.varName, *boundEnd.boundTerm, ctx));
 	}
 
 	// Two variables, and so nothing to anchor to: range over every term the

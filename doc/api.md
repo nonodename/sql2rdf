@@ -771,11 +771,16 @@ and joins use the VARCHAR-cast fallback.
     predicate-object map's triples are named. Spec-correct, and easy to be surprised by.
   - A referencing object map uses the **child** triples map's subject graphs; the parent's do not
     apply.
-  - **Not yet supported**: a graph *variable* combined with an arbitrary-length (`*`/`+`) or
-    zero-length (`?`/`*`) property path — the graph name would have to be carried as an invariant
-    column through the recursive closure, or enumerated over the dataset for the zero-length case.
-    Both throw `TranslationError` naming the shape. The same paths inside `GRAPH <iri>` work
-    normally, since a bound IRI's condition lives inside the path's step relation.
+  - **Property paths inside `GRAPH ?g`** work, including the arbitrary-length operators. The graph
+    name is held constant across every hop of the recursive closure, so a match cannot start in one
+    graph and finish in another; with both endpoints bound, `GRAPH ?g { <a> :p+ <b> }` binds `?g` to
+    each graph that connects them rather than reducing to an existence check. A zero-length match
+    (`?`/`*`) holds in every graph per §18.4, so with one endpoint bound `?g` ranges over the
+    dataset's named graphs. The paths inside `GRAPH <iri>` are unaffected and keep exactly the SQL
+    shape they had before, since a bound IRI's condition lives inside the step relation.
+  - **Not yet supported**: a zero-length path (`?`/`*`) with **both endpoints unbound** inside
+    `GRAPH ?g` — that would have to enumerate every term of every named graph (`nodes(graph)`).
+    Throws `TranslationError` naming the shape; binding either endpoint, or naming the graph, works.
 - **`FROM` / `FROM NAMED` (dataset clauses)**: supported, per SPARQL 1.1 §13.2. With no clauses the
   dataset is the whole mapping (the pre-existing behaviour). Otherwise:
 

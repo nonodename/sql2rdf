@@ -1,6 +1,0 @@
-PREFIX ex: <http://example.com/ns#>
-# GRAPH ?g with an arbitrary-length path: the graph name would have to be held
-# constant across every hop of the recursive closure. Refused for now - see
-# graph_iri_path_plus.rq for the supported named-graph counterpart.
-SELECT ?g ?s ?o
-WHERE { GRAPH ?g { ?s ex:dept+ ?o . } }

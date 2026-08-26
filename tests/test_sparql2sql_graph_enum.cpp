@@ -247,6 +247,18 @@ TEST_CASE("graph enum: GRAPH ?g unified with the subject position equates the tw
 
 namespace {
 
+std::string graphsQuery(const std::string &queryBody) {
+	R2RMLMapping mapping = parseMapping("sparql2sql_graphs.ttl");
+	Parser parser;
+	auto q = parser.parseString(std::string(kPrefix) + queryBody);
+	DuckDbDialect dialect;
+	return sparql2sql::translateQuery(*q, mapping, dialect);
+}
+
+bool empty(const std::string &sql) {
+	return contains(sql, "WHERE FALSE");
+}
+
 std::string translateFull(const char *ttlFile, const char *rqFile) {
 	R2RMLMapping mapping = parseMapping(ttlFile);
 	Parser parser;
@@ -257,23 +269,46 @@ std::string translateFull(const char *ttlFile, const char *rqFile) {
 
 } // namespace
 
-TEST_CASE("graph refusal: GRAPH ?g with an arbitrary-length path throws", "[sparql2sql]") {
-	CHECK_THROWS_AS(translateFull("sparql2sql_graphs.ttl", "unsupported_graph_var_path_plus.rq"),
+TEST_CASE("graph closure: GRAPH ?g with an arbitrary-length path carries the graph through the recursion",
+          "[sparql2sql]") {
+	// Was a refusal until the invariant column landed. The graph name must be
+	// held constant across every hop - a match may not start in one graph and
+	// finish in another - which is an equality between the accumulated row and
+	// the next step, added to the recursive term's ON clause.
+	std::string sql = translateFull("sparql2sql_graphs.ttl", "graph_var_path_plus.rq");
+	CHECK(contains(sql, "WITH RECURSIVE"));
+	CHECK(contains(sql, "\"v_g\""));
+	// The invariant equality itself: same column on both sides of the hop join.
+	CHECK(contains(sql, "\"v_g\" = "));
+	CHECK_FALSE(empty(sql));
+}
+
+TEST_CASE("graph closure: GRAPH ?g with a zero-length path enumerates the named graphs", "[sparql2sql]") {
+	// This fixture has TWO unbound endpoints, which still
+	// needs nodes(graph) and is therefore still refused - see the next case for
+	// the anchored form, which now works.
+	CHECK_THROWS_AS(translateFull("sparql2sql_graphs.ttl", "unsupported_graph_var_path_zero_unbound.rq"),
 	                sparql2sql::TranslationError);
 }
 
-TEST_CASE("graph refusal: GRAPH ?g with a zero-length path throws", "[sparql2sql]") {
-	CHECK_THROWS_AS(translateFull("sparql2sql_graphs.ttl", "unsupported_graph_var_path_zero.rq"),
-	                sparql2sql::TranslationError);
+TEST_CASE("graph closure: an anchored zero-length path binds the graph over every named graph", "[sparql2sql]") {
+	// Section 18.4: the zero-length match holds in every graph, whether or not
+	// the term occurs in it. With one endpoint bound there is something to
+	// anchor to, so ?g ranges over allNamedGraphsRelation rather than being
+	// left unbound.
+	std::string sql = graphsQuery("SELECT ?g ?o WHERE { GRAPH ?g { <http://data.example.com/employee/7369> "
+	                              "ex:dept? ?o . } }");
+	CHECK_FALSE(empty(sql));
+	CHECK(contains(sql, "\"v_g\""));
+	CHECK(contains(sql, kG1));
 }
 
-TEST_CASE("graph refusal: the same path inside a NAMED graph is supported", "[sparql2sql]") {
-	// The contrast that makes the two refusals above precise rather than a
-	// blanket "no paths inside GRAPH": a bound IRI carries its condition inside
-	// the step relation, so it needs no invariant column.
+TEST_CASE("graph closure: the same path inside a NAMED graph needs no invariant column", "[sparql2sql]") {
+	// The contrast worth keeping: a bound IRI carries its condition inside the
+	// step relation, identically in every arm, so the closure stays exactly the
+	// two-column shape it always was.
 	std::string sql = translateFull("sparql2sql_graphs.ttl", "graph_iri_path_plus.rq");
 	CHECK(contains(sql, "WITH RECURSIVE"));
 	CHECK(contains(sql, "cte_from"));
-	// And crucially it does not reference a graph column the closure dropped.
 	CHECK_FALSE(contains(sql, "v_g"));
 }

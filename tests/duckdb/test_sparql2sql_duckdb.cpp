@@ -941,6 +941,50 @@ TEST_CASE("dataset_from_named_graph.rq: the same FROM NAMED graph is reachable i
 	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/20"}, {"V_L", "BOSTON"}}));
 }
 
+// ---------------------------------------------------------------------------
+// The closure invariant column, on real rows. sparql2sql_graph_path.ttl puts
+// each edge of the 1->2->3 chain in a DIFFERENT named graph, so a path
+// evaluated within one graph can only be one hop - and a closure that failed to
+// hold the graph constant would visibly return the two-hop pair.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("graph_path_var_plus.rq: a path inside GRAPH ?g cannot hop between graphs") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_path_var_plus.rq", "sparql2sql_graph_path.ttl");
+	// Exactly the two one-hop pairs, each in its own graph.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(
+	    rows, {{"V_G", "http://ex.org/g/1"}, {"V_S", "http://ex.org/node/1"}, {"V_O", "http://ex.org/node/2"}}));
+	CHECK(containsRow(
+	    rows, {{"V_G", "http://ex.org/g/2"}, {"V_S", "http://ex.org/node/2"}, {"V_O", "http://ex.org/node/3"}}));
+	// The row count above already excludes it, but say it outright: reaching
+	// node/3 from node/1 needs two hops in two different graphs.
+	for (const auto &row : rows) {
+		auto s = row.find("V_S");
+		auto o = row.find("V_O");
+		bool crossGraph = s != row.end() && o != row.end() && s->second == "http://ex.org/node/1" &&
+		                  o->second == "http://ex.org/node/3";
+		CHECK_FALSE(crossGraph);
+	}
+}
+
+TEST_CASE("graph_path_var_plus_bound_both.rq: both endpoints bound under GRAPH ?g binds the connecting graph") {
+	// Mode::BothBound is no longer a pure existence check: the answer is which
+	// graphs connect the endpoints, so the graph is projected.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_path_var_plus_bound_both.rq", "sparql2sql_graph_path.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_G", "http://ex.org/g/1"}}));
+}
+
+TEST_CASE("graph_path_var_plus_cross_graph_absent.rq: the cross-graph two-hop pair has no answer") {
+	// The negative half of the pair above, asked directly. Without the invariant
+	// this returns a graph; with it, nothing.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_path_var_plus_cross_graph_absent.rq", "sparql2sql_graph_path.ttl");
+	CHECK(rows.empty());
+}
+
 TEST_CASE("graph_iri_location.rq: naming the graph finds the triples the default graph cannot see") {
 	// The mirror of graphs_default_location.rq below, which finds nothing. Both
 	// directions are asserted so neither can pass by the filter being inert.

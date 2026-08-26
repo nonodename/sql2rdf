@@ -71,6 +71,19 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 /// relation to. Necessarily scans every logical table in the mapping.
 RelNodePtr allTermsRelation(const std::vector<std::string> &varNames, TranslationContext &ctx);
 
+/// A relation over every named graph the mapping can produce, restricted by the
+/// active dataset, projected once under `varName`. Deduplicated: a set of
+/// graphs, not a bag.
+///
+/// Used where a `GRAPH ?g` block has to bind its graph name without a matched
+/// triple to read it off - the zero-length property path, whose match holds in
+/// every graph whether or not the term occurs in it (SPARQL 1.1 Section 18.4).
+///
+/// Much cheaper than allTermsRelation: a graph name comes off a graph map, so
+/// the constant ones are literals and only the column/template ones need to
+/// touch their table at all.
+RelNodePtr allNamedGraphsRelation(const std::string &varName, TranslationContext &ctx);
+
 /// Translate a single SPARQL triple pattern, of any predicate shape, into an
 /// IR relation. A constant IRI or bare variable in predicate position goes
 /// straight to translateAtomicPattern; every other property path operator is

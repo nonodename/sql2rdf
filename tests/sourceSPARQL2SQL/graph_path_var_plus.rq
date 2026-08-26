@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.com/ns#>
+# Each edge of the 1->2->3 chain is in a different named graph, so a path
+# evaluated within one graph can only ever be one hop long here. The two-hop
+# pair (node/1, node/3) must NOT appear: it would mean the closure crossed from
+# <g/1> into <g/2>.
+SELECT ?g ?s ?o
+WHERE { GRAPH ?g { ?s ex:next+ ?o . } }

@@ -378,6 +378,20 @@ public:
 	/// than fail. The producer already knows the answer; ask it.
 	bool sameEndpointVar = false;
 
+	/// Variables the step relation binds that must be held **constant across
+	/// every hop** of the closure, rather than walked like the endpoints.
+	///
+	/// In practice this is 0 or 1 entries: the graph name of an enclosing
+	/// `GRAPH ?g` block. A property path inside a GRAPH block is evaluated
+	/// within that one graph, so a two-hop match may not cross from one graph
+	/// into another - which is exactly a column carried through the recursion
+	/// and equated between the accumulated row and the next step.
+	///
+	/// Each entry must also appear in schema() (appended after the endpoints, so
+	/// the endpoint columns stay at indices 0/1), and is projected out of the
+	/// closure like any other column.
+	std::vector<std::string> invariantVars;
+
 	// schema_ (inherited) declares exactly what this node projects:
 	//  - BothBound:            0 columns.
 	//  - ForwardFromSubject:   1 column, var = object's real SPARQL var name.

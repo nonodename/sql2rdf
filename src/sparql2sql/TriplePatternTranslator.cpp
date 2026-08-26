@@ -151,6 +151,21 @@ void fillTemplateKeyInfo(ColumnInfo &col, const SqlDialect &dialect) {
 	col.templateInvertible = !adjacent;
 }
 
+// Replace every occurrence of `from` with `to`. Local to this file; Optimizer.cpp
+// has its own copy for the same reason (both are one-liners used to normalise
+// alias-bearing SQL text, not a shared abstraction worth a header).
+std::string replaceAllText(std::string text, const std::string &from, const std::string &to) {
+	if (from.empty()) {
+		return text;
+	}
+	std::size_t pos = 0;
+	while ((pos = text.find(from, pos)) != std::string::npos) {
+		text.replace(pos, from.size(), to);
+		pos += to.size();
+	}
+	return text;
+}
+
 void addUnique(std::vector<std::string> &out, const std::vector<std::string> &more) {
 	out.reserve(more.size());
 	for (const auto &v : more) {
@@ -1054,6 +1069,108 @@ RelNodePtr allTermsRelation(const std::vector<std::string> &varNames, Translatio
 		col.term = meetAcrossArms(v, arms);
 		un.schema().push_back(col);
 	}
+	un.arms = std::move(arms);
+	return node;
+}
+
+RelNodePtr allNamedGraphsRelation(const std::string &varName, TranslationContext &ctx) {
+	const SqlDialect &dialect = ctx.dialect();
+
+	// Enumerate the graph sets the mapping can produce, reusing the same
+	// classification (and dataset filtering) candidate enumeration uses, so
+	// there is one definition of "a named graph of this mapping" rather than
+	// two that can drift. The active graph is forced to Variable for the sweep:
+	// we want every named branch, whatever block we were called from.
+	TranslationContext::ActiveGraphGuard guard(ctx, variableGraph(varName));
+
+	std::vector<RelNodePtr> arms;
+	// A subject-level graph map applies to every predicate-object map of its
+	// triples map, so the same (graph expression, source table) pair is reached
+	// once per POM. Emitting an arm apiece would produce several identical
+	// SELECTs whose only difference is the alias - correct, since the union
+	// dedups, but needlessly wide SQL. Keyed on the arm's *content* rather than
+	// its alias so those collapse to one.
+	std::set<std::string> emitted;
+	for (const auto &tmPtr : ctx.mapping().triplesMaps) {
+		const r2rml::TriplesMap &tm = *tmPtr;
+		if (!tm.logicalTable || !tm.subjectMap || !tm.subjectMap->valueTermMap()) {
+			continue;
+		}
+		const std::string identity = logicalTableIdentity(*tm.logicalTable);
+
+		// One pass per distinct graph-set source: the subject map alone (which is
+		// what an rr:class triple carries), then each predicate-object map.
+		std::vector<const std::vector<std::unique_ptr<r2rml::GraphMap>> *> pomSets;
+		static const std::vector<std::unique_ptr<r2rml::GraphMap>> kNoGraphMaps;
+		if (!tm.subjectMap->classIRIs.empty()) {
+			pomSets.push_back(&kNoGraphMaps);
+		}
+		for (const auto &pomPtr : tm.predicateObjectMaps) {
+			pomSets.push_back(&pomPtr->graphMaps);
+		}
+
+		for (const auto *pomGraphMaps : pomSets) {
+			std::string alias = ctx.nextAlias();
+			std::string fromSql = logicalTableFromSql(*tm.logicalTable, alias, ctx);
+			for (const auto &gb : graphBranchesFor(tm.subjectMap->graphMaps, *pomGraphMaps, alias, identity, ctx)) {
+				if (gb.isDefaultGraph) {
+					continue; // the default graph is not a named graph
+				}
+				Resolved r = resolveSource(gb.graphSrc, dialect, ctx.catalog());
+				// The alias is baked into `expr`, so strip it back out for the key:
+				// two arms over the same table with the same graph strategy differ
+				// only by alias and are the same relation.
+				std::string key = identity + "\x1f" + replaceAllText(r.expr, alias + ".", "%A%.");
+				for (const auto &c : gb.extraConds) {
+					key += "\x1f" + replaceAllText(c, alias + ".", "%A%.");
+				}
+				if (!emitted.insert(key).second) {
+					continue;
+				}
+				RelNodePtr node(new SpjRelation());
+				SpjRelation &spj = static_cast<SpjRelation &>(*node);
+				SpjSource source;
+				source.sql = fromSql;
+				source.alias = alias;
+				source.tableIdentity = identity;
+				spj.sources.push_back(source);
+				spj.whereConds = gb.extraConds;
+				for (const auto &g : r.requiredNonNull) {
+					spj.whereConds.push_back(g + " IS NOT NULL");
+				}
+				spj.distinct = true;
+				ColumnInfo col;
+				col.var = varName;
+				fillColumnFromResolved(col, r, dialect);
+				// A graph name is always an IRI (see tryAddCandidate).
+				col.term = TermInfo();
+				col.term.kind = RdfTermKind::Iri;
+				col.tagExpr = tagLiteral(col.term, dialect);
+				spj.schema().push_back(col);
+				arms.push_back(std::move(node));
+			}
+		}
+	}
+
+	if (arms.empty()) {
+		RelNodePtr node(new EmptyNode());
+		ColumnInfo col;
+		col.var = varName;
+		col.nonNull = true;
+		node->schema().push_back(col);
+		return node;
+	}
+	if (arms.size() == 1) {
+		return std::move(arms.front());
+	}
+	RelNodePtr node(new UnionByNameNode());
+	UnionByNameNode &un = static_cast<UnionByNameNode &>(*node);
+	un.all = false; // a set of graphs, not a bag
+	ColumnInfo col;
+	col.var = varName;
+	col.nonNull = true;
+	col.term = meetAcrossArms(varName, arms);
+	un.schema().push_back(col);
 	un.arms = std::move(arms);
 	return node;
 }
