@@ -907,6 +907,40 @@ TEST_CASE("sparql2sql_path_cycle_plus.rq: a one-or-more path over a 3-cycle term
 // which is exactly where the deliberate behaviour change lives.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// FROM / FROM NAMED on real rows. Both cases below return a *different* answer
+// than the same pattern without the clause, so neither can pass by the dataset
+// filter being inert.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("dataset_from_g1_name.rq: FROM replaces the default graph, flipping which ex:name matches") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dataset_from_g1_name.rq", "sparql2sql_graphs.ttl");
+	// Without the FROM clause this query returns the two DEPARTMENTS
+	// (graphs_default_name.rq asserts exactly that). With it, the ungraphed
+	// DeptMap triples leave the dataset and the g1 EmpMap ones enter.
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/employee/7369"}, {"V_N", "SMITH"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/employee/7400"}, {"V_N", "JONES"}}));
+}
+
+TEST_CASE("dataset_from_named_only.rq: FROM NAMED alone leaves the default graph empty") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dataset_from_named_only.rq", "sparql2sql_graphs.ttl");
+	CHECK(rows.empty());
+}
+
+TEST_CASE("dataset_from_named_graph.rq: the same FROM NAMED graph is reachable inside a GRAPH block") {
+	// The control for the case above: identical dataset clause, identical
+	// triples, but named by a GRAPH block - so the emptiness there is the
+	// default-graph rule and not the graph simply being unreachable.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "dataset_from_named_graph.rq", "sparql2sql_graphs.ttl");
+	REQUIRE(rows.size() == 2);
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/10"}, {"V_L", "NEW YORK"}}));
+	CHECK(containsRow(rows, {{"V_D", "http://data.example.com/department/20"}, {"V_L", "BOSTON"}}));
+}
+
 TEST_CASE("graph_iri_location.rq: naming the graph finds the triples the default graph cannot see") {
 	// The mirror of graphs_default_location.rq below, which finds nothing. Both
 	// directions are asserted so neither can pass by the filter being inert.

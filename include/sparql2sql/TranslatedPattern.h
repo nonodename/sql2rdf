@@ -141,6 +141,23 @@ public:
 		return activeGraph_;
 	}
 
+	/// The dataset the query is evaluated against (its FROM / FROM NAMED
+	/// clauses). Unrestricted unless setDataset() was called.
+	const ActiveDataset &dataset() const {
+		return dataset_;
+	}
+
+	/// Fix the dataset for this translation. Unlike the active graph this needs
+	/// no guard and no scoping: the grammar puts DatasetClause only on the
+	/// top-level Query, so there is exactly one dataset for the whole
+	/// translation and nested sub-selects / EXISTS bodies correctly inherit it.
+	///
+	/// Must be called before anything folds - translateQuery does so
+	/// immediately, before its first fold().
+	void setDataset(ActiveDataset dataset) {
+		dataset_ = std::move(dataset);
+	}
+
 	/// Make `graph` the active graph for as long as the guard is alive.
 	///
 	/// Save/restore rather than the increment/decrement SubqueryDepthGuard uses,
@@ -343,6 +360,7 @@ private:
 	bool prettyPrint_;
 	std::size_t subqueryDepth_ = 0;
 	GraphConstraint activeGraph_;
+	ActiveDataset dataset_;
 };
 
 /// Mangle a SPARQL variable name into its projected SQL column name

@@ -1,0 +1,8 @@
+PREFIX ex: <http://example.com/ns#>
+# FROM *replaces* the default graph. ex:name is mapped twice: EmpMap's is in
+# <graph/g1>, DeptMap's has no graph map at all. Without this clause only the
+# ungraphed one matches; with it, only the g1 one does. The result set flips
+# entirely, which is the rule worth pinning on real rows.
+SELECT ?d ?n
+FROM <http://example.com/graph/g1>
+WHERE { ?d ex:name ?n . }

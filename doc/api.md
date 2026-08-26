@@ -776,9 +776,27 @@ and joins use the VARCHAR-cast fallback.
     column through the recursive closure, or enumerated over the dataset for the zero-length case.
     Both throw `TranslationError` naming the shape. The same paths inside `GRAPH <iri>` work
     normally, since a bound IRI's condition lives inside the path's step relation.
-- **No `FROM`/`FROM NAMED` (dataset clauses)**: always throws `TranslationError`. `GRAPH` itself is
-  supported (above), but there is not yet a way to restrict *which* graphs form the active dataset,
-  so a query is always translated against the whole mapping.
+- **`FROM` / `FROM NAMED` (dataset clauses)**: supported, per SPARQL 1.1 §13.2. With no clauses the
+  dataset is the whole mapping (the pre-existing behaviour). Otherwise:
+
+  | Clauses present | Default graph (no `GRAPH` block) | What a `GRAPH` block can match |
+  |---|---|---|
+  | none | graph set empty / `rr:defaultGraph` | any graph the mapping produces |
+  | `FROM <g>`… only | the merge of the listed `g`s | **nothing** — no graphs are nameable |
+  | `FROM NAMED <g>`… only | **empty** | only the listed `g`s |
+  | both | merge of the `FROM` `g`s | only the `FROM NAMED` `g`s |
+
+  Two consequences are worth stating outright, because each makes a query legitimately return zero
+  rows in a way that reads like a bug:
+  - **`FROM` *replaces* the default graph, it does not add to it.** With `FROM <g>`, a triple that
+    has no graph map at all becomes **invisible**.
+  - **Naming only `FROM NAMED` graphs leaves the default graph empty**, so any pattern outside a
+    `GRAPH` block matches nothing.
+
+  A `FROM`/`FROM NAMED` IRI the mapping cannot produce is not an error — it simply contributes
+  nothing, consistent with a triple pattern that provably matches nothing. Listing the same graph
+  twice is one graph. The dataset is fixed once for the whole query (the grammar only allows dataset
+  clauses on the top-level query), so nested sub-selects and `EXISTS` bodies inherit it.
 - **No `SERVICE`** (federated query): always throws, matching `sql2rdf_sparql`'s own "no
   federated-query execution semantics" stance.
 - **Every SPARQL variable is a plain SQL `VARCHAR`** holding the RDF term's lexical string form

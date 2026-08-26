@@ -304,10 +304,52 @@ std::vector<GraphBranch> graphBranchesFor(const std::vector<std::unique_ptr<r2rm
 
 	std::vector<GraphBranch> branches;
 
-	// --- the default-graph branch ---------------------------------------
-	// Only reachable without a GRAPH block: inside one, the default graph is
-	// not a named graph and cannot be matched.
+	// --- resolve the active constraint against the dataset ---------------
+	// Yields at most one of: the mapping's own default-graph branch, or named
+	// branches restricted to `requiredIris` (empty meaning "any named graph").
+	//
+	// Two SPARQL 1.1 Section 13.2 rules do the surprising work here: FROM
+	// *replaces* the default graph rather than adding to it (so with FROM <g>
+	// the mapping's ungraphed triples become invisible and the default branch is
+	// dropped), and naming only FROM NAMED graphs leaves the default graph empty
+	// (so a pattern outside any GRAPH block matches nothing at all).
+	const ActiveDataset &ds = ctx.dataset();
+	bool wantDefaultBranch = false;
+	bool wantNamedBranches = false;
+	std::vector<std::string> requiredIris;
 	if (active.isDefault()) {
+		if (!ds.restricted) {
+			wantDefaultBranch = true;
+		} else if (!ds.defaultGraphIris.empty()) {
+			// FROM merged these into the default graph, so a graph-less pattern
+			// matches exactly the triples in them - as named branches, but with no
+			// graph column, since there is no graph variable to bind.
+			wantNamedBranches = true;
+			requiredIris = ds.defaultGraphIris;
+		}
+		// else: FROM NAMED only -> the default graph is empty -> no branches.
+	} else if (active.kind == GraphConstraint::Kind::BoundIri) {
+		if (!ds.restricted || ds.namesNamedGraph(active.iri)) {
+			wantNamedBranches = true;
+			requiredIris.push_back(active.iri);
+		}
+		// else: not a nameable graph in this dataset -> no branches.
+	} else { // Variable
+		if (!ds.restricted) {
+			wantNamedBranches = true; // any named graph; requiredIris stays empty
+		} else if (!ds.namedGraphIris.empty()) {
+			wantNamedBranches = true;
+			requiredIris = ds.namedGraphIris;
+		}
+	}
+	if (!wantDefaultBranch && !wantNamedBranches) {
+		return branches;
+	}
+
+	// --- the default-graph branch ---------------------------------------
+	// Only reachable without a GRAPH block and without a FROM clause: inside a
+	// GRAPH block the default graph is not a named graph, and FROM replaces it.
+	if (wantDefaultBranch) {
 		if (set.empty()) {
 			branches.push_back(defaultGraphBranch()); // no conditions, no graph column
 			return branches;
@@ -386,13 +428,44 @@ std::vector<GraphBranch> graphBranchesFor(const std::vector<std::unique_ptr<r2rm
 		b.graphSrc.alias = alias;
 		b.graphSrc.tableIdentity = tableIdentity;
 
-		if (active.kind == GraphConstraint::Kind::BoundIri) {
-			sparql::ast::Iri wanted(active.iri, active.iri);
-			InversionResult inv = resolveInversion(b.graphSrc, wanted, dialect, ctx.catalog());
-			if (!inv.possible) {
-				continue; // this graph map can never produce the requested IRI
+		if (!requiredIris.empty()) {
+			// This graph map must be able to produce one of the wanted IRIs.
+			// Several is the normal case for a FROM/FROM NAMED list, so the
+			// per-IRI inversion conditions are OR'd; an IRI a constant graph map
+			// matches outright contributes no condition at all, which then makes
+			// the whole branch unconditional.
+			bool anyPossible = false;
+			bool unconditional = false;
+			std::vector<std::string> perIri;
+			for (const auto &wantedIri : requiredIris) {
+				sparql::ast::Iri wanted(wantedIri, wantedIri);
+				InversionResult inv = resolveInversion(b.graphSrc, wanted, dialect, ctx.catalog());
+				if (!inv.possible) {
+					continue;
+				}
+				anyPossible = true;
+				if (inv.whereConditions.empty()) {
+					unconditional = true;
+					break;
+				}
+				std::string conj;
+				for (std::size_t i = 0; i < inv.whereConditions.size(); ++i) {
+					conj += (i > 0 ? " AND " : "") + inv.whereConditions[i];
+				}
+				perIri.push_back("(" + conj + ")");
 			}
-			addUnique(b.extraConds, inv.whereConditions);
+			if (!anyPossible) {
+				continue; // this graph map can never produce any wanted IRI
+			}
+			if (!unconditional) {
+				std::string ors;
+				for (std::size_t i = 0; i < perIri.size(); ++i) {
+					ors += (i > 0 ? " OR " : "") + perIri[i];
+				}
+				b.extraConds.push_back("(" + ors + ")");
+			}
+			// No rr:defaultGraph guard needed: the wanted list is made of real
+			// named graphs, so matching it already excludes the default graph.
 		} else if (!isStaticGraph(*gm)) {
 			// GRAPH ?g over a per-row graph name: a row whose graph column
 			// happens to hold rr:defaultGraph is in the default graph, so it is

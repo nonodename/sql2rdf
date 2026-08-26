@@ -429,13 +429,18 @@ TEST_CASE("translateQuery: CONSTRUCT is rejected with a clear TranslationError")
 	CHECK_THROWS_AS(translateQuery(*q, mapping, dialect), TranslationError);
 }
 
-TEST_CASE("translateQuery: FROM / FROM NAMED dataset clauses are rejected with a clear TranslationError") {
+TEST_CASE("translateQuery: FROM over a graph the mapping cannot produce yields an empty relation, not an error") {
+	// Was a refusal test until dataset support landed. dataset_from.rq names
+	// <http://example.com/graph1>, which example_emp_dept.ttl (no graph maps at
+	// all) cannot produce - so the query is translatable and simply matches
+	// nothing, exactly as a real engine would answer it.
 	Parser parser;
-	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "unsupported_dataset.rq");
+	auto q = parser.parseFile(SOURCE_SPARQL2SQL_DIR "dataset_from.rq");
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "example_emp_dept.ttl");
 	REQUIRE(mapping.isValid());
 
 	DuckDbDialect dialect;
-	CHECK_THROWS_AS(translateQuery(*q, mapping, dialect), TranslationError);
+	std::string sql = translateQuery(*q, mapping, dialect);
+	CHECK(sql.find("WHERE FALSE") != std::string::npos);
 }

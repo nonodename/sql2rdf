@@ -6,6 +6,7 @@
 
 #include "sparql-parser/ast/Expression.h"
 #include "sparql-parser/ast/Query.h"
+#include "sparql2sql/GraphConstraint.h"
 #include "sparql2sql/ExpressionTranslator.h"
 #include "sparql2sql/PatternFolder.h"
 #include "sparql2sql/SqlDialect.h"
@@ -526,10 +527,25 @@ std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMa
                            const SqlDialect &dialect, const TypeCatalog *catalog, bool prettyPrint) {
 	TranslationContext ctx(mapping, dialect, catalog, prettyPrint);
 
+	// FROM / FROM NAMED, fixed once for the whole translation: the grammar puts
+	// DatasetClause only on the top-level Query, so nested sub-selects and
+	// EXISTS bodies correctly inherit it and it needs no scoping.
 	if (!query.datasetClauses.empty()) {
-		throw TranslationError(
-		    "FROM / FROM NAMED dataset clauses are not supported; every query is translated against the entire "
-		    "R2RML mapping");
+		ActiveDataset dataset;
+		dataset.restricted = true;
+		for (const auto &dc : query.datasetClauses) {
+			if (!dc.iri) {
+				continue;
+			}
+			std::vector<std::string> &into =
+			    dc.kind == sparql::ast::DatasetClauseKind::Named ? dataset.namedGraphIris : dataset.defaultGraphIris;
+			// Deduplicated: FROM twice over the same graph is one graph, and the
+			// candidate union's own dedup should not have to launder repeats.
+			if (std::find(into.begin(), into.end(), dc.iri->value) == into.end()) {
+				into.push_back(dc.iri->value);
+			}
+		}
+		ctx.setDataset(std::move(dataset));
 	}
 
 	if (query.form == QueryForm::Ask) {
