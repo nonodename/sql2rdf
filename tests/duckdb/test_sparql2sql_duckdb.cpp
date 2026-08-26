@@ -968,6 +968,36 @@ TEST_CASE("graph_path_var_plus.rq: a path inside GRAPH ?g cannot hop between gra
 	}
 }
 
+TEST_CASE("graph_path_var_zero_or_one.rq: an unbound zero-length path enumerates each graph's own nodes") {
+	// nodes(graph), per graph. sparql2sql_graph_path.ttl puts edge 1->2 in
+	// <g/1> and edge 2->3 in <g/2>, so:
+	//   <g/1> contains node/1 and node/2  -> pairs (1,2) plus (1,1) and (2,2)
+	//   <g/2> contains node/2 and node/3  -> pairs (2,3) plus (2,2) and (3,3)
+	// The reflexive pairs are per-graph: (3,3) must NOT appear under <g/1>,
+	// which is what distinguishes a graph-aware term universe from the
+	// mapping-wide one.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "graph_path_var_zero_or_one.rq", "sparql2sql_graph_path.ttl");
+	REQUIRE(rows.size() == 6);
+
+	const std::string g1 = "http://ex.org/g/1";
+	const std::string g2 = "http://ex.org/g/2";
+	auto node = [](int i) {
+		return "http://ex.org/node/" + std::to_string(i);
+	};
+
+	CHECK(containsRow(rows, {{"V_G", g1}, {"V_S", node(1)}, {"V_O", node(2)}}));
+	CHECK(containsRow(rows, {{"V_G", g1}, {"V_S", node(1)}, {"V_O", node(1)}}));
+	CHECK(containsRow(rows, {{"V_G", g1}, {"V_S", node(2)}, {"V_O", node(2)}}));
+	CHECK(containsRow(rows, {{"V_G", g2}, {"V_S", node(2)}, {"V_O", node(3)}}));
+	CHECK(containsRow(rows, {{"V_G", g2}, {"V_S", node(2)}, {"V_O", node(2)}}));
+	CHECK(containsRow(rows, {{"V_G", g2}, {"V_S", node(3)}, {"V_O", node(3)}}));
+
+	// node/3 is not a node of <g/1>, and node/1 is not a node of <g/2>.
+	CHECK_FALSE(containsRow(rows, {{"V_G", g1}, {"V_S", node(3)}, {"V_O", node(3)}}));
+	CHECK_FALSE(containsRow(rows, {{"V_G", g2}, {"V_S", node(1)}, {"V_O", node(1)}}));
+}
+
 TEST_CASE("graph_path_var_plus_bound_both.rq: both endpoints bound under GRAPH ?g binds the connecting graph") {
 	// Mode::BothBound is no longer a pure existence check: the answer is which
 	// graphs connect the endpoints, so the graph is projected.

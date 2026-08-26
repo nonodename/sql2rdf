@@ -1,0 +1,8 @@
+PREFIX ex: <http://example.com/ns#>
+# A zero-length path with BOTH endpoints unbound inside GRAPH ?g. This needs
+# nodes(graph) - every term appearing as a subject or object of a triple in that
+# graph - so the answers are, per graph: the one-hop pair, plus the reflexive
+# pair for each of that graph's own two nodes. A node from a *different* graph
+# must not appear.
+SELECT ?g ?s ?o
+WHERE { GRAPH ?g { ?s ex:next? ?o . } }

@@ -230,17 +230,11 @@ RelNodePtr zeroLengthPath(const TermSpec &subject, const TermSpec &object, Trans
 	// Per Section 18.4 the zero-length path holds in every graph, whether or not
 	// the term occurs in it. So under a graph VARIABLE the graph name cannot be
 	// read off a matched triple - none of the relations below match one - and
-	// must instead range over the dataset's named graphs. The three anchored
-	// cases below cross-join allNamedGraphsRelation to do that; the unanchored
-	// case (two variables, needing nodes(graph)) is refused for now.
+	// must instead range over the dataset's named graphs. The two anchored cases
+	// cross-join allNamedGraphsRelation to do that; the unanchored case gets its
+	// graph from allTermsRelation, which under a non-default active graph
+	// enumerates nodes(graph) *with* the graph alongside.
 	const bool graphIsVar = ctx.activeGraph().kind == GraphConstraint::Kind::Variable;
-	if (graphIsVar && subject.isVar && object.isVar) {
-		throw TranslationError(
-		    "unsupported: a zero-length property path (`?`/`*`) with two unbound endpoints inside GRAPH ?" +
-		    ctx.activeGraph().varName +
-		    " - the zero-length match would have to enumerate every term of every named graph, which is not yet "
-		    "implemented. Bind one endpoint, or name the graph explicitly (GRAPH <iri>).");
-	}
 	// Cross-join the graph enumeration onto whatever the anchored case produces:
 	// the zero-length match itself is graph-independent, so every named graph
 	// yields a solution.

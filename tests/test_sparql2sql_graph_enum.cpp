@@ -283,12 +283,14 @@ TEST_CASE("graph closure: GRAPH ?g with an arbitrary-length path carries the gra
 	CHECK_FALSE(empty(sql));
 }
 
-TEST_CASE("graph closure: GRAPH ?g with a zero-length path enumerates the named graphs", "[sparql2sql]") {
-	// This fixture has TWO unbound endpoints, which still
-	// needs nodes(graph) and is therefore still refused - see the next case for
-	// the anchored form, which now works.
-	CHECK_THROWS_AS(translateFull("sparql2sql_graphs.ttl", "unsupported_graph_var_path_zero_unbound.rq"),
-	                sparql2sql::TranslationError);
+TEST_CASE("graph closure: GRAPH ?g with an unbound zero-length path enumerates nodes(graph)", "[sparql2sql]") {
+	// Both endpoints unbound, so the zero-length half needs every term of every
+	// named graph. allTermsRelation supplies that under a non-default active
+	// graph, with the graph name alongside - so ?g is bound rather than the
+	// query being refused.
+	std::string sql = translateFull("sparql2sql_graphs.ttl", "graph_var_path_zero_unbound.rq");
+	CHECK_FALSE(empty(sql));
+	CHECK(contains(sql, "\"v_g\""));
 }
 
 TEST_CASE("graph closure: an anchored zero-length path binds the graph over every named graph", "[sparql2sql]") {

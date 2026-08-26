@@ -742,6 +742,9 @@ and joins use the VARCHAR-cast fallback.
     endpoint reduces it to a single constant row. The enumeration over-approximates only in that a
     `TriplesMap` whose subject appears solely as the parent of a referencing object map contributes
     its subjects via its own arm; it deliberately excludes predicate IRIs, per SPARQL's `nodes(G)`.
+    Inside a `GRAPH` block the enumeration is instead expressed as a projection of the ordinary
+    candidate enumerator over a wildcard predicate, so it is restricted to that graph (and picks up
+    dataset filtering) rather than spanning the whole mapping.
   - `E+`/`E*` are the one case that genuinely needs recursive SQL rather than a fixed algebra
     expression: `E+` translates to a `WITH RECURSIVE` closure of `E`'s one-hop relation, and `E*` is
     that closure unioned with the zero-length path (reusing the `E?` machinery above). Whichever
@@ -778,9 +781,10 @@ and joins use the VARCHAR-cast fallback.
     (`?`/`*`) holds in every graph per §18.4, so with one endpoint bound `?g` ranges over the
     dataset's named graphs. The paths inside `GRAPH <iri>` are unaffected and keep exactly the SQL
     shape they had before, since a bound IRI's condition lives inside the step relation.
-  - **Not yet supported**: a zero-length path (`?`/`*`) with **both endpoints unbound** inside
-    `GRAPH ?g` — that would have to enumerate every term of every named graph (`nodes(graph)`).
-    Throws `TranslationError` naming the shape; binding either endpoint, or naming the graph, works.
+    With both endpoints unbound, the zero-length half needs `nodes(graph)` — every term appearing as
+    a subject or object of a triple *in that graph* — which is enumerated per graph, so a term of one
+    named graph never appears as a reflexive answer under another. There is no `GRAPH` shape the
+    translator refuses.
 - **`FROM` / `FROM NAMED` (dataset clauses)**: supported, per SPARQL 1.1 §13.2. With no clauses the
   dataset is the whole mapping (the pre-existing behaviour). Otherwise:
 

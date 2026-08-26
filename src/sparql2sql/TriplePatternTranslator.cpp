@@ -995,7 +995,124 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 	return node;
 }
 
+namespace {
+
+// Rewrite one candidate arm of an atomic pattern into a term-universe arm:
+// keep just the column bound to `keepVar` - projected once under every name in
+// `varNames`, so they all hold that same term - plus the graph column if there
+// is one. The other endpoint and the predicate are dropped, which is what
+// keeps predicates out of nodes(G).
+//
+// Works on the schema rather than on rendered SQL because a column's
+// renderedExpr is already valid in its own arm's FROM scope, so duplicating and
+// dropping entries is sound and leaves the subtree optimizable by the outer
+// tree's optimize() - which pre-rendering into a RawRelation would not.
+void reprojectTermArm(RelNode &node, const std::string &keepVar, const std::vector<std::string> &varNames,
+                      const std::string &graphVar) {
+	if (node.kind() == RelKind::UnionByName) {
+		auto &un = static_cast<UnionByNameNode &>(node);
+		for (auto &arm : un.arms) {
+			reprojectTermArm(*arm, keepVar, varNames, graphVar);
+		}
+	}
+
+	const ColumnInfo *kept = node.column(keepVar);
+	const ColumnInfo *graph = graphVar.empty() ? nullptr : node.column(graphVar);
+	std::vector<ColumnInfo> rebuilt;
+	rebuilt.reserve(varNames.size() + 1);
+	for (const auto &name : varNames) {
+		if (kept != nullptr) {
+			ColumnInfo col = *kept;
+			col.var = name;
+			rebuilt.push_back(col);
+		} else {
+			// Only reachable for an EmptyNode, which declares a schema but has no
+			// rows for any annotation to be observable through.
+			ColumnInfo col;
+			col.var = name;
+			col.nonNull = true;
+			rebuilt.push_back(col);
+		}
+	}
+	if (!graphVar.empty()) {
+		ColumnInfo col;
+		if (graph != nullptr) {
+			col = *graph;
+		} else {
+			col.var = graphVar;
+			col.nonNull = true;
+		}
+		col.var = graphVar;
+		rebuilt.push_back(col);
+	}
+	node.schema() = std::move(rebuilt);
+	if (node.kind() == RelKind::Spj) {
+		// Dropping columns can make two previously-distinct rows equal, so the
+		// per-arm DISTINCT is what keeps this a set of terms rather than a bag.
+		static_cast<SpjRelation &>(node).distinct = true;
+	}
+}
+
+// nodes(activeGraph): every term appearing as a subject or an object of a triple
+// *in the active graph*, projected under each of `varNames`, with the graph name
+// alongside when the enclosing block named it with a variable.
+//
+// Expressed as a projection of translateAtomicPattern over a wildcard predicate
+// rather than by walking the mapping directly. The default-graph path below does
+// walk it, but that decomposition is graph-incompatible in three ways - its
+// subject arm is emitted once per triples map rather than once per
+// predicate-object map, so it cannot know which graph applied; its rr:class arm
+// is deliberately FROM-less, which collapses once a class triple's graph is a
+// column expression; and its referencing-object-map skip assumes the parent's
+// subject arm covers those objects, which stops being true once graphs partition
+// the arms. Reusing the candidate enumerator instead keeps one implementation of
+// R2RML Section 12 rather than two that can drift, and picks up dataset
+// filtering for free.
+RelNodePtr graphAwareTermUniverse(const std::vector<std::string> &varNames, TranslationContext &ctx) {
+	const std::string graphVar =
+	    ctx.activeGraph().kind == GraphConstraint::Kind::Variable ? ctx.activeGraph().varName : std::string();
+
+	std::vector<RelNodePtr> arms;
+	arms.reserve(2);
+	// Two sweeps of the same wildcard pattern, one keeping the subject and one
+	// the object. Translated separately so each gets its own aliases; the cost is
+	// the same order as the default-graph path's, which also scans every table.
+	for (int keepSubject = 1; keepSubject >= 0; --keepSubject) {
+		TermSpec subjectSpec = varTermSpec(ctx.nextInternalVar());
+		TermSpec objectSpec = varTermSpec(ctx.nextInternalVar());
+		PredicateConstraint anyPredicate = variablePredicate(ctx.nextInternalVar());
+		RelNodePtr pattern = translateAtomicPattern(subjectSpec, anyPredicate, objectSpec, ctx);
+		reprojectTermArm(*pattern, keepSubject != 0 ? subjectSpec.varName : objectSpec.varName, varNames, graphVar);
+		arms.push_back(std::move(pattern));
+	}
+
+	RelNodePtr node(new UnionByNameNode());
+	UnionByNameNode &un = static_cast<UnionByNameNode &>(*node);
+	un.all = false; // the term universe is a set, not a bag
+	for (const auto &v : varNames) {
+		ColumnInfo col;
+		col.var = v;
+		col.nonNull = true;
+		col.term = meetAcrossArms(v, arms);
+		un.schema().push_back(col);
+	}
+	if (!graphVar.empty()) {
+		ColumnInfo col;
+		col.var = graphVar;
+		col.nonNull = true;
+		col.term = meetAcrossArms(graphVar, arms);
+		un.schema().push_back(col);
+	}
+	un.arms = std::move(arms);
+	return node;
+}
+
+} // namespace
+
 RelNodePtr allTermsRelation(const std::vector<std::string> &varNames, TranslationContext &ctx) {
+	if (!ctx.activeGraph().isDefault()) {
+		return graphAwareTermUniverse(varNames, ctx);
+	}
 	std::vector<RelNodePtr> arms;
 	arms.reserve(ctx.mapping().triplesMaps.size() * 2); // rough guess to avoid too many reallocs
 	for (const auto &tmPtr : ctx.mapping().triplesMaps) {
