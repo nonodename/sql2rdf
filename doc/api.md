@@ -334,6 +334,30 @@ public:
 | `GraphMap` | `rr:graphMap` | Generates named-graph IRIs. Like `SubjectMap`, exposes `valueTermMap()` returning the underlying `rr:template`/`rr:column`/`rr:constant` strategy, so a consumer can inspect the strategy's *shape* rather than only evaluate it. Unlike `SubjectMap`'s, it is non-pure (defaulting to `nullptr`) because `GraphMap` is directly derivable |
 | `ReferencingObjectMap` | `rr:refObjectMap` | Joins to a parent `TriplesMap`; prohibited in inside-out mode |
 
+### Named graphs (RDF generation)
+
+`rr:graph`/`rr:graphMap` may appear on a subject map or a predicate-object map. Per R2RML §12 the
+graphs that apply to a generated triple are the **union** of both sets, and `forEachGraphNode()`
+(`include/r2rml/GraphMap.h`) is the single place that resolves it — `TriplesMap::generateTriples` and
+`PredicateObjectMap::processRow` both write through it, once per applicable graph.
+
+Three rules follow, and each has a counterpart in the SPARQL-to-SQL direction (see "Supported SPARQL
+subset" below), because both directions must agree on what the graph set is:
+
+- **A triple lands in *every* graph of its set**, so a two-member set writes the same triple twice,
+  as two quads.
+- **`rr:defaultGraph` is a member of the set, not a suppressor.** A set of
+  `{rr:defaultGraph, ex:g1}` produces both a quad in `ex:g1` *and* a default-graph statement. An
+  empty set, or one where every entry resolves to NULL, is the default graph alone — an all-NULL set
+  is indistinguishable from an empty one under the spec's set formulation.
+- **`rr:class` (`rdf:type`) triples take only the *subject* map's graphs**, since they have no
+  predicate-object map to contribute any. A mapping with `rr:graph` on a predicate-object map but
+  not on its subject map therefore leaves its `rdf:type` triples in the default graph.
+
+⚠️ Only a **quad** output syntax can represent a named graph. Serialising as N-Triples or Turtle
+silently drops the graph component (and so writes the two-member case above as two identical
+triples); use `SERD_NQUADS` or `SERD_TRIG` — `-f nquads|trig` from the CLI.
+
 ### `ReferencingObjectMap`
 
 ```cpp
