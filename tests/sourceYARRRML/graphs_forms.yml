@@ -11,6 +11,8 @@ prefixes:
 #   m_po       - a per-`po` graph (map form, `g:` alias), which must land on
 #                that predicate-object map rather than on the subject map, and
 #                must NOT leak onto the sibling po entry that declares none.
+#   m_g_short  - mapping-level `g:` alias for `graph:`/`graphs:`, as a scalar
+#                CURIE.
 mappings:
   m_curie:
     sources:
@@ -35,6 +37,14 @@ mappings:
     po:
       - [ex:name, $(ENAME)]
     graphs: http://example.com/graph/dept/$(DEPTNO)
+
+  m_g_short:
+    sources:
+      - table: EMP
+    s: http://data.example.com/employee/$(EMPNO)
+    po:
+      - [ex:name, $(ENAME)]
+    g: ex:g
 
   m_po:
     sources:

@@ -847,7 +847,7 @@ NodeRef emitSubjectMap(r2rml::TripleCollector &collector, BlankNodeMinter &blank
 
 const std::set<std::string> &mappingKnownKeys() {
 	static const std::set<std::string> keys = {"sources", "source",           "subjects",         "subject", "s",
-	                                           "po",      "predicateobjects", "predicateObjects", "graphs",  "graph"};
+	                                           "po",      "predicateobjects", "predicateObjects", "graphs",  "graph", "g"};
 	return keys;
 }
 
@@ -862,7 +862,7 @@ void emitOneMapping(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, 
 	// triple this mapping generates (including the rr:class rdf:type triples) -
 	// per R2RML §12 a triple's graphs are the union of its subject map's and its
 	// predicate-object map's.
-	emitGraphMaps(collector, blanks, firstOf(mNode, {"graphs", "graph"}), subjectMap, name, prefixes);
+	emitGraphMaps(collector, blanks, firstOf(mNode, {"graphs", "graph", "g"}), subjectMap, name, prefixes);
 
 	for (YAML::const_iterator it = mNode.begin(); it != mNode.end(); ++it) {
 		std::string key = it->first.as<std::string>();

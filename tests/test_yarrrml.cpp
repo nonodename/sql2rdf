@@ -884,6 +884,17 @@ TEST_CASE("YARRRML graph with mixed text becomes an rr:template rr:graphMap") {
 	REQUIRE(graphIriOf(*tm->subjectMap->graphMaps[0], {{"DEPTNO", "10"}}) == "http://example.com/graph/dept/10");
 }
 
+TEST_CASE("YARRRML mapping-level g shorthand behaves like graph") {
+	YARRRMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "graphs_forms.yml", false);
+	REQUIRE(mapping.parseErrors.empty());
+
+	TriplesMap *tm = findById(mapping, "m_g_short");
+	REQUIRE(tm != nullptr);
+	REQUIRE(tm->subjectMap->graphMaps.size() == 1);
+	REQUIRE(graphIriOf(*tm->subjectMap->graphMaps[0]) == "http://example.com/ns#g");
+}
+
 TEST_CASE("YARRRML per-po graph lands on that predicate-object map only") {
 	YARRRMLParser parser;
 	R2RMLMapping mapping = parser.parse(SOURCE_YARRRML_DIR "graphs_forms.yml", false);
