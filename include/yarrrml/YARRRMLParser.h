@@ -6,6 +6,7 @@
 
 namespace r2rml {
 class R2RMLMapping;
+class TripleCollector;
 } // namespace r2rml
 
 namespace yarrrml {
@@ -43,6 +44,19 @@ public:
 	 * key) always throw std::runtime_error, regardless of this flag.
 	 */
 	r2rml::R2RMLMapping parse(const std::string &yarrrmlFilePath, bool ignoreNonFatalErrors = true) override;
+
+	/**
+	 * Read `yarrrmlFilePath` and translate it into statements fed into
+	 * `collector`, without building the object model. Used by
+	 * MappingParser::parseMultiple() to merge several mapping files (of
+	 * possibly different formats) into one collector before a single
+	 * parseCollected() call. parse() is equivalent to collectFile() on a
+	 * fresh collector followed by r2rml::R2RMLParser::parseCollected().
+	 *
+	 * Fatal problems (unreadable file, YAML syntax error, missing `mappings`
+	 * key) always throw std::runtime_error.
+	 */
+	void collectFile(const std::string &yarrrmlFilePath, r2rml::TripleCollector &collector);
 };
 
 } // namespace yarrrml

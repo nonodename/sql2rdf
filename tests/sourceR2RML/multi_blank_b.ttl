@@ -1,0 +1,6 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+ex:BlankTMB
+    rr:logicalTable [ rr:tableName "TABLE_BLANK_B" ];
+    rr:subjectMap [ rr:template "http://data.example.com/blank-b/{ID}" ].

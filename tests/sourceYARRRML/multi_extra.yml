@@ -1,0 +1,11 @@
+base: http://example.com/ns#
+prefixes:
+  ex: http://example.com/ns#
+
+mappings:
+  ExtraTM:
+    sources:
+      - table: EXTRA
+    s: http://data.example.com/extra/$(ID)
+    po:
+      - [ex:name, $(NAME)]

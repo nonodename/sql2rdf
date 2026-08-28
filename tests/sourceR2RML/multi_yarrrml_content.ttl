@@ -1,0 +1,11 @@
+base: http://example.com/ns#
+prefixes:
+  ex: http://example.com/ns#
+
+mappings:
+  ForcedTM:
+    sources:
+      - table: FORCED
+    s: http://data.example.com/forced/$(ID)
+    po:
+      - [ex:name, $(NAME)]

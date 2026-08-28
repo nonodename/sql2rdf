@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <serd/serd.h>
 
@@ -81,6 +82,31 @@ public:
 	/// building statements directly) to be merged with build-phase errors.
 	void addError(const std::string &message);
 
+	/**
+	 * Mark the start of a new source document feeding this collector.
+	 * Callers merging several mapping files into one collector (see
+	 * MappingParser::parseMultiple()) must call this once per file, in load
+	 * order, before feeding its statements. It scopes that file's blank-node
+	 * labels so they can't collide with another file's, and makes named
+	 * (non-blank) subject conflicts across sources detectable: once a subject
+	 * has been written by an earlier source, later sources' statements about
+	 * the same subject are dropped and a warning is recorded instead (see
+	 * addWarning()/R2RMLMapping::mergeWarnings). Callers that never call this
+	 * (e.g. single-file parse()/parseString()) are unaffected: everything is
+	 * implicitly one source.
+	 */
+	void beginSource(const std::string &sourceLabel);
+
+	/**
+	 * Record a warning that isn't a parse error: currently only "competing
+	 * definition ignored" messages produced by the beginSource()-driven
+	 * conflict detection above. Unlike addError()/parseErrors, warnings are
+	 * always surfaced (see R2RMLMapping::mergeWarnings) regardless of the
+	 * ignoreNonFatalErrors strict/lenient setting - "first source wins" is a
+	 * deliberate merge policy, not a parse failure to reject in strict mode.
+	 */
+	void addWarning(const std::string &message);
+
 private:
 	struct Impl;
 	std::unique_ptr<Impl> impl_;
@@ -120,6 +146,34 @@ public:
 	 * @throws std::runtime_error if no known format matches the extension.
 	 */
 	static std::unique_ptr<MappingParser> create(const std::string &mappingFilePath);
+
+	/**
+	 * Load and merge several mapping files (each independently R2RML Turtle
+	 * or YARRRML, chosen per-file by extension exactly as create() does,
+	 * unless overridden) into a single R2RMLMapping.
+	 *
+	 * Files are merged before the object model is built, so a TriplesMap in
+	 * one file may reference (e.g. via rr:parentTriplesMap) a TriplesMap
+	 * defined in another file in the list. If two files declare the same
+	 * (non-blank) subject, the definition from whichever file appears
+	 * earliest in `mappingFilePaths` wins outright; the later file's
+	 * statements about that subject are dropped and a message describing the
+	 * conflict is added to the returned mapping's mergeWarnings - always,
+	 * regardless of `ignoreNonFatalErrors`.
+	 *
+	 * @param ignoreNonFatalErrors  See parse().
+	 * @param forceYarrrml  If true, every file in `mappingFilePaths` is parsed
+	 *                      as YARRRML regardless of its extension (mirrors the
+	 *                      CLI's single-file -y flag). If false (default),
+	 *                      each file's format is auto-detected by extension,
+	 *                      so a mix of .ttl and YARRRML files can be merged
+	 *                      freely without this flag.
+	 *
+	 * @throws std::runtime_error if any file's format can't be determined, or
+	 *         for any fatal problem while reading/parsing an individual file.
+	 */
+	static R2RMLMapping parseMultiple(const std::vector<std::string> &mappingFilePaths,
+	                                  bool ignoreNonFatalErrors = true, bool forceYarrrml = false);
 };
 
 } // namespace r2rml

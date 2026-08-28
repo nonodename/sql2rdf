@@ -1,0 +1,9 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+ex:ConflictTM
+    rr:logicalTable [ rr:tableName "TABLE_B" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/b/{ID}";
+        rr:class ex:FromB;
+    ].

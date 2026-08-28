@@ -55,6 +55,16 @@ public:
 	                         bool ignoreNonFatalErrors = true);
 
 	/**
+	 * Read `mappingFilePath` as Turtle and feed its statements into
+	 * `collector`, without building the object model. Used by
+	 * MappingParser::parseMultiple() to merge several mapping files (of
+	 * possibly different formats) into one collector before a single
+	 * parseCollected() call. parse() is equivalent to collectFile() on a
+	 * fresh collector followed by parseCollected().
+	 */
+	void collectFile(const std::string &mappingFilePath, TripleCollector &collector);
+
+	/**
 	 * Build the R2RML object model from statements already gathered in
 	 * `collector`, without parsing any Turtle text. Intended for callers
 	 * (such as YARRRMLParser) that construct SerdNode-based statements

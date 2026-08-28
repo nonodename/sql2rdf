@@ -1,0 +1,11 @@
+base: http://example.com/ns#
+prefixes:
+  ex: http://example.com/ns#
+
+mappings:
+  ConflictTM:
+    sources:
+      - table: TABLE_C
+    s: http://data.example.com/c/$(ID)
+    po:
+      - [a, ex:FromC]

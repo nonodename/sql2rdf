@@ -58,6 +58,8 @@ public:
     virtual R2RMLMapping parse(const std::string& mappingFilePath, bool ignoreNonFatalErrors = true) = 0;
 
     static std::unique_ptr<MappingParser> create(const std::string& mappingFilePath);
+    static R2RMLMapping parseMultiple(const std::vector<std::string>& mappingFilePaths,
+                                       bool ignoreNonFatalErrors = true, bool forceYarrrml = false);
 };
 ```
 
@@ -65,10 +67,16 @@ public:
 |--------|-------------|
 | `parse(path, ignoreNonFatalErrors)` | Parses the mapping document at `path` and returns a populated `R2RMLMapping`. |
 | `create(path)` (static) | Instantiates the concrete parser appropriate for `path`'s extension: `.ttl` → `R2RMLParser`, `.yml`/`.yaml`/`.yarrrml` → `YARRRMLParser`. Throws `std::runtime_error` if no known format matches. |
+| `parseMultiple(paths, ignoreNonFatalErrors, forceYarrrml)` (static) | Loads and merges several mapping files — any mix of `.ttl` and YARRRML, format auto-detected per file unless `forceYarrrml` forces every file to YARRRML — into a single `R2RMLMapping`. Merging happens before the object model is built, so a `TriplesMap` in one file may reference (e.g. via `rr:parentTriplesMap`) a `TriplesMap` defined in another file in the list. If the same (non-blank) subject is defined in more than one file, the definition from whichever file appears **earliest** in `mappingFilePaths` wins outright; later files' statements about that subject are dropped and a message is added to the returned mapping's `mergeWarnings` — always, regardless of `ignoreNonFatalErrors`. |
 
-`MappingParser::create` is defined in `src/yarrrml/MappingParserFactory.cpp`, part of the `sql2rdf_yarrrml` library, not `sql2rdf_r2rml` — the core library must never depend on yaml-cpp/YARRRML (see layering rules in `CLAUDE.md`). Calling `create()` therefore requires linking `sql2rdf_yarrrml`, even if the resolved format turns out to be R2RML; consumers that only link `sql2rdf_r2rml` and never touch YARRRML should construct `R2RMLParser` directly instead.
+`MappingParser::create` and `MappingParser::parseMultiple` are defined in `src/yarrrml/MappingParserFactory.cpp`, part of the `sql2rdf_yarrrml` library, not `sql2rdf_r2rml` — the core library must never depend on yaml-cpp/YARRRML (see layering rules in `CLAUDE.md`). Calling either therefore requires linking `sql2rdf_yarrrml`, even if the resolved format(s) turn out to be R2RML; consumers that only link `sql2rdf_r2rml` and never touch YARRRML should construct `R2RMLParser` directly instead.
 
-`TripleCollector`, the shared triple-gathering helper used internally by both parsers, is also declared in `r2rml/MappingParser.h` (moved out of `r2rml/R2RMLParser.h`).
+`TripleCollector`, the shared triple-gathering helper used internally by both parsers, is also declared in `r2rml/MappingParser.h` (moved out of `r2rml/R2RMLParser.h`). Besides the `setBase`/`setPrefix`/`statement`/`addError` methods used while parsing a single document, it exposes two methods used by `parseMultiple()` to merge several documents into one collector before a single build phase:
+
+| Method | Description |
+|--------|-------------|
+| `beginSource(sourceLabel)` | Marks the start of a new source document feeding this collector; call once per file, in load order, before feeding its statements. Scopes that file's blank-node labels so they can't collide with another file's (many mapping tools/authors number blank nodes from 0 in every file), and makes named-subject conflicts across sources detectable — once a subject has been written by an earlier source, a later source's statements about the same subject are dropped and a warning is recorded instead. Callers that never call this (single-file `parse()`/`parseString()`) are unaffected. |
+| `addWarning(message)` | Records a warning that isn't a parse error — currently only the "competing definition ignored" messages the `beginSource()`-driven conflict detection produces. Unlike `addError()`/`parseErrors`, warnings are always surfaced via `R2RMLMapping::mergeWarnings` regardless of `ignoreNonFatalErrors`, since "first source wins" is a deliberate merge policy, not a parse failure to reject in strict mode. |
 
 ### `R2RMLParser`
 
@@ -81,12 +89,14 @@ class R2RMLParser : public MappingParser {
 public:
     R2RMLParser();
     R2RMLMapping parse(const std::string& mappingFilePath, bool ignoreNonFatalErrors = true) override;
+    void collectFile(const std::string& mappingFilePath, TripleCollector& collector);
 };
 ```
 
 | Method | Description |
 |--------|-------------|
 | `parse(path)` | Parses the Turtle file at `path` and returns a populated `R2RMLMapping`. Throws on parse error. |
+| `collectFile(path, collector)` | Reads `path` as Turtle and feeds its statements into `collector` without building the object model. Used by `MappingParser::parseMultiple()` to merge several mapping files (of possibly different formats) into one collector before a single `parseCollected()` call; `parse()` is equivalent to `collectFile()` on a fresh collector followed by `parseCollected()`. `YARRRMLParser` has the analogous `collectFile(path, collector)`. |
 
 ---
 
@@ -109,6 +119,8 @@ public:
 
     std::vector<std::unique_ptr<TriplesMap>> triplesMaps;
     SerdEnv* serdEnvironment;
+    std::vector<std::string> parseErrors;
+    std::vector<std::string> mergeWarnings;
 };
 ```
 
@@ -120,6 +132,11 @@ public:
 | `processDatabase(db, writer)` | Executes all triples maps against `db` and writes RDF triples to `writer`. |
 | `isValid()` | Returns `true` if all contained `TriplesMap` objects are valid. |
 | `isValidInsideOut()` | Returns `true` if the mapping contains no constructs prohibited in "inside-out" (SQL-export) mode: no `rr:LogicalTable`, `rr:sqlQuery`, `rr:refObjectMap`, or `rr:JoinCondition`. |
+
+| Field | Description |
+|-------|-------------|
+| `parseErrors` | Non-fatal parse issues (unresolved `parentTriplesMap`, unrecognised logical-table type, etc.), collected when the mapping was parsed with `ignoreNonFatalErrors=true`. Empty when no issues occurred or when the parser ran in strict mode. |
+| `mergeWarnings` | Populated by `MappingParser::parseMultiple()`: one entry per named subject defined by more than one of the merged files, naming the conflict and which file's definition was kept. Always populated regardless of `ignoreNonFatalErrors` — "first file wins" is a merge policy, not a parse failure. Empty for a mapping built from a single file. |
 
 ---
 

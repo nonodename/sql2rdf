@@ -72,6 +72,17 @@ public:
 	 * the parser was run in strict (throwing) mode.
 	 */
 	std::vector<std::string> parseErrors;
+
+	/**
+	 * Warnings produced when merging multiple mapping files (see
+	 * MappingParser::parseMultiple()): one entry per named subject that was
+	 * defined by more than one source file, naming the conflict and which
+	 * file's definition was kept. Unlike parseErrors, always populated
+	 * regardless of the ignoreNonFatalErrors setting used to build this
+	 * mapping - "first file wins" is a deliberate merge policy, not a parse
+	 * failure. Empty for a mapping built from a single file.
+	 */
+	std::vector<std::string> mergeWarnings;
 };
 
 } // namespace r2rml

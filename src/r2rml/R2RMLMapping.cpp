@@ -14,7 +14,8 @@ namespace r2rml {
 R2RMLMapping::R2RMLMapping() = default;
 
 R2RMLMapping::R2RMLMapping(R2RMLMapping &&other) noexcept
-    : triplesMaps(std::move(other.triplesMaps)), parseErrors(std::move(other.parseErrors)) {
+    : triplesMaps(std::move(other.triplesMaps)), parseErrors(std::move(other.parseErrors)),
+      mergeWarnings(std::move(other.mergeWarnings)) {
 	this->serdEnvironment = other.serdEnvironment;
 	other.serdEnvironment = nullptr;
 }
@@ -26,6 +27,7 @@ R2RMLMapping &R2RMLMapping::operator=(R2RMLMapping &&other) noexcept {
 		}
 		triplesMaps = std::move(other.triplesMaps);
 		parseErrors = std::move(other.parseErrors);
+		mergeWarnings = std::move(other.mergeWarnings);
 		this->serdEnvironment = other.serdEnvironment;
 		other.serdEnvironment = nullptr;
 	}
@@ -85,6 +87,12 @@ std::ostream &operator<<(std::ostream &os, const R2RMLMapping &m) {
 		os << "\nParse errors (" << m.parseErrors.size() << "):\n";
 		for (const auto &e : m.parseErrors) {
 			os << "  - " << e << "\n";
+		}
+	}
+	if (!m.mergeWarnings.empty()) {
+		os << "\nMerge warnings (" << m.mergeWarnings.size() << "):\n";
+		for (const auto &w : m.mergeWarnings) {
+			os << "  - " << w << "\n";
 		}
 	}
 	return os;

@@ -1,0 +1,19 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+ex:EmpTM
+    rr:logicalTable [ rr:tableName "EMP" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/employee/{EMPNO}";
+        rr:class ex:Employee;
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:department;
+        rr:objectMap [
+            rr:parentTriplesMap ex:DeptTM;
+            rr:joinCondition [
+                rr:child "DEPTNO";
+                rr:parent "DEPTNO";
+            ];
+        ];
+    ].

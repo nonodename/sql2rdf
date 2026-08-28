@@ -35,6 +35,7 @@
 #include <cstdio>
 #include <map>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -136,16 +137,20 @@ using TripleStore = std::map<std::string, PredMap>;
 // Node-expansion helper
 // ---------------------------------------------------------------------------
 
-/// Convert a SerdNode to an absolute URI string (or "_:<id>" for blank nodes).
+/// Convert a SerdNode to an absolute URI string (or "_:<id>" for blank nodes,
+/// tagged with `blankScopePrefix` so that blank-node labels from different
+/// merged source files - which commonly reuse the same labels, e.g. "_:b0" -
+/// can't collide; see TripleCollector::beginSource()).
 /// CURIEs are expanded using `env`; relative URIs are resolved against the base.
 /// Returns an empty string if the node cannot be represented.
-static std::string expandNode(SerdEnv *env, const SerdNode *node) {
+static std::string expandNode(SerdEnv *env, const SerdNode *node, const std::string &blankScopePrefix = "") {
 	if (!node || node->type == SERD_NOTHING) {
 		return {};
 	}
 
 	if (node->type == SERD_BLANK) {
-		return std::string("_:") + std::string(reinterpret_cast<const char *>(node->buf), node->n_bytes);
+		return std::string("_:") + blankScopePrefix +
+		       std::string(reinterpret_cast<const char *>(node->buf), node->n_bytes);
 	}
 
 	// URI or CURIE – ask the environment to expand/resolve
@@ -173,6 +178,23 @@ struct TripleCollector::Impl {
 	TripleStore triples;
 	std::vector<std::string> errors;
 
+	// Multi-source merge bookkeeping (see TripleCollector::beginSource()).
+	// A collector fed by a single source (the common case: single-file
+	// parse()/parseString(), which never call beginSource()) simply never
+	// populates these beyond their defaults, so behaviour there is unchanged.
+	std::vector<std::string> sourceLabels;
+	int currentScope {0};
+	std::map<std::string, int> subjectOwner;
+	std::set<std::string> warnedConflicts;
+	std::vector<std::string> warnings;
+
+	std::string blankScopePrefix() const {
+		if (sourceLabels.empty()) {
+			return {};
+		}
+		return "s" + std::to_string(currentScope) + "_";
+	}
+
 	~Impl() {
 		if (env) {
 			serd_env_free(env);
@@ -195,16 +217,35 @@ void TripleCollector::setPrefix(const SerdNode *name, const SerdNode *uri) {
 
 void TripleCollector::statement(const SerdNode *subject, const SerdNode *predicate, const SerdNode *object,
                                 const SerdNode *objectDatatype, const SerdNode *objectLang) {
-	std::string subjKey = expandNode(impl_->env, subject);
+	const std::string blankScopePrefix = impl_->blankScopePrefix();
+	std::string subjKey = expandNode(impl_->env, subject, blankScopePrefix);
 	std::string predKey = expandNode(impl_->env, predicate);
 	if (subjKey.empty() || predKey.empty()) {
 		return;
 	}
 
+	// Named-subject conflict detection across merged sources (see
+	// beginSource()): blank subjects are always scope-tagged uniquely above,
+	// so they never reach this check.
+	if (subject->type != SERD_BLANK) {
+		auto ownerIt = impl_->subjectOwner.find(subjKey);
+		if (ownerIt == impl_->subjectOwner.end()) {
+			impl_->subjectOwner.emplace(subjKey, impl_->currentScope);
+		} else if (ownerIt->second != impl_->currentScope) {
+			std::string conflictTag = subjKey + "\x1f" + std::to_string(impl_->currentScope);
+			if (impl_->warnedConflicts.insert(conflictTag).second) {
+				impl_->warnings.push_back(
+				    "competing definition of <" + subjKey + "> in '" + impl_->sourceLabels[impl_->currentScope] +
+				    "' ignored (kept definition from '" + impl_->sourceLabels[ownerIt->second] + "')");
+			}
+			return;
+		}
+	}
+
 	ObjValue obj;
 	if (object->type == SERD_BLANK) {
 		obj.type = ObjType::Blank;
-		obj.value = std::string(reinterpret_cast<const char *>(object->buf), object->n_bytes);
+		obj.value = blankScopePrefix + std::string(reinterpret_cast<const char *>(object->buf), object->n_bytes);
 	} else if (object->type == SERD_LITERAL) {
 		obj.type = ObjType::Literal;
 		obj.value = std::string(reinterpret_cast<const char *>(object->buf), object->n_bytes);
@@ -224,6 +265,15 @@ void TripleCollector::statement(const SerdNode *subject, const SerdNode *predica
 
 void TripleCollector::addError(const std::string &message) {
 	impl_->errors.push_back(message);
+}
+
+void TripleCollector::beginSource(const std::string &sourceLabel) {
+	impl_->sourceLabels.push_back(sourceLabel);
+	impl_->currentScope = static_cast<int>(impl_->sourceLabels.size()) - 1;
+}
+
+void TripleCollector::addWarning(const std::string &message) {
+	impl_->warnings.push_back(message);
 }
 
 // ---------------------------------------------------------------------------
@@ -860,12 +910,10 @@ static R2RMLMapping buildMappingFromTriples(TripleStore &triples, SerdEnv *env, 
 
 R2RMLParser::R2RMLParser() = default;
 
-R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreNonFatalErrors) {
+void R2RMLParser::collectFile(const std::string &mappingFilePath, TripleCollector &collector) {
 	// -----------------------------------------------------------------------
 	// Phase 1 – collect all triples via Serd
 	// -----------------------------------------------------------------------
-	TripleCollector collector;
-
 	SerdReader *reader =
 	    serd_reader_new(SERD_TURTLE, &collector, nullptr, cbBase, cbPrefix, cbStatement, /*end_sink=*/nullptr);
 	serd_reader_set_error_sink(reader, cbError, &collector);
@@ -887,7 +935,11 @@ R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreN
 	}
 
 	serd_reader_free(reader);
+}
 
+R2RMLMapping R2RMLParser::parse(const std::string &mappingFilePath, bool ignoreNonFatalErrors) {
+	TripleCollector collector;
+	collectFile(mappingFilePath, collector);
 	return parseCollected(collector, ignoreNonFatalErrors);
 }
 
@@ -916,8 +968,10 @@ R2RMLMapping R2RMLParser::parseCollected(TripleCollector &collector, bool ignore
 	SerdEnv *env = collector.impl_->env; // transfer ownership out of the collector
 	collector.impl_->env = nullptr;
 
-	return buildMappingFromTriples(collector.impl_->triples, env, std::move(collector.impl_->errors),
-	                               ignoreNonFatalErrors);
+	R2RMLMapping mapping = buildMappingFromTriples(collector.impl_->triples, env, std::move(collector.impl_->errors),
+	                                               ignoreNonFatalErrors);
+	mapping.mergeWarnings = std::move(collector.impl_->warnings);
+	return mapping;
 }
 
 } // namespace r2rml

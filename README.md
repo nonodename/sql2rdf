@@ -259,8 +259,15 @@ Options:
                        quad formats (nquads, trig) can represent named
                        graphs, so rr:graph/rr:graphMap is silently dropped
                        by ntriples and turtle.
-  -y                   Force the mapping file to be parsed as YARRRML,
-                       regardless of its extension
+  -m <file>            Additional mapping file to merge in (repeatable). Files
+                       are merged before mapping is applied, so a TriplesMap in
+                       one file may reference (e.g. via rr:parentTriplesMap) a
+                       TriplesMap defined in another; a mix of .ttl and YARRRML
+                       files can be merged freely. The positional mapping file
+                       argument is always loaded first, so it wins any conflict
+                       (same subject defined in more than one file).
+  -y                   Force the mapping file(s) to be parsed as YARRRML,
+                       regardless of their extension
   -P                   Print the parsed mapping to stderr
   -Q <file.rq>         Parse a SPARQL query file and print its AST to
                        stdout, then exit (bypasses the mapping/database/
@@ -280,6 +287,8 @@ Options:
                        has no effect on the SQL's meaning
   -h                   Show this help message
 ```
+
+A mapping can be split across multiple files with repeated `-m <file>` flags — useful once a mapping grows past a handful of tables, and files don't all need to be the same format (mix `.ttl` and YARRRML freely). Files are merged before the mapping is applied, so a `TriplesMap` in one file can join to a `TriplesMap` defined in another (e.g. via `rr:parentTriplesMap`). If two files define the same subject, the file loaded **first** wins outright (the positional mapping-file argument, then each `-m` in the order given) and a `Warning: competing definition of <...> ... ignored` line is printed to stderr — unconditionally, without needing `-P`.
 
 `-Q` and `-T` are independent, mutually-exclusive entry points that bypass the mapping/database/output pipeline used by the default R2RML/YARRRML→RDF conversion above:
 

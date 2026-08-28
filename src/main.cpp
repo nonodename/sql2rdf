@@ -23,7 +23,6 @@
 #include "sparql2sql/Translator.h"
 #include "sparql2sql/TypeCatalog.h"
 #include "sql2rdf/TypeCatalogLoader.h"
-#include "yarrrml/YARRRMLParser.h"
 
 static void printHelp(const char *programName) {
 	std::cerr << "Usage: " << programName << " [options] <mapping.ttl|mapping.yml> <database.db> <output.nt>\n"
@@ -42,8 +41,15 @@ static void printHelp(const char *programName) {
 	          << "                       quad formats (nquads, trig) can represent named\n"
 	          << "                       graphs, so rr:graph/rr:graphMap is silently dropped\n"
 	          << "                       by ntriples and turtle.\n"
-	          << "  -y                   Force the mapping file to be parsed as YARRRML,\n"
-	          << "                       regardless of its extension\n"
+	          << "  -m <file>            Additional mapping file to merge in (repeatable). Files\n"
+	          << "                       are merged before mapping is applied, so a TriplesMap in\n"
+	          << "                       one file may reference (e.g. via rr:parentTriplesMap) a\n"
+	          << "                       TriplesMap defined in another; a mix of .ttl and YARRRML\n"
+	          << "                       files can be merged freely. The positional mapping file\n"
+	          << "                       argument is always loaded first, so it wins any conflict\n"
+	          << "                       (same subject defined in more than one file).\n"
+	          << "  -y                   Force the mapping file(s) to be parsed as YARRRML,\n"
+	          << "                       regardless of their extension\n"
 	          << "  -P                   Print the parsed mapping to stderr\n"
 	          << "  -Q <file.rq>         Parse a SPARQL query file and print its AST to\n"
 	          << "                       stdout, then exit (bypasses the mapping/database/\n"
@@ -74,6 +80,7 @@ int main(int argc, char *argv[]) {
 	bool forceYarrrml = false;
 	SerdSyntax outputFormat = SERD_NTRIPLES;
 	const char *mappingFile = nullptr;
+	std::vector<std::string> additionalMappingFiles;
 	const char *databaseFile = nullptr;
 	const char *outputFile = nullptr;
 	const char *sparqlQueryFile = nullptr;
@@ -89,6 +96,12 @@ int main(int argc, char *argv[]) {
 			printMapping = true;
 		} else if (std::strcmp(argv[i], "-y") == 0) {
 			forceYarrrml = true;
+		} else if (std::strcmp(argv[i], "-m") == 0) {
+			if (++i >= argc) {
+				std::cerr << "Error: -m requires a mapping file argument\n";
+				return 1;
+			}
+			additionalMappingFiles.emplace_back(argv[i]);
 		} else if (std::strcmp(argv[i], "-Q") == 0) {
 			if (++i >= argc) {
 				std::cerr << "Error: -Q requires a SPARQL query file argument\n";
@@ -174,12 +187,13 @@ int main(int argc, char *argv[]) {
 			return 1;
 		}
 
+		std::vector<std::string> mappingFiles;
+		mappingFiles.emplace_back(mappingFile);
+		mappingFiles.insert(mappingFiles.end(), additionalMappingFiles.begin(), additionalMappingFiles.end());
+
 		r2rml::R2RMLMapping mapping;
 		try {
-			std::unique_ptr<r2rml::MappingParser> parser =
-			    forceYarrrml ? std::unique_ptr<r2rml::MappingParser>(new yarrrml::YARRRMLParser())
-			                 : r2rml::MappingParser::create(mappingFile);
-			mapping = parser->parse(mappingFile);
+			mapping = r2rml::MappingParser::parseMultiple(mappingFiles, /*ignoreNonFatalErrors=*/true, forceYarrrml);
 		} catch (const std::exception &e) {
 			std::cerr << "Error: failed to parse mapping '" << mappingFile << "': " << e.what() << "\n";
 			return 1;
@@ -187,6 +201,9 @@ int main(int argc, char *argv[]) {
 
 		if (printMapping) {
 			std::cerr << mapping << "\n";
+		}
+		for (const auto &w : mapping.mergeWarnings) {
+			std::cerr << "Warning: " << w << "\n";
 		}
 
 		if (!mapping.isValid()) {
@@ -282,12 +299,13 @@ int main(int argc, char *argv[]) {
 	// Parse and validate the mapping (R2RML Turtle or YARRRML YAML, chosen by
 	// file extension unless -y forces YARRRML).
 	// -------------------------------------------------------------------------
+	std::vector<std::string> mappingFiles;
+	mappingFiles.emplace_back(mappingFile);
+	mappingFiles.insert(mappingFiles.end(), additionalMappingFiles.begin(), additionalMappingFiles.end());
+
 	r2rml::R2RMLMapping mapping;
 	try {
-		std::unique_ptr<r2rml::MappingParser> parser =
-		    forceYarrrml ? std::unique_ptr<r2rml::MappingParser>(new yarrrml::YARRRMLParser())
-		                 : r2rml::MappingParser::create(mappingFile);
-		mapping = parser->parse(mappingFile);
+		mapping = r2rml::MappingParser::parseMultiple(mappingFiles, /*ignoreNonFatalErrors=*/true, forceYarrrml);
 	} catch (const std::exception &e) {
 		std::cerr << "Error: failed to parse mapping '" << mappingFile << "': " << e.what() << "\n";
 		return 1;
@@ -295,6 +313,9 @@ int main(int argc, char *argv[]) {
 
 	if (printMapping) {
 		std::cerr << mapping << "\n";
+	}
+	for (const auto &w : mapping.mergeWarnings) {
+		std::cerr << "Warning: " << w << "\n";
 	}
 
 	if (!mapping.isValid()) {

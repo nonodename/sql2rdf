@@ -1015,15 +1015,19 @@ bool YARRRMLParser::hasYarrrmlExtension(const std::string &path) {
 	return false;
 }
 
-r2rml::R2RMLMapping YARRRMLParser::parse(const std::string &yarrrmlFilePath, bool ignoreNonFatalErrors) {
+void YARRRMLParser::collectFile(const std::string &yarrrmlFilePath, r2rml::TripleCollector &collector) {
 	std::string yamlText = readFileToString(yarrrmlFilePath);
 	std::string baseUri = computeFileBaseUri(yarrrmlFilePath);
 
-	r2rml::TripleCollector collector;
 	SerdNode base = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(baseUri.c_str()));
 	collector.setBase(&base);
 
 	emitYarrrmlDocument(yamlText, collector);
+}
+
+r2rml::R2RMLMapping YARRRMLParser::parse(const std::string &yarrrmlFilePath, bool ignoreNonFatalErrors) {
+	r2rml::TripleCollector collector;
+	collectFile(yarrrmlFilePath, collector);
 
 	r2rml::R2RMLParser parser;
 	return parser.parseCollected(collector, ignoreNonFatalErrors);
