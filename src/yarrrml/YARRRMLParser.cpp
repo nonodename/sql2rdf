@@ -846,8 +846,8 @@ NodeRef emitSubjectMap(r2rml::TripleCollector &collector, BlankNodeMinter &blank
 }
 
 const std::set<std::string> &mappingKnownKeys() {
-	static const std::set<std::string> keys = {"sources", "source",           "subjects",         "subject", "s",
-	                                           "po",      "predicateobjects", "predicateObjects", "graphs",  "graph", "g"};
+	static const std::set<std::string> keys = {"sources",          "source",           "subjects", "subject", "s", "po",
+	                                           "predicateobjects", "predicateObjects", "graphs",   "graph",   "g"};
 	return keys;
 }
 
