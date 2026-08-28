@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <cstddef>
-#include <cstdio>
 #include <ctime>
 #include <map>
 #include <set>
@@ -337,8 +336,7 @@ public:
 			gmtime_r(&t, &utc);
 #endif
 			char buf[32];
-			std::snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d", utc.tm_year + 1900, utc.tm_mon + 1,
-			              utc.tm_mday, utc.tm_hour, utc.tm_min, utc.tm_sec);
+			std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &utc);
 			nowLiteral_ = buf;
 		}
 		return nowLiteral_;
