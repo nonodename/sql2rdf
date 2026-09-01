@@ -92,22 +92,22 @@ namespace {
 
 class TestGraphMap : public GraphMap {
 public:
-	SerdNode generateRDFTerm(const SQLRow & /*row*/, const SerdEnv & /*env*/) const override {
-		return SERD_NODE_NULL;
+	void generateRDFTerm(const SQLRow & /*row*/, rdf::Term &out) const override {
+		out.clear();
 	}
 };
 
 class TestObjectMap : public ObjectMap {
 public:
-	SerdNode generateRDFTerm(const SQLRow & /*row*/, const SerdEnv & /*env*/) const override {
-		return SERD_NODE_NULL;
+	void generateRDFTerm(const SQLRow & /*row*/, rdf::Term &out) const override {
+		out.clear();
 	}
 };
 
 class TestPredicateMap : public PredicateMap {
 public:
-	SerdNode generateRDFTerm(const SQLRow & /*row*/, const SerdEnv & /*env*/) const override {
-		return SERD_NODE_NULL;
+	void generateRDFTerm(const SQLRow & /*row*/, rdf::Term &out) const override {
+		out.clear();
 	}
 };
 
@@ -117,11 +117,12 @@ class TestValueSubjectMap : public SubjectMap {
 public:
 	std::unique_ptr<TermMap> valueMap;
 
-	SerdNode generateRDFTerm(const SQLRow &row, const SerdEnv &env) const override {
+	void generateRDFTerm(const SQLRow &row, rdf::Term &out) const override {
 		if (valueMap) {
-			return valueMap->generateRDFTerm(row, env);
+			valueMap->generateRDFTerm(row, out);
+			return;
 		}
-		return SERD_NODE_NULL;
+		out.clear();
 	}
 
 	const TermMap *valueTermMap() const override {
@@ -136,8 +137,8 @@ public:
 	// the single-row override below (which would otherwise hide it).
 	using ReferencingObjectMap::generateRDFTerm;
 
-	SerdNode generateRDFTerm(const SQLRow & /*row*/, const SerdEnv & /*env*/) const override {
-		return SERD_NODE_NULL;
+	void generateRDFTerm(const SQLRow & /*row*/, rdf::Term &out) const override {
+		out.clear();
 	}
 };
 
@@ -167,8 +168,8 @@ public:
 	}
 };
 
-std::string nodeUri(const SerdNode &n) {
-	return std::string(reinterpret_cast<const char *>(n.buf), n.n_bytes);
+std::string nodeUri(const rdf::Term &t) {
+	return t.lexical();
 }
 
 // Run TriplesMap::generateTriples (or PredicateObjectMap::processRow) and
@@ -346,7 +347,8 @@ TEST_CASE("TemplateTermMap percent-encodes reserved characters in column values"
 	SerdEnv *env = serd_env_new(nullptr);
 
 	auto row = makeRow({{"NAME", StringSQLValue(std::string("a b/c"))}});
-	SerdNode node = tt.generateRDFTerm(row, *env);
+	rdf::Term node;
+	tt.generateRDFTerm(row, node);
 
 	REQUIRE(nodeUri(node) == "http://data.example.com/name/a%20b%2Fc");
 	serd_env_free(env);
@@ -357,7 +359,8 @@ TEST_CASE("TemplateTermMap leaves unreserved characters untouched") {
 	SerdEnv *env = serd_env_new(nullptr);
 
 	auto row = makeRow({{"NAME", StringSQLValue(std::string("Abc-123_x.y~z"))}});
-	SerdNode node = tt.generateRDFTerm(row, *env);
+	rdf::Term node;
+	tt.generateRDFTerm(row, node);
 
 	REQUIRE(nodeUri(node) == "http://data.example.com/name/Abc-123_x.y~z");
 	serd_env_free(env);
@@ -372,9 +375,10 @@ TEST_CASE("TemplateTermMap does not percent-encode substituted values for rr:Bla
 	SerdEnv *env = serd_env_new(nullptr);
 
 	auto row = makeRow({{"NID", StringSQLValue(std::string("a b/c"))}});
-	SerdNode node = tt.generateRDFTerm(row, *env);
+	rdf::Term node;
+	tt.generateRDFTerm(row, node);
 
-	REQUIRE(node.type == SERD_BLANK);
+	REQUIRE(node.isBlankNode());
 	REQUIRE(nodeUri(node) == "notea b/c");
 	serd_env_free(env);
 }
@@ -387,9 +391,10 @@ TEST_CASE("TemplateTermMap does not percent-encode substituted values for rr:Lit
 	SerdEnv *env = serd_env_new(nullptr);
 
 	auto row = makeRow({{"NID", StringSQLValue(std::string("a b/c"))}});
-	SerdNode node = tt.generateRDFTerm(row, *env);
+	rdf::Term node;
+	tt.generateRDFTerm(row, node);
 
-	REQUIRE(node.type == SERD_LITERAL);
+	REQUIRE(node.isLiteral());
 	REQUIRE(nodeUri(node) == "note-a b/c");
 	serd_env_free(env);
 }
@@ -401,7 +406,8 @@ TEST_CASE("TemplateTermMap malformed template (unmatched '{') truncates graceful
 	SerdEnv *env = serd_env_new(nullptr);
 
 	auto row = makeRow({{"NAME", StringSQLValue(std::string("SMITH"))}});
-	SerdNode node = tt.generateRDFTerm(row, *env);
+	rdf::Term node;
+	tt.generateRDFTerm(row, node);
 
 	REQUIRE(nodeUri(node) == "http://data.example.com/");
 	serd_env_free(env);
@@ -474,8 +480,7 @@ TEST_CASE("PredicateObjectMap::processRow falls back to an internal Serd environ
 
 	auto row = makeRow({{"NAME", StringSQLValue(std::string("SMITH"))}});
 	MockSQLConnection conn;
-	const uint8_t subjUri[] = "http://example.com/subj/1";
-	SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
+	const rdf::Term subject = rdf::Term::iri("http://example.com/subj/1");
 
 	std::string out =
 	    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn, {}); });
@@ -504,8 +509,7 @@ TEST_CASE("PredicateObjectMap::processRow: literal with a language tag never get
 
 	auto row = makeRow({{"COUNT", StringSQLValue(42)}});
 	MockSQLConnection conn;
-	const uint8_t subjUri[] = "http://example.com/subj/1";
-	SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
+	const rdf::Term subject = rdf::Term::iri("http://example.com/subj/1");
 
 	std::string out =
 	    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn, {}); });
@@ -532,8 +536,7 @@ TEST_CASE("PredicateObjectMap::processRow skips a ReferencingObjectMap whose par
 
 	MapSQLRow row;
 	MockSQLConnection conn;
-	const uint8_t subjUri[] = "http://example.com/subj/1";
-	SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
+	const rdf::Term subject = rdf::Term::iri("http://example.com/subj/1");
 
 	std::string out =
 	    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn, {}); });
@@ -714,19 +717,17 @@ TEST_CASE("ReferencingObjectMap::getJoinedRows filters out rows that fail the jo
 
 TEST_CASE("ReferencingObjectMap::generateRDFTerm(child,parent) returns null without a resolved parent") {
 	TestReferencingObjectMap rom;
-	SerdEnv *env = serd_env_new(nullptr);
 	MapSQLRow childRow;
 	MapSQLRow parentRow;
 
-	SerdNode result = rom.generateRDFTerm(childRow, parentRow, *env);
-	REQUIRE(serd_node_equals(&result, &SERD_NODE_NULL));
+	rdf::Term result;
+	rom.generateRDFTerm(childRow, parentRow, result);
+	REQUIRE(result.isNull());
 
 	TriplesMap parentWithoutSubjectMap; // subjectMap left null
 	rom.parentTriplesMap = &parentWithoutSubjectMap;
-	result = rom.generateRDFTerm(childRow, parentRow, *env);
-	REQUIRE(serd_node_equals(&result, &SERD_NODE_NULL));
-
-	serd_env_free(env);
+	rom.generateRDFTerm(childRow, parentRow, result);
+	REQUIRE(result.isNull());
 }
 
 TEST_CASE("ReferencingObjectMap::print includes the resolved parent id and all join conditions") {
@@ -777,7 +778,8 @@ TEST_CASE("Parser: full rr:predicateMap/rr:objectMap forms, rr:object shortcut, 
 	SerdEnv *env = serd_env_new(nullptr);
 	auto empRow =
 	    makeRow({{"EMPNO", StringSQLValue(std::string("7369"))}, {"JOB", StringSQLValue(std::string("CLERK"))}});
-	SerdNode subjectTerm = tmFull->subjectMap->generateRDFTerm(empRow, *env);
+	rdf::Term subjectTerm;
+	tmFull->subjectMap->generateRDFTerm(empRow, subjectTerm);
 	REQUIRE(nodeUri(subjectTerm) == "7369");
 
 	// --- rr:predicateObjectMap using the full rr:predicateMap form ---------
@@ -821,7 +823,8 @@ TEST_CASE("Parser: full rr:predicateMap/rr:objectMap forms, rr:object shortcut, 
 
 	// --- Second TriplesMap: rr:subjectMap using rr:constant ----------------
 	REQUIRE(tmConst->subjectMap != nullptr);
-	SerdNode constSubject = tmConst->subjectMap->generateRDFTerm(MapSQLRow(), *env);
+	rdf::Term constSubject;
+	tmConst->subjectMap->generateRDFTerm(MapSQLRow(), constSubject);
 	REQUIRE(nodeUri(constSubject) == "http://example.com/ns#TheOneAndOnly");
 
 	serd_env_free(env);
@@ -1155,10 +1158,9 @@ TEST_CASE("Parsed ReferencingObjectMap's single-row generateRDFTerm returns the 
 	TermMap *rom = tm1->predicateObjectMaps[0]->objectMaps[0].get();
 	REQUIRE(dynamic_cast<ReferencingObjectMap *>(rom) != nullptr);
 
-	SerdEnv *env = serd_env_new(nullptr);
-	SerdNode result = rom->generateRDFTerm(MapSQLRow(), *env);
-	REQUIRE(serd_node_equals(&result, &SERD_NODE_NULL));
-	serd_env_free(env);
+	rdf::Term result;
+	rom->generateRDFTerm(MapSQLRow(), result);
+	REQUIRE(result.isNull());
 }
 
 // ---------------------------------------------------------------------------
@@ -1180,8 +1182,7 @@ TEST_CASE("PredicateObjectMap::processRow skips rows whose predicate or object t
 
 		auto row = makeRow({{"NAME", StringSQLValue(std::string("SMITH"))}});
 		MockSQLConnection conn;
-		const uint8_t subjUri[] = "http://example.com/subj/1";
-		SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
+		const rdf::Term subject = rdf::Term::iri("http://example.com/subj/1");
 
 		std::string out =
 		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn, {}); });
@@ -1198,8 +1199,7 @@ TEST_CASE("PredicateObjectMap::processRow skips rows whose predicate or object t
 
 		MapSQLRow row;
 		MockSQLConnection conn;
-		const uint8_t subjUri[] = "http://example.com/subj/1";
-		SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
+		const rdf::Term subject = rdf::Term::iri("http://example.com/subj/1");
 
 		std::string out =
 		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn, {}); });
@@ -1344,8 +1344,7 @@ TEST_CASE("PredicateObjectMap::processRow tolerates null map entries and null pa
 
 		auto row = makeRow({{"NAME", StringSQLValue(std::string("SMITH"))}});
 		MockSQLConnection conn;
-		const uint8_t subjUri[] = "http://example.com/subj/1";
-		SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
+		const rdf::Term subject = rdf::Term::iri("http://example.com/subj/1");
 
 		std::string out =
 		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn, {}); });
@@ -1375,8 +1374,7 @@ TEST_CASE("PredicateObjectMap::processRow tolerates null map entries and null pa
 		conn.addResult("DEPT", {makeRow({{"DEPTNO", StringSQLValue(std::string("10"))}})});
 
 		MapSQLRow row;
-		const uint8_t subjUri[] = "http://example.com/subj/1";
-		SerdNode subject = serd_node_from_string(SERD_URI, subjUri);
+		const rdf::Term subject = rdf::Term::iri("http://example.com/subj/1");
 
 		std::string out =
 		    captureNTriples([&](SerdWriter &writer) { pom.processRow(row, subject, writer, mapping, conn, {}); });

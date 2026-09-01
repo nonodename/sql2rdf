@@ -10,20 +10,17 @@ GraphMap::~GraphMap() = default;
 
 namespace {
 
-/// True if `node` is a URI equal to rr:defaultGraph, i.e. an explicit way of
+/// True if `term` is an IRI equal to rr:defaultGraph, i.e. an explicit way of
 /// saying "the default graph" rather than a real named graph.
-bool isDefaultGraphNode(const SerdNode &node) {
-	if (node.type != SERD_URI) {
-		return false;
-	}
-	return std::string(reinterpret_cast<const char *>(node.buf), node.n_bytes) == vocab::RR_DEFAULT_GRAPH;
+bool isDefaultGraphTerm(const rdf::Term &term) {
+	return term.isIri() && term.lexical() == vocab::RR_DEFAULT_GRAPH;
 }
 
 } // namespace
 
 void forEachGraphNode(const std::vector<std::unique_ptr<GraphMap>> &subjectGraphMaps,
-                      const std::vector<std::unique_ptr<GraphMap>> &pomGraphMaps, const SQLRow &row, const SerdEnv &env,
-                      const std::function<void(const SerdNode *)> &emit) {
+                      const std::vector<std::unique_ptr<GraphMap>> &pomGraphMaps, const SQLRow &row,
+                      const std::function<void(const rdf::Term &)> &emit) {
 	bool emittedNamed = false;
 	// An explicit rr:defaultGraph is a *member* of the target graph set, not a
 	// no-op: it must still produce a default-graph statement even when a sibling
@@ -31,19 +28,25 @@ void forEachGraphNode(const std::vector<std::unique_ptr<GraphMap>> &subjectGraph
 	// `emittedNamed` so the two can both hold for one triple.
 	bool wantsDefault = false;
 
+	// One reused term for the whole graph set: generateRDFTerm clears and
+	// refills it, preserving capacity across entries.
+	rdf::Term graph;
 	auto tryEmit = [&](const GraphMap *gm) {
 		if (!gm) {
 			return;
 		}
-		SerdNode node = gm->generateRDFTerm(row, env);
-		if (node.type == SERD_NOTHING) {
+		gm->generateRDFTerm(row, graph);
+		// An absent term here means "this graph map produced nothing for this
+		// row" - NOT "the default graph". Returning without setting either flag
+		// is what keeps those two apart.
+		if (graph.isNull()) {
 			return;
 		}
-		if (isDefaultGraphNode(node)) {
+		if (isDefaultGraphTerm(graph)) {
 			wantsDefault = true;
 			return;
 		}
-		emit(&node);
+		emit(graph);
 		emittedNamed = true;
 	};
 
@@ -58,7 +61,7 @@ void forEachGraphNode(const std::vector<std::unique_ptr<GraphMap>> &subjectGraph
 	// the "no graph maps declared" case, preserving triple-only output for
 	// mappings that never mention rr:graph).
 	if (wantsDefault || !emittedNamed) {
-		emit(nullptr);
+		emit(rdf::Term());
 	}
 }
 

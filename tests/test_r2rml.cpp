@@ -32,6 +32,7 @@
 #include "r2rml/PredicateMap.h"
 #include "r2rml/LogicalTable.h"
 #include "r2rml/ConstantTermMap.h"
+#include "r2rml/SerdTerm.h"
 #include "r2rml/MapSQLRow.h"
 #include "r2rml/SQLRow.h"
 #include "r2rml/GraphMap.h"
@@ -153,24 +154,21 @@ TEST_CASE("ConstantTermMap returns given node") {
 	const uint8_t uri[] = "http://example/";
 	SerdNode node = serd_node_from_string(SERD_URI, uri);
 	ConstantTermMap c(node);
-	SerdEnv *env1 = serd_env_new(nullptr);
-	SerdNode out = c.generateRDFTerm(MapSQLRow(), *env1);
-	// Use serd_node_equals to compare nodes
-	REQUIRE(serd_node_equals(&node, &out));
-	serd_env_free(env1);
+	rdf::Term out;
+	c.generateRDFTerm(MapSQLRow(), out);
+	REQUIRE(out == r2rml::termFromSerdNode(&node));
 }
 
 TEST_CASE("Column/Template term maps return default null node") {
 	ColumnTermMap ct("col");
 	TemplateTermMap tt("{col}");
-	SerdEnv *env2 = serd_env_new(nullptr);
+	rdf::Term cn;
+	rdf::Term tn;
+	ct.generateRDFTerm(MapSQLRow(), cn);
+	tt.generateRDFTerm(MapSQLRow(), tn);
 
-	SerdNode cn = ct.generateRDFTerm(MapSQLRow(), *env2);
-	SerdNode tn = tt.generateRDFTerm(MapSQLRow(), *env2);
-
-	REQUIRE(serd_node_equals(&cn, &SERD_NODE_NULL));
-	REQUIRE(serd_node_equals(&tn, &SERD_NODE_NULL));
-	serd_env_free(env2);
+	REQUIRE(cn.isNull());
+	REQUIRE(tn.isNull());
 }
 
 TEST_CASE("BaseTableOrView and R2RMLView defaults") {
@@ -255,8 +253,8 @@ TEST_CASE("TermMap isValid methods") {
 // Helpers for parsed-mapping tests
 // ---------------------------------------------------------------------------
 
-static std::string nodeUri(const SerdNode &n) {
-	return std::string(reinterpret_cast<const char *>(n.buf), n.n_bytes);
+static std::string nodeUri(const rdf::Term &t) {
+	return t.lexical();
 }
 
 static TriplesMap *findById(R2RMLMapping &m, const std::string &fragment) {
@@ -815,10 +813,10 @@ TEST_CASE("R2RML parser populates rr:graph on a subject map as a constant GraphM
 
 	SerdEnv *env = serd_env_new(nullptr);
 	MapSQLRow row;
-	SerdNode graphNode = sm->graphMaps[0]->generateRDFTerm(row, *env);
-	REQUIRE(graphNode.type == SERD_URI);
-	REQUIRE(std::string(reinterpret_cast<const char *>(graphNode.buf), graphNode.n_bytes) ==
-	        "http://example.com/graph/employees");
+	rdf::Term graphNode;
+	sm->graphMaps[0]->generateRDFTerm(row, graphNode);
+	REQUIRE(graphNode.isIri());
+	REQUIRE(graphNode.lexical() == "http://example.com/graph/employees");
 	serd_env_free(env);
 
 	// valueTermMap() exposes the delegated value strategy, so a consumer can
@@ -844,11 +842,10 @@ TEST_CASE("R2RML parser populates rr:graphMap on a predicate-object map as a tem
 
 	SerdEnv *env = serd_env_new(nullptr);
 	MapSQLRow row = r2rml::testing::makeRow({{"JOB", StringSQLValue(std::string("CLERK"))}});
-	SerdNode graphNode = poms[1]->graphMaps[0]->generateRDFTerm(row, *env);
-	REQUIRE(graphNode.type == SERD_URI);
-	REQUIRE(std::string(reinterpret_cast<const char *>(graphNode.buf), graphNode.n_bytes) ==
-	        "http://example.com/graph/jobs/CLERK");
-	serd_env_free(env);
+	rdf::Term graphNode;
+	poms[1]->graphMaps[0]->generateRDFTerm(row, graphNode);
+	REQUIRE(graphNode.isIri());
+	REQUIRE(graphNode.lexical() == "http://example.com/graph/jobs/CLERK");
 
 	// The template shape is visible through valueTermMap(), including the
 	// original template string - which is what lets sparql2sql invert a bound

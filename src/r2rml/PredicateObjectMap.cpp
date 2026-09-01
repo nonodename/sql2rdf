@@ -1,4 +1,5 @@
 #include "r2rml/PredicateObjectMap.h"
+#include "r2rml/SerdTerm.h"
 #include "r2rml/TermMap.h"
 #include "r2rml/ReferencingObjectMap.h"
 #include "r2rml/GraphMap.h"
@@ -15,27 +16,27 @@ namespace r2rml {
 PredicateObjectMap::PredicateObjectMap() = default;
 PredicateObjectMap::~PredicateObjectMap() = default;
 
-void PredicateObjectMap::processRow(const SQLRow &row, const SerdNode &subject, SerdWriter &rdfWriter,
-                                    const R2RMLMapping &mapping, SQLConnection &dbConnection,
+void PredicateObjectMap::processRow(const SQLRow &row, const rdf::Term &subject, SerdWriter &rdfWriter,
+                                    const R2RMLMapping & /*mapping*/, SQLConnection &dbConnection,
                                     const std::vector<std::unique_ptr<GraphMap>> &subjectGraphMaps) const {
-	const SerdEnv *env = mapping.serdEnvironment;
-	static SerdEnv *fallbackEnv = nullptr;
-	if (!env) {
-		if (!fallbackEnv) {
-			fallbackEnv = serd_env_new(nullptr);
-		}
-		env = fallbackEnv;
-	}
+	const SerdTermRef subjectNode(subject);
+
+	// Hoisted out of the loops: generateRDFTerm clears and refills these, and
+	// rdf::Term::clear() preserves capacity, so after the first few rows the
+	// per-row term generation stops allocating entirely.
+	rdf::Term predicate;
+	rdf::Term object;
 
 	// For each predicate/object combination, emit a triple.
 	for (const auto &predMap : predicateMaps) {
 		if (!predMap) {
 			continue;
 		}
-		SerdNode predicate = predMap->generateRDFTerm(row, *env);
-		if (predicate.type == SERD_NOTHING) {
-			continue; // null predicate – skip
+		predMap->generateRDFTerm(row, predicate);
+		if (predicate.isNull()) {
+			continue; // null predicate - skip
 		}
+		const SerdTermRef predicateNode(predicate);
 
 		for (const auto &objMap : objectMaps) {
 			if (!objMap) {
@@ -53,45 +54,43 @@ void PredicateObjectMap::processRow(const SQLRow &row, const SerdNode &subject, 
 				}
 				while (parentRows->next()) {
 					const SQLRow &parentRow = parentRows->getCurrentRow();
-					SerdNode object = rom->generateRDFTerm(row, parentRow, *env);
-					if (object.type == SERD_NOTHING) {
+					rom->generateRDFTerm(row, parentRow, object);
+					if (object.isNull()) {
 						continue;
 					}
-					forEachGraphNode(subjectGraphMaps, graphMaps, row, *env, [&](const SerdNode *graph) {
-						checkWriteStatus(serd_writer_write_statement(&rdfWriter, 0, graph, &subject, &predicate,
-						                                             &object, nullptr, nullptr));
+					const SerdTermRef objectNode(object);
+					forEachGraphNode(subjectGraphMaps, graphMaps, row, [&](const rdf::Term &graph) {
+						const SerdTermRef graphNode(graph);
+						checkWriteStatus(serd_writer_write_statement(&rdfWriter, 0, graphNode.value(),
+						                                             subjectNode.value(), predicateNode.value(),
+						                                             objectNode.value(), nullptr, nullptr));
 					});
 				}
 			} else {
 				// Regular term map.
-				SerdNode object = objMap->generateRDFTerm(row, *env);
-				if (object.type == SERD_NOTHING) {
-					continue; // null object – skip
+				objMap->generateRDFTerm(row, object);
+				if (object.isNull()) {
+					continue; // null object - skip
 				}
 
-				SerdNode datatypeNode = SERD_NODE_NULL;
-				SerdNode langNode = SERD_NODE_NULL;
-				const SerdNode *datatype = nullptr;
-				const SerdNode *lang = nullptr;
-				// dtIRI must outlive datatypeNode (whose buf points into it).
-				std::string dtIRI;
-
-				if (object.type == SERD_LITERAL && objMap->languageTag) {
-					langNode = serd_node_from_string(SERD_LITERAL,
-					                                 reinterpret_cast<const uint8_t *>(objMap->languageTag->c_str()));
-					lang = &langNode;
-				} else if (object.type == SERD_LITERAL) {
-					dtIRI = objMap->computeDatatypeIRI(row);
-					if (!dtIRI.empty()) {
-						datatypeNode =
-						    serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(dtIRI.c_str()));
-						datatype = &datatypeNode;
+				// The datatype and language now live ON the term, so the
+				// mutually-exclusive choice is made once here rather than being
+				// rebuilt as loose SerdNodes at the write site. rr:language wins
+				// over any datatype, matching R2RML and RDF 1.1.
+				if (object.isLiteral()) {
+					if (objMap->languageTag) {
+						object.setLang(*objMap->languageTag);
+					} else {
+						object.setDatatypeIri(objMap->computeDatatypeIRI(row));
 					}
 				}
 
-				forEachGraphNode(subjectGraphMaps, graphMaps, row, *env, [&](const SerdNode *graph) {
-					checkWriteStatus(serd_writer_write_statement(&rdfWriter, 0, graph, &subject, &predicate, &object,
-					                                             datatype, lang));
+				const SerdTermRef objectNode(object);
+				forEachGraphNode(subjectGraphMaps, graphMaps, row, [&](const rdf::Term &graph) {
+					const SerdTermRef graphNode(graph);
+					checkWriteStatus(serd_writer_write_statement(&rdfWriter, 0, graphNode.value(), subjectNode.value(),
+					                                             predicateNode.value(), objectNode.value(),
+					                                             objectNode.datatype(), objectNode.lang()));
 				});
 			}
 		}

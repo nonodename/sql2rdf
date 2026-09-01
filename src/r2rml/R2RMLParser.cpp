@@ -382,11 +382,12 @@ class ConcreteSubjectMap : public SubjectMap {
 public:
 	std::unique_ptr<TermMap> valueMap;
 
-	SerdNode generateRDFTerm(const SQLRow &row, const SerdEnv &env) const override {
+	void generateRDFTerm(const SQLRow &row, rdf::Term &out) const override {
 		if (valueMap) {
-			return valueMap->generateRDFTerm(row, env);
+			valueMap->generateRDFTerm(row, out);
+			return;
 		}
-		return SERD_NODE_NULL;
+		out.clear();
 	}
 
 	const TermMap *valueTermMap() const override {
@@ -438,11 +439,12 @@ class ConcreteGraphMap : public GraphMap {
 public:
 	std::unique_ptr<TermMap> valueMap;
 
-	SerdNode generateRDFTerm(const SQLRow &row, const SerdEnv &env) const override {
+	void generateRDFTerm(const SQLRow &row, rdf::Term &out) const override {
 		if (valueMap) {
-			return valueMap->generateRDFTerm(row, env);
+			valueMap->generateRDFTerm(row, out);
+			return;
 		}
-		return SERD_NODE_NULL;
+		out.clear();
 	}
 
 	const TermMap *valueTermMap() const override {
@@ -468,8 +470,8 @@ public:
 // ---------------------------------------------------------------------------
 class ConcreteReferencingObjectMap : public ReferencingObjectMap {
 public:
-	SerdNode generateRDFTerm(const SQLRow & /*row*/, const SerdEnv & /*env*/) const override {
-		return SERD_NODE_NULL; // use the two-row overload for actual generation
+	void generateRDFTerm(const SQLRow & /*row*/, rdf::Term &out) const override {
+		out.clear(); // use the two-row overload for actual generation
 	}
 };
 

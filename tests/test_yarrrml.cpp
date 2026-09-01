@@ -75,8 +75,8 @@ using yarrrml::YARRRMLParser;
 
 namespace {
 
-std::string nodeUri(const SerdNode &n) {
-	return std::string(reinterpret_cast<const char *>(n.buf), n.n_bytes);
+std::string nodeUri(const rdf::Term &t) {
+	return t.lexical();
 }
 
 TriplesMap *findById(R2RMLMapping &m, const std::string &fragment) {
@@ -120,9 +120,10 @@ std::string graphIriOf(const r2rml::GraphMap &gm, const std::map<std::string, st
 	r2rml::MapSQLRow row(std::move(cells));
 
 	SerdEnv *env = serd_env_new(nullptr);
-	SerdNode node = gm.generateRDFTerm(row, *env);
+	rdf::Term node;
+	gm.generateRDFTerm(row, node);
 	std::string out;
-	bool isUri = (node.type == SERD_URI);
+	bool isUri = (node.isIri());
 	if (isUri) {
 		out = nodeUri(node);
 	}
@@ -273,7 +274,7 @@ TEST_CASE("R2RML extension - rr:constant accepts a literal object") {
 	auto *cst = dynamic_cast<ConstantTermMap *>(tm->predicateObjectMaps[0]->objectMaps[0].get());
 	REQUIRE(cst != nullptr);
 	REQUIRE(cst->termType == TermType::Literal);
-	REQUIRE(cst->constantValue.type == SERD_LITERAL);
+	REQUIRE(cst->constantValue.isLiteral());
 	REQUIRE(nodeUri(cst->constantValue) == "active");
 }
 

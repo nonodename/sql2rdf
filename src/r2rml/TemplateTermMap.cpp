@@ -1,4 +1,5 @@
 #include "r2rml/TemplateTermMap.h"
+#include "r2rml/SerdTerm.h"
 #include "r2rml/SQLRow.h"
 #include "r2rml/SQLValue.h"
 
@@ -12,45 +13,46 @@ TemplateTermMap::TemplateTermMap(const std::string &templ) : templateString(temp
 
 TemplateTermMap::~TemplateTermMap() = default;
 
-SerdNode TemplateTermMap::generateRDFTerm(const SQLRow &row, const SerdEnv & /*env*/) const {
+void TemplateTermMap::generateRDFTerm(const SQLRow &row, rdf::Term &out) const {
 	// A template term map is an IRI unless rr:termType says otherwise (R2RML
 	// 7.4); the rr:BlankNode case takes the expanded string as the blank node
 	// identifier. R2RML 7.3 only prescribes percent-encoding of substituted
 	// values for rr:IRI: applying it to rr:Literal would corrupt the lexical
 	// form, and to rr:BlankNode could emit a '%' that BLANK_NODE_LABEL forbids.
-	SerdType nodeType = SERD_URI;
-	if (termType == TermType::BlankNode) {
-		nodeType = SERD_BLANK;
-	} else if (termType == TermType::Literal) {
-		nodeType = SERD_LITERAL;
-	}
-	const bool shouldPercentEncode = (nodeType == SERD_URI);
+	const rdf::TermKind kind = kindForTermType(termType);
+	const bool shouldPercentEncode = (kind == rdf::TermKind::Iri);
+
+	// clear() first, then append, then setKind() - the contract for building a
+	// term piecewise. clear() keeps the buffer's capacity, so expanding a
+	// template row after row does not reallocate; that is what replaces the
+	// mutable expanded_ member this used to append into.
+	out.clear();
+	std::string &expanded = out.mutableLexical();
 
 	// Expand {COLUMN} placeholders from the row.
-	expanded_.clear();
 	std::size_t i = 0;
 	const std::size_t n = templateString.size();
 	while (i < n) {
 		if (templateString[i] == '{') {
 			std::size_t end = templateString.find('}', i + 1);
 			if (end == std::string::npos) {
-				break; // malformed template – treat rest as literal
+				break; // malformed template - treat rest as literal
 			}
 			std::string colName = templateString.substr(i + 1, end - i - 1);
 			auto val = row.getValue(colName);
 			if (val->isNull()) {
-				return SERD_NODE_NULL; // required column is missing/null
+				out.clear();
+				return; // required column is missing/null - no term for this row
 			}
-			expanded_ += shouldPercentEncode ? percentEncode(val->asString()) : val->asString();
+			expanded += shouldPercentEncode ? percentEncode(val->asString()) : val->asString();
 			i = end + 1;
 		} else {
-			expanded_ += templateString[i];
+			expanded += templateString[i];
 			++i;
 		}
 	}
 
-	// Return a node whose buf points into expanded_ (no allocation).
-	return serd_node_from_string(nodeType, reinterpret_cast<const uint8_t *>(expanded_.c_str()));
+	out.setKind(kind);
 }
 
 std::ostream &TemplateTermMap::print(std::ostream &os) const {

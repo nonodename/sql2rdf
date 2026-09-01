@@ -117,6 +117,22 @@ void Term::assignLangLiteral(const std::string &lexical_form, const std::string 
 	lang_ = language_tag;
 }
 
+void Term::setDatatypeIri(const std::string &datatype_iri) {
+	if (kind_ != TermKind::Literal) {
+		return;
+	}
+	lang_.clear();
+	datatype_ = (datatype_iri == RDF_LANG_STRING) ? std::string() : datatype_iri;
+}
+
+void Term::setLang(const std::string &language_tag) {
+	if (kind_ != TermKind::Literal) {
+		return;
+	}
+	datatype_.clear();
+	lang_ = language_tag;
+}
+
 // ---------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------

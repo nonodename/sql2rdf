@@ -271,13 +271,10 @@ bool isStaticDefaultGraph(const r2rml::GraphMap &gm) {
 	if (constant == nullptr) {
 		return false;
 	}
-	SerdEnv *env = serd_env_new(nullptr);
-	r2rml::MapSQLRow empty;
-	SerdNode node = constant->generateRDFTerm(empty, *env);
-	bool isDefault = node.type == SERD_URI &&
-	                 std::string(reinterpret_cast<const char *>(node.buf), node.n_bytes) == kDefaultGraphIri;
-	serd_env_free(env);
-	return isDefault;
+	// Read the stored term directly. This used to allocate a throwaway SerdEnv
+	// and an empty MapSQLRow purely to satisfy generateRDFTerm's signature, and
+	// then string-compare the resulting node's raw bytes.
+	return constant->constantValue.isIri() && constant->constantValue.lexical() == kDefaultGraphIri;
 }
 
 // Whether a graph map's value is fixed at translation time (rr:constant), as

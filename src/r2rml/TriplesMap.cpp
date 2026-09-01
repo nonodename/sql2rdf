@@ -1,4 +1,5 @@
 #include "r2rml/TriplesMap.h"
+#include "r2rml/SerdTerm.h"
 #include "r2rml/LogicalTable.h"
 #include "r2rml/SubjectMap.h"
 #include "r2rml/GraphMap.h"
@@ -12,7 +13,7 @@
 
 namespace r2rml {
 
-static const uint8_t RDF_TYPE_URI[] = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+static const char RDF_TYPE_URI[] = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
 TriplesMap::TriplesMap() = default;
 TriplesMap::~TriplesMap() = default;
@@ -23,34 +24,25 @@ void TriplesMap::generateTriples(const SQLRow &row, SerdWriter &rdfWriter, const
 		return;
 	}
 
-	// Determine the Serd environment to use for term generation.
-	const SerdEnv *env = mapping.serdEnvironment;
-	// Fall back to a null-like check; all our nodes are absolute IRIs so env
-	// content rarely matters here, but we need a valid reference.
-	static SerdEnv *fallbackEnv = nullptr;
-	if (!env) {
-		if (!fallbackEnv) {
-			fallbackEnv = serd_env_new(nullptr);
-		}
-		env = fallbackEnv;
-	}
-
 	// Generate the subject node for this row.
-	SerdNode subject = subjectMap->generateRDFTerm(row, *env);
-	if (subject.type == SERD_NOTHING) {
-		return; // null subject – skip row
+	rdf::Term subject;
+	subjectMap->generateRDFTerm(row, subject);
+	if (subject.isNull()) {
+		return; // null subject - skip row
 	}
+	const SerdTermRef subjectNode(subject);
 
 	// Emit rdf:type triples for each rr:class. Only the subject map's own
-	// graph maps apply here – there is no predicate-object map involved.
+	// graph maps apply here - there is no predicate-object map involved.
 	static const std::vector<std::unique_ptr<GraphMap>> noGraphMaps;
 	if (!subjectMap->classIRIs.empty()) {
-		SerdNode rdfType = serd_node_from_string(SERD_URI, RDF_TYPE_URI);
+		const SerdTermRef rdfTypeNode(rdf::Term::iri(RDF_TYPE_URI));
 		for (const std::string &classIRI : subjectMap->classIRIs) {
-			SerdNode classNode = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(classIRI.c_str()));
-			forEachGraphNode(subjectMap->graphMaps, noGraphMaps, row, *env, [&](const SerdNode *graph) {
-				checkWriteStatus(serd_writer_write_statement(&rdfWriter, 0, graph, &subject, &rdfType, &classNode,
-				                                             nullptr, nullptr));
+			const SerdTermRef classNode(rdf::Term::iri(classIRI));
+			forEachGraphNode(subjectMap->graphMaps, noGraphMaps, row, [&](const rdf::Term &graph) {
+				const SerdTermRef graphNode(graph);
+				checkWriteStatus(serd_writer_write_statement(&rdfWriter, 0, graphNode.value(), subjectNode.value(),
+				                                             rdfTypeNode.value(), classNode.value(), nullptr, nullptr));
 			});
 		}
 	}

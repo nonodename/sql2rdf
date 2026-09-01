@@ -139,6 +139,20 @@ public:
 	void assignTypedLiteral(const std::string &lexical_form, const std::string &datatype_iri);
 	void assignLangLiteral(const std::string &lexical_form, const std::string &language_tag);
 
+	/// Attach a datatype to an existing literal, preserving its lexical form
+	/// and clearing any language tag. Ignored for a non-literal, where a
+	/// datatype is meaningless. An empty `datatype_iri` just removes the
+	/// datatype, leaving a plain literal.
+	///
+	/// This exists so callers that annotate a term after generating it (the
+	/// object position, where R2RML's rr:datatype and rr:language apply) do not
+	/// have to pass the term's own lexical() back into assignTypedLiteral().
+	void setDatatypeIri(const std::string &datatype_iri);
+
+	/// Attach a language tag to an existing literal, preserving its lexical
+	/// form and clearing any datatype. Ignored for a non-literal.
+	void setLang(const std::string &language_tag);
+
 	/// Mutable access to the lexical buffer, for callers that build the value
 	/// piecewise rather than handing over a finished string - TemplateTermMap's
 	/// placeholder expansion is the reason this exists.

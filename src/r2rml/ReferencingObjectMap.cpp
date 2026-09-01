@@ -82,13 +82,13 @@ std::unique_ptr<SQLResultSet> ReferencingObjectMap::getJoinedRows(SQLConnection 
 	return std::unique_ptr<SQLResultSet>(new VectorResultSet(std::move(matched)));
 }
 
-SerdNode ReferencingObjectMap::generateRDFTerm(const SQLRow & /*childRow*/, const SQLRow &parentRow,
-                                               const SerdEnv &env) const {
+void ReferencingObjectMap::generateRDFTerm(const SQLRow & /*childRow*/, const SQLRow &parentRow, rdf::Term &out) const {
 	if (!parentTriplesMap || !parentTriplesMap->subjectMap) {
-		return SERD_NODE_NULL;
+		out.clear();
+		return;
 	}
 
-	return parentTriplesMap->subjectMap->generateRDFTerm(parentRow, env);
+	parentTriplesMap->subjectMap->generateRDFTerm(parentRow, out);
 }
 
 std::ostream &ReferencingObjectMap::print(std::ostream &os) const {

@@ -46,17 +46,25 @@ public:
  *
  * The special rr:defaultGraph IRI denotes the default graph as a *member* of
  * that union, so an entry resolving to it contributes a default-graph
- * statement (`emit` called with a null graph pointer) alongside — not instead
+ * statement (`emit` called with an ABSENT term) alongside — not instead
  * of — any sibling entry that resolves to a real named graph.
  *
  * If the union is empty, or every entry resolves to a null term, `emit` is
- * likewise invoked once with a null graph pointer: an all-null set is
+ * likewise invoked once with an absent term: an all-null set is
  * indistinguishable from an empty one under R2RML's set formulation. This is
  * also what preserves quad-less output for mappings that don't use rr:graph
  * at all.
+ *
+ * NOTE the deliberate collapsing of two distinct conditions onto one signal.
+ * "This graph map produced no term" and "this triple belongs in the default
+ * graph" are different facts, but they reach `emit` the same way — as an
+ * absent term — because R2RML's set formulation makes them indistinguishable
+ * at the point of emission. The distinction is kept internally, in the
+ * separate wantsDefault/emittedNamed flags below; conflating those two is what
+ * would silently turn quads into triples or emit them twice.
  */
 void forEachGraphNode(const std::vector<std::unique_ptr<GraphMap>> &subjectGraphMaps,
-                      const std::vector<std::unique_ptr<GraphMap>> &pomGraphMaps, const SQLRow &row, const SerdEnv &env,
-                      const std::function<void(const SerdNode *)> &emit);
+                      const std::vector<std::unique_ptr<GraphMap>> &pomGraphMaps, const SQLRow &row,
+                      const std::function<void(const rdf::Term &)> &emit);
 
 } // namespace r2rml

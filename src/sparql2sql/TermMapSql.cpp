@@ -16,10 +16,11 @@ namespace sparql2sql {
 namespace {
 
 std::string constantTermMapText(const r2rml::ConstantTermMap &constant) {
-	if (constant.constantValue.buf == nullptr) {
-		return std::string();
-	}
-	return std::string(reinterpret_cast<const char *>(constant.constantValue.buf), constant.constantValue.n_bytes);
+	// NOTE this still discards the constant's KIND, so an IRI constant and a
+	// literal constant with the same text are indistinguishable downstream.
+	// That predates rdf::Term; the term now carries the kind, so the fix is to
+	// read constantValue.kind() here rather than inferring it from termType.
+	return constant.constantValue.lexical();
 }
 
 // Render a plain rr:column reference for comparison/projection. Wrapped in

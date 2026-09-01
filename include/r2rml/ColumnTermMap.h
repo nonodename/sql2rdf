@@ -14,7 +14,7 @@ public:
 	explicit ColumnTermMap(const std::string &column);
 	~ColumnTermMap() override;
 
-	SerdNode generateRDFTerm(const SQLRow &row, const SerdEnv &env) const override;
+	void generateRDFTerm(const SQLRow &row, rdf::Term &out) const override;
 
 	std::string computeDatatypeIRI(const SQLRow &row) const override;
 
@@ -26,10 +26,6 @@ public:
 	std::ostream &print(std::ostream &os) const override;
 
 	std::string columnName;
-
-private:
-	/// Buffer for the last column value; keeps buf pointer in returned SerdNode valid.
-	mutable std::string cachedValue_;
 };
 
 } // namespace r2rml
