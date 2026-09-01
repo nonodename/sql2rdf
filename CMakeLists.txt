@@ -185,6 +185,7 @@ set(R2RML_SOURCES
   src/r2rml/SQLValue.cpp
   src/r2rml/StringSQLValue.cpp
   src/r2rml/TripleStore.cpp
+  src/r2rml/SerdTerm.cpp
   src/r2rml/R2RMLParser.cpp
 )
 add_library(sql2rdf_r2rml STATIC ${R2RML_SOURCES})
