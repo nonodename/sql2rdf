@@ -1,5 +1,7 @@
 #pragma once
 
+#include "rdf/Term.h"
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -75,8 +77,24 @@ public:
 
 	/// Add one statement. `objectDatatype`/`objectLang` are only meaningful
 	/// when `object` is a literal.
+	///
+	/// This overload exists because it is the serd_reader callback boundary:
+	/// the nodes arriving here may be unexpanded CURIEs or relative IRIs, which
+	/// rdf::Term deliberately cannot represent (see kindOf in SerdTerm.h). It
+	/// is therefore NOT redundant with the rdf::Term overload below.
 	void statement(const SerdNode *subject, const SerdNode *predicate, const SerdNode *object,
 	               const SerdNode *objectDatatype = nullptr, const SerdNode *objectLang = nullptr);
+
+	/// Add one statement built directly by a caller rather than read from
+	/// Turtle - the YARRRML translator's path.
+	///
+	/// IRI terms may still be relative (e.g. "#TriplesMap1") and are resolved
+	/// against the base set by setBase(); blank-node labels are scope-tagged
+	/// exactly as in the SerdNode overload. A literal's datatype IRI is
+	/// resolved the same way. Both overloads share one insertion path, so
+	/// conflict detection, blank scoping and warnings behave identically
+	/// whichever is used.
+	void statement(const rdf::Term &subject, const rdf::Term &predicate, const rdf::Term &object);
 
 	/// Record a non-fatal error (e.g. a translation warning from a caller
 	/// building statements directly) to be merged with build-phase errors.
@@ -108,6 +126,13 @@ public:
 	void addWarning(const std::string &message);
 
 private:
+	/// The single insertion path both statement() overloads funnel into, once
+	/// the subject and predicate have been resolved to lookup keys. Keeping
+	/// conflict detection and warning emission here means the two overloads
+	/// cannot drift apart.
+	void insertResolved(bool subject_is_blank, const std::string &subject_key, const std::string &predicate_key,
+	                    rdf::Term object);
+
 	struct Impl;
 	std::unique_ptr<Impl> impl_;
 

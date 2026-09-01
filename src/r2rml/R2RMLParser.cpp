@@ -155,6 +155,43 @@ static std::string expandNode(SerdEnv *env, const SerdNode *node, const std::str
 	return {};
 }
 
+/// expandNode() for an IRI already held as text rather than as a SerdNode.
+/// Handles relative references (e.g. "#TriplesMap1") by resolving them against
+/// the environment's base, exactly as the Turtle path does.
+static std::string expandIriText(SerdEnv *env, const std::string &text) {
+	SerdNode node = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(text.c_str()));
+	return expandNode(env, &node);
+}
+
+/// Subject/predicate lookup key for a term supplied by a caller: blank labels
+/// get the "_:" prefix and the merge-scope tag, IRIs get resolved. A literal
+/// has no key, since it cannot be a subject or a predicate.
+static std::string termKey(SerdEnv *env, const rdf::Term &term, const std::string &blankScopePrefix) {
+	if (term.isBlankNode()) {
+		return "_:" + blankScopePrefix + term.lexical();
+	}
+	if (term.isIri()) {
+		return expandIriText(env, term.lexical());
+	}
+	return {};
+}
+
+/// Apply the same resolution to an object term: scope-tag a blank label,
+/// resolve an IRI, and resolve a typed literal's datatype IRI. A plain or
+/// language-tagged literal passes through unchanged.
+static rdf::Term resolveObjectTerm(SerdEnv *env, const rdf::Term &object, const std::string &blankScopePrefix) {
+	if (object.isBlankNode()) {
+		return rdf::Term::blankNode(blankScopePrefix + object.lexical());
+	}
+	if (object.isIri()) {
+		return rdf::Term::iri(expandIriText(env, object.lexical()));
+	}
+	if (object.isLiteral() && !object.hasLang() && !object.datatypeIri().empty()) {
+		return rdf::Term::typedLiteral(object.lexical(), expandIriText(env, object.datatypeIri()));
+	}
+	return object;
+}
+
 // ---------------------------------------------------------------------------
 // TripleCollector – gathers statements (from Serd or built directly by a
 // caller) into a TripleStore, independent of their origin.
@@ -211,24 +248,6 @@ void TripleCollector::statement(const SerdNode *subject, const SerdNode *predica
 		return;
 	}
 
-	// Named-subject conflict detection across merged sources (see
-	// beginSource()): blank subjects are always scope-tagged uniquely above,
-	// so they never reach this check.
-	if (subject->type != SERD_BLANK) {
-		auto ownerIt = impl_->subjectOwner.find(subjKey);
-		if (ownerIt == impl_->subjectOwner.end()) {
-			impl_->subjectOwner.emplace(subjKey, impl_->currentScope);
-		} else if (ownerIt->second != impl_->currentScope) {
-			std::string conflictTag = subjKey + "\x1f" + std::to_string(impl_->currentScope);
-			if (impl_->warnedConflicts.insert(conflictTag).second) {
-				impl_->warnings.push_back(
-				    "competing definition of <" + subjKey + "> in '" + impl_->sourceLabels[impl_->currentScope] +
-				    "' ignored (kept definition from '" + impl_->sourceLabels[ownerIt->second] + "')");
-			}
-			return;
-		}
-	}
-
 	// termFromSerdNode does the deep copy, but not the two things that need the
 	// environment or this collector's state: expanding a CURIE/relative IRI
 	// against the base, and tagging a blank label with the current merge scope.
@@ -254,7 +273,42 @@ void TripleCollector::statement(const SerdNode *subject, const SerdNode *predica
 		obj = rdf::Term::iri(expandNode(impl_->env, object));
 	}
 
-	impl_->triples.insert(subjKey, predKey, std::move(obj));
+	insertResolved(subject->type == SERD_BLANK, subjKey, predKey, std::move(obj));
+}
+
+void TripleCollector::statement(const rdf::Term &subject, const rdf::Term &predicate, const rdf::Term &object) {
+	const std::string blankScopePrefix = impl_->blankScopePrefix();
+	const std::string subjKey = termKey(impl_->env, subject, blankScopePrefix);
+	// No scope prefix for the predicate: a predicate is always an IRI, and the
+	// SerdNode overload likewise expands it without one.
+	const std::string predKey = termKey(impl_->env, predicate, std::string());
+	if (subjKey.empty() || predKey.empty()) {
+		return;
+	}
+	insertResolved(subject.isBlankNode(), subjKey, predKey, resolveObjectTerm(impl_->env, object, blankScopePrefix));
+}
+
+void TripleCollector::insertResolved(bool subject_is_blank, const std::string &subject_key,
+                                     const std::string &predicate_key, rdf::Term object) {
+	// Named-subject conflict detection across merged sources (see
+	// beginSource()): blank subjects are always scope-tagged uniquely by the
+	// caller, so they never reach this check.
+	if (!subject_is_blank) {
+		auto ownerIt = impl_->subjectOwner.find(subject_key);
+		if (ownerIt == impl_->subjectOwner.end()) {
+			impl_->subjectOwner.emplace(subject_key, impl_->currentScope);
+		} else if (ownerIt->second != impl_->currentScope) {
+			std::string conflictTag = subject_key + "\x1f" + std::to_string(impl_->currentScope);
+			if (impl_->warnedConflicts.insert(conflictTag).second) {
+				impl_->warnings.push_back(
+				    "competing definition of <" + subject_key + "> in '" + impl_->sourceLabels[impl_->currentScope] +
+				    "' ignored (kept definition from '" + impl_->sourceLabels[ownerIt->second] + "')");
+			}
+			return;
+		}
+	}
+
+	impl_->triples.insert(subject_key, predicate_key, std::move(object));
 }
 
 void TripleCollector::addError(const std::string &message) {
