@@ -2,11 +2,11 @@
 
 namespace r2rml {
 
-void TripleStore::insert(const std::string &subj, const std::string &pred, ObjValue obj) {
+void TripleStore::insert(const std::string &subj, const std::string &pred, rdf::Term obj) {
 	data_[subj][pred].push_back(std::move(obj));
 }
 
-const std::vector<ObjValue> *TripleStore::getObjects(const std::string &subj, const std::string &pred) const {
+const std::vector<rdf::Term> *TripleStore::getObjects(const std::string &subj, const std::string &pred) const {
 	auto si = data_.find(subj);
 	if (si == data_.end()) {
 		return nullptr;
@@ -18,38 +18,36 @@ const std::vector<ObjValue> *TripleStore::getObjects(const std::string &subj, co
 	return &pi->second;
 }
 
-std::string TripleStore::getFirstLiteral(const std::string &subj, const std::string &pred) const {
+const rdf::Term *TripleStore::getFirstOfKind(const std::string &subj, const std::string &pred,
+                                             rdf::TermKind kind) const {
 	const auto *objs = getObjects(subj, pred);
 	if (!objs) {
-		return {};
+		return nullptr;
 	}
 	for (const auto &o : *objs) {
-		if (o.type == ObjType::Literal) {
-			return o.value;
+		if (o.kind() == kind) {
+			return &o;
 		}
 	}
-	return {};
+	return nullptr;
+}
+
+std::string TripleStore::getFirstLiteral(const std::string &subj, const std::string &pred) const {
+	const rdf::Term *o = getFirstOfKind(subj, pred, rdf::TermKind::Literal);
+	return o ? o->lexical() : std::string();
 }
 
 std::string TripleStore::getFirstUri(const std::string &subj, const std::string &pred) const {
-	const auto *objs = getObjects(subj, pred);
-	if (!objs) {
-		return {};
-	}
-	for (const auto &o : *objs) {
-		if (o.type == ObjType::URI) {
-			return o.value;
-		}
-	}
-	return {};
+	const rdf::Term *o = getFirstOfKind(subj, pred, rdf::TermKind::Iri);
+	return o ? o->lexical() : std::string();
 }
 
-std::string TripleStore::objKey(const ObjValue &o) {
-	if (o.type == ObjType::Blank) {
-		return "_:" + o.value;
+std::string TripleStore::objKey(const rdf::Term &o) {
+	if (o.isBlankNode()) {
+		return "_:" + o.lexical();
 	}
-	if (o.type == ObjType::URI) {
-		return o.value;
+	if (o.isIri()) {
+		return o.lexical();
 	}
 	return {};
 }

@@ -28,6 +28,7 @@
 #include "r2rml/TermMap.h"
 #include "r2rml/TriplesMap.h"
 #include "r2rml/PredicateObjectMap.h"
+#include "r2rml/SerdTerm.h"
 #include "r2rml/TripleStore.h"
 
 #include <serd/serd.h>
@@ -228,22 +229,29 @@ void TripleCollector::statement(const SerdNode *subject, const SerdNode *predica
 		}
 	}
 
-	ObjValue obj;
+	// termFromSerdNode does the deep copy, but not the two things that need the
+	// environment or this collector's state: expanding a CURIE/relative IRI
+	// against the base, and tagging a blank label with the current merge scope.
+	rdf::Term obj;
 	if (object->type == SERD_BLANK) {
-		obj.type = ObjType::Blank;
-		obj.value = blankScopePrefix + std::string(reinterpret_cast<const char *>(object->buf), object->n_bytes);
+		obj = rdf::Term::blankNode(blankScopePrefix +
+		                           std::string(reinterpret_cast<const char *>(object->buf), object->n_bytes));
 	} else if (object->type == SERD_LITERAL) {
-		obj.type = ObjType::Literal;
-		obj.value = std::string(reinterpret_cast<const char *>(object->buf), object->n_bytes);
-		if (objectDatatype && objectDatatype->buf) {
-			obj.datatype = expandNode(impl_->env, objectDatatype);
-		}
+		const std::string text(reinterpret_cast<const char *>(object->buf), object->n_bytes);
+		// A datatype IRI may itself be a CURIE, so it must be expanded rather
+		// than copied straight across - which is why this cannot simply hand the
+		// datatype node to termFromSerdNode. Language wins over datatype, per
+		// RDF 1.1 and rdf::Term's mutually-exclusive invariant.
 		if (objectLang && objectLang->buf) {
-			obj.lang = std::string(reinterpret_cast<const char *>(objectLang->buf), objectLang->n_bytes);
+			obj = rdf::Term::langLiteral(
+			    text, std::string(reinterpret_cast<const char *>(objectLang->buf), objectLang->n_bytes));
+		} else if (objectDatatype && objectDatatype->buf) {
+			obj = rdf::Term::typedLiteral(text, expandNode(impl_->env, objectDatatype));
+		} else {
+			obj = rdf::Term::literal(text);
 		}
 	} else {
-		obj.type = ObjType::URI;
-		obj.value = expandNode(impl_->env, object);
+		obj = rdf::Term::iri(expandNode(impl_->env, object));
 	}
 
 	impl_->triples.insert(subjKey, predKey, std::move(obj));
@@ -526,13 +534,13 @@ public:
 		const auto *constObjs = ts.getObjects(nodeKey, RR_CONSTANT);
 		if (constObjs) {
 			for (const auto &c : *constObjs) {
-				if (c.type == ObjType::URI) {
-					return makeConstantUri(c.value);
+				if (c.isIri()) {
+					return makeConstantUri(c.lexical());
 				}
 			}
 			for (const auto &c : *constObjs) {
-				if (c.type == ObjType::Literal) {
-					return makeConstantLiteral(c.value);
+				if (c.isLiteral()) {
+					return makeConstantLiteral(c.lexical());
 				}
 			}
 		}
@@ -575,9 +583,9 @@ public:
 		const auto *graphObjs = ts.getObjects(nodeKey, RR_GRAPH);
 		if (graphObjs) {
 			for (const auto &g : *graphObjs) {
-				if (g.type == ObjType::URI) {
+				if (g.isIri()) {
 					auto gm = std::unique_ptr<ConcreteGraphMap>(new ConcreteGraphMap());
-					gm->valueMap = makeConstantUri(g.value);
+					gm->valueMap = makeConstantUri(g.lexical());
 					graphMaps.push_back(std::move(gm));
 				}
 			}
@@ -640,8 +648,8 @@ public:
 		const auto *classObjs = ts.getObjects(smKey, RR_CLASS);
 		if (classObjs) {
 			for (const auto &cls : *classObjs) {
-				if (cls.type == ObjType::URI) {
-					sm->classIRIs.push_back(cls.value);
+				if (cls.isIri()) {
+					sm->classIRIs.push_back(cls.lexical());
 				}
 			}
 		}
@@ -661,8 +669,8 @@ public:
 		const auto *predObjs = ts.getObjects(pomKey, RR_PREDICATE);
 		if (predObjs) {
 			for (const auto &p : *predObjs) {
-				if (p.type == ObjType::URI) {
-					pom->predicateMaps.push_back(makeConstantUri(p.value));
+				if (p.isIri()) {
+					pom->predicateMaps.push_back(makeConstantUri(p.lexical()));
 				}
 			}
 		}
@@ -686,8 +694,8 @@ public:
 		const auto *objObjs = ts.getObjects(pomKey, RR_OBJECT);
 		if (objObjs) {
 			for (const auto &o : *objObjs) {
-				if (o.type == ObjType::URI) {
-					pom->objectMaps.push_back(makeConstantUri(o.value));
+				if (o.isIri()) {
+					pom->objectMaps.push_back(makeConstantUri(o.lexical()));
 				}
 			}
 		}
