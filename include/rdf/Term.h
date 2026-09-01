@@ -14,6 +14,7 @@ const std::string RDF_LANG_STRING = "http://www.w3.org/1999/02/22-rdf-syntax-ns#
 const std::string XSD_INTEGER = "http://www.w3.org/2001/XMLSchema#integer";
 const std::string XSD_DOUBLE = "http://www.w3.org/2001/XMLSchema#double";
 const std::string XSD_BOOLEAN = "http://www.w3.org/2001/XMLSchema#boolean";
+const std::string XSD_DECIMAL = "http://www.w3.org/2001/XMLSchema#decimal";
 const std::string RDF_NAMESPACE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const std::string RDFS_NAMESPACE = "http://www.w3.org/2000/01/rdf-schema#";
 const std::string XSD_NAMESPACE = "http://www.w3.org/2001/XMLSchema#";
