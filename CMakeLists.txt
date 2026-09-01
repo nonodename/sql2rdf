@@ -119,9 +119,9 @@ if(SQL2RDF_BUILD_TESTS)
   # Include headers for tests and link to Catch2 and serd
   target_include_directories(test_runner PRIVATE include ${CMAKE_CURRENT_SOURCE_DIR}/external/serd/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   if(UNIX)
-    target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql sql2rdf_sparql2sql serd m)
+    target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_rdf sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql sql2rdf_sparql2sql serd m)
   else()
-    target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql sql2rdf_sparql2sql serd)
+    target_link_libraries(test_runner PRIVATE Catch2::Catch2WithMain sql2rdf_rdf sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql sql2rdf_sparql2sql serd)
   endif()
   target_compile_definitions(test_runner PRIVATE SOURCE_R2RML_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/sourceR2RML/")
   target_compile_definitions(test_runner PRIVATE SOURCE_YARRRML_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/sourceYARRRML/")
@@ -139,6 +139,27 @@ if(SQL2RDF_BUILD_TESTS)
     COMMENT "Running tests..."
   )
 endif()
+
+# ----------------------------------------------------------------------------
+# RDF term model - rdf::Term, the project's owning value type for a single RDF
+# term, and rdf::TermKind, the kind enum shared across the layers.
+#
+# Deliberately stdlib-only: no serd, no r2rml, no sparql.  An RDF term should
+# not be defined in terms of one particular serialisation library, and keeping
+# this target dependency-free is what would let the standard-library-only
+# sql2rdf_sparql adopt it later without breaking that guarantee.  Serd interop
+# lives in include/r2rml/SerdTerm.h, because r2rml is the only layer that
+# actually writes serd.
+#
+# Unconditional, like the other library targets: a downstream FetchContent
+# consumer may link sql2rdf::rdf on its own.
+# ----------------------------------------------------------------------------
+add_library(sql2rdf_rdf STATIC src/rdf/Term.cpp)
+add_library(sql2rdf::rdf ALIAS sql2rdf_rdf)
+target_include_directories(sql2rdf_rdf PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
 
 # Build r2rml implementation as a static library so tests can link it
 set(R2RML_SOURCES
@@ -174,9 +195,9 @@ target_include_directories(sql2rdf_r2rml PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 if(UNIX)
-  target_link_libraries(sql2rdf_r2rml PUBLIC serd m)
+  target_link_libraries(sql2rdf_r2rml PUBLIC sql2rdf_rdf serd m)
 else()
-  target_link_libraries(sql2rdf_r2rml PUBLIC serd)
+  target_link_libraries(sql2rdf_r2rml PUBLIC sql2rdf_rdf serd)
 endif()
 
 # ----------------------------------------------------------------------------
@@ -458,7 +479,7 @@ if(SQL2RDF_IS_TOP_LEVEL AND SQL2RDF_BUILD_TESTS)
     if(NOT (CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU"))
       message(WARNING "SQL2RDF_ENABLE_COVERAGE requires GCC or Clang; coverage instrumentation not applied for ${CMAKE_CXX_COMPILER_ID}")
     else()
-      foreach(cov_target sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql sql2rdf_sparql2sql test_runner)
+      foreach(cov_target sql2rdf_rdf sql2rdf_r2rml sql2rdf_yarrrml sql2rdf_sparql sql2rdf_sparql2sql test_runner)
         target_compile_options(${cov_target} PRIVATE --coverage -O0 -g)
       endforeach()
       # Every executable that links the now-instrumented static libs above
