@@ -236,6 +236,93 @@ public:
 
 ---
 
+## RDF Terms
+
+### `rdf::Term`
+
+The project's single owning value type for one RDF term. Target `sql2rdf::rdf`, headers
+`include/rdf/Term.h` and `include/rdf/TermKind.h`, namespace `rdf`.
+
+```cpp
+#include "rdf/Term.h"
+
+enum class rdf::TermKind { Unknown, Iri, BlankNode, Literal };
+
+class rdf::Term {
+public:
+    Term();                                                   // the absent term
+    static Term iri(const std::string& value);
+    static Term blankNode(const std::string& label);          // BARE label, no "_:"
+    static Term literal(const std::string& lexicalForm);
+    static Term typedLiteral(const std::string& lexicalForm, const std::string& datatypeIri);
+    static Term langLiteral(const std::string& lexicalForm, const std::string& languageTag);
+
+    TermKind kind() const;
+    bool isNull() const, isIri() const, isBlankNode() const, isLiteral() const;
+    const std::string& lexical() const;
+    const std::string& datatypeIri() const;                   // stored datatype
+    const std::string& lang() const;
+    std::string effectiveDatatypeIri() const;                 // rdf:langString when tagged
+
+    void clear();                                             // absent, but keeps capacity
+    void assignIri(...), assignBlankNode(...), assignLiteral(...);
+    void assignTypedLiteral(...), assignLangLiteral(...);
+    void setDatatypeIri(...), setLang(...);                   // type dimension only
+    std::string& mutableLexical();                            // piecewise construction
+    void setKind(TermKind);
+};
+```
+
+**This is not a wrapper around `SerdNode`.** Serd 0.x's `SerdNode` is
+`{buf, n_bytes, n_chars, flags, type}`: it carries no datatype and no language (serd passes those as
+separate nodes alongside the statement), and it is non-owning, since `serd_node_from_string` only
+measures its argument. `rdf::Term` is a superset that owns its bytes.
+
+Representation invariants, relied on by the serd bridge and by every consumer:
+
+- `kind() == Unknown` ⟺ the term is absent; this replaces serd's in-band `SERD_NODE_NULL`.
+- `lexical()` is **bare**: an IRI with no angle brackets, a blank-node label with **no `_:` prefix**,
+  a literal's lexical form unquoted and unescaped. `TripleStore::objKey()` adds `_:` when it needs a
+  subject-lookup key, because that prefix is a key-space encoding rather than part of the term.
+- `datatypeIri()` and `lang()` are empty unless `kind() == Literal`, and are **never both** set. A
+  language-tagged literal stores only the tag; `effectiveDatatypeIri()` reports `rdf:langString`.
+
+`sql2rdf_rdf` links nothing but the standard library, so an RDF term is not defined in terms of a
+serialisation library.
+
+### `r2rml::SerdTerm` — the serd boundary
+
+```cpp
+#include "r2rml/SerdTerm.h"
+
+SerdType       r2rml::serdTypeOf(rdf::TermKind);
+rdf::TermKind  r2rml::kindOf(SerdType);            // SERD_CURIE -> Unknown, deliberately
+rdf::TermKind  r2rml::kindForTermType(TermType);   // rr:termType -> the kind it produces
+rdf::Term      r2rml::termFromSerdNode(const SerdNode* node,
+                                       const SerdNode* datatype = nullptr,
+                                       const SerdNode* lang = nullptr);
+
+class r2rml::SerdTermRef {                          // non-copyable, non-movable
+public:
+    explicit SerdTermRef(const rdf::Term& term);    // copies the term into itself
+    const SerdNode* value() const;                  // null iff the term is absent
+    const SerdNode* datatype() const;               // null unless a typed literal
+    const SerdNode* lang() const;                   // null unless language-tagged
+    bool present() const;
+};
+```
+
+`serd_writer_write_statement()` wants up to three `SerdNode`s per term, each borrowing a buffer the
+caller must keep alive. `SerdTermRef` owns a copy of the term and builds the nodes against its own
+storage, so the pointers stay valid for its whole lifetime; construct one on the stack immediately
+before the write. It is non-movable because moving a `std::string` relocates short-string-optimised
+storage, which would leave the nodes dangling.
+
+`kindOf` maps `SERD_CURIE` to `Unknown` rather than `Iri`: an unexpanded prefixed name is not a term
+`rdf::Term` can represent, so callers must expand against a `SerdEnv` first.
+
+---
+
 ## Data Model
 
 These classes form the in-memory representation of an R2RML mapping. They are populated by the parser and accessed via `R2RMLMapping::triplesMaps`.
@@ -275,7 +362,7 @@ Holds the predicate and object maps (and optional graph maps) that produce tripl
 class PredicateObjectMap {
 public:
     void processRow(const SQLRow& row,
-                    const SerdNode& subject,
+                    const rdf::Term& subject,
                     SerdWriter& rdfWriter,
                     const R2RMLMapping& mapping,
                     SQLConnection& dbConnection) const;
@@ -330,7 +417,7 @@ enum class TermType { IRI, BlankNode, Literal };
 
 class TermMap {
 public:
-    virtual SerdNode generateRDFTerm(const SQLRow& row, const SerdEnv& env) const = 0;
+    virtual void generateRDFTerm(const SQLRow& row, rdf::Term& out) const = 0;
     virtual bool isValid() const;
 
     TermType termType{TermType::IRI};
@@ -342,7 +429,7 @@ public:
 
 | Subclass | R2RML property | Behaviour |
 |----------|---------------|-----------|
-| `ConstantTermMap` | `rr:constant` | Always returns the same fixed `SerdNode` |
+| `ConstantTermMap` | `rr:constant` | Always produces the same fixed `rdf::Term`. An **empty** `rr:constant` is rejected: `isValid()` returns false and the enclosing predicate-object map emits nothing |
 | `ColumnTermMap` | `rr:column` | Reads the value of the named column |
 | `TemplateTermMap` | `rr:template` | Expands an RFC 6570 URI template with column values |
 | `SubjectMap` | `rr:subjectMap` | Abstract; carries `classIRIs`/`graphMaps` plus `valueTermMap()`, returning the underlying `rr:template`/`rr:column`/`rr:constant` strategy that actually determines the subject's value |
@@ -1070,6 +1157,7 @@ in `createDialect()` (`src/sparql2sql/DialectFactory.cpp`).
 
 | Target | Type | DuckDB required | Description |
 |--------|------|-----------------|-------------|
+| `sql2rdf_rdf` | static library | No | `rdf::Term`, the owning RDF term value type. Links nothing but the standard library; pulled in transitively by `sql2rdf_r2rml` |
 | `sql2rdf_r2rml` | static library | No | Core R2RML library; link this in your project |
 | `sql2rdf_yarrrml` | static library | No | YARRRML→R2RML translator (links yaml-cpp privately) |
 | `sql2rdf_sparql` | static library | No | Standalone SPARQL 1.1 Query grammar parser |

@@ -7,8 +7,6 @@
 #include <memory>
 #include <ostream>
 
-#include <serd/serd.h>
-
 namespace r2rml {
 
 class SQLRow;

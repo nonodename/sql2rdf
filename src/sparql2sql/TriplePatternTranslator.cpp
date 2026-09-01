@@ -11,7 +11,6 @@
 #include "r2rml/GraphMap.h"
 #include "r2rml/JoinCondition.h"
 #include "r2rml/LogicalTable.h"
-#include "r2rml/MapSQLRow.h"
 #include "r2rml/PredicateObjectMap.h"
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/R2RMLView.h"
