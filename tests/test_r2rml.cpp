@@ -171,6 +171,79 @@ TEST_CASE("Column/Template term maps return default null node") {
 	REQUIRE(tn.isNull());
 }
 
+// AbstractMap::percentEncode is protected, so it is exercised the same way
+// production code reaches it: through TemplateTermMap::generateRDFTerm, whose
+// default rr:termType is rr:IRI (R2RML 7.3 percent-encodes substituted values
+// only for IRIs).
+TEST_CASE("TemplateTermMap percent-encodes substituted values (rr:IRI default)") {
+	TemplateTermMap tt("http://example/{VAL}");
+
+	SECTION("unreserved characters pass through unencoded (fast no-op path)") {
+		auto row = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string("abcXYZ019-_.~"))}});
+		rdf::Term out;
+		tt.generateRDFTerm(row, out);
+		REQUIRE(out.lexical() == "http://example/abcXYZ019-_.~");
+	}
+
+	SECTION("reserved ASCII characters are percent-encoded, uppercase hex") {
+		auto row = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string("a b/c:d@e,f"))}});
+		rdf::Term out;
+		tt.generateRDFTerm(row, out);
+		REQUIRE(out.lexical() == "http://example/a%20b%2Fc%3Ad%40e%2Cf");
+	}
+
+	SECTION("characters adjacent to unreserved ranges are still encoded") {
+		// '-' (0x2D) and '.' (0x2E) are unreserved; their neighbours ',' (0x2C)
+		// and '/' (0x2F) are not - regression guard for the boundary bits in the
+		// lookup table.
+		auto row = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string(",-./"))}});
+		rdf::Term out;
+		tt.generateRDFTerm(row, out);
+		REQUIRE(out.lexical() == "http://example/%2C-.%2F");
+	}
+
+	SECTION("control characters are percent-encoded") {
+		auto row = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string("\t\n"))}});
+		rdf::Term out;
+		tt.generateRDFTerm(row, out);
+		REQUIRE(out.lexical() == "http://example/%09%0A");
+	}
+
+	SECTION("high-bit / multi-byte UTF-8 bytes are percent-encoded byte-by-byte") {
+		// U+00E9 (e-acute) encodes as UTF-8 bytes 0xC3 0xA9.
+		auto row = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string("caf\xC3\xA9"))}});
+		rdf::Term out;
+		tt.generateRDFTerm(row, out);
+		REQUIRE(out.lexical() == "http://example/caf%C3%A9");
+	}
+
+	SECTION("empty substituted value leaves the template text untouched") {
+		auto row = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string(""))}});
+		rdf::Term out;
+		tt.generateRDFTerm(row, out);
+		REQUIRE(out.lexical() == "http://example/");
+	}
+
+	SECTION("repeated calls on the same output reuse capacity without stale bytes") {
+		auto encoded = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string("a b"))}});
+		auto plain = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string("ab"))}});
+		rdf::Term out;
+		tt.generateRDFTerm(encoded, out);
+		REQUIRE(out.lexical() == "http://example/a%20b");
+		tt.generateRDFTerm(plain, out);
+		REQUIRE(out.lexical() == "http://example/ab");
+	}
+}
+
+TEST_CASE("TemplateTermMap does not percent-encode non-IRI term types") {
+	TemplateTermMap tt("{VAL}");
+	tt.termType = r2rml::TermType::Literal;
+	auto row = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string("a b/c"))}});
+	rdf::Term out;
+	tt.generateRDFTerm(row, out);
+	REQUIRE(out.lexical() == "a b/c");
+}
+
 TEST_CASE("BaseTableOrView and R2RMLView defaults") {
 	BaseTableOrView b("mytable");
 	REQUIRE(b.tableName == "mytable");

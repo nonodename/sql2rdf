@@ -13,8 +13,6 @@
 
 namespace r2rml {
 
-static const char RDF_TYPE_URI[] = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-
 TriplesMap::TriplesMap() = default;
 TriplesMap::~TriplesMap() = default;
 
@@ -36,7 +34,7 @@ void TriplesMap::generateTriples(const SQLRow &row, SerdWriter &rdfWriter, const
 	// graph maps apply here - there is no predicate-object map involved.
 	static const std::vector<std::unique_ptr<GraphMap>> noGraphMaps;
 	if (!subjectMap->classIRIs.empty()) {
-		const SerdTermRef rdfTypeNode(rdf::Term::iri(RDF_TYPE_URI));
+		const SerdTermRef rdfTypeNode(rdf::Term::iri(rdf::RDF_TYPE));
 		for (const std::string &classIRI : subjectMap->classIRIs) {
 			const SerdTermRef classNode(rdf::Term::iri(classIRI));
 			forEachGraphNode(subjectMap->graphMaps, noGraphMaps, row, [&](const rdf::Term &graph) {
