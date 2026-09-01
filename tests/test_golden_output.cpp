@@ -40,11 +40,16 @@
 #define SOURCE_R2RML_DIR ""
 #endif
 
+#include "r2rml/MapSQLRow.h"
+#include "r2rml/PredicateObjectMap.h"
 #include "r2rml/R2RMLMapping.h"
 #include "r2rml/R2RMLParser.h"
 #include "r2rml/StringSQLValue.h"
+#include "r2rml/TermMap.h"
+#include "r2rml/TriplesMap.h"
 #include "MockSQL.h"
 
+using r2rml::MapSQLRow;
 using r2rml::R2RMLMapping;
 using r2rml::R2RMLParser;
 using r2rml::StringSQLValue;
@@ -370,22 +375,77 @@ TEST_CASE("golden language tags - rr:language and rr:datatype stay exclusive") {
 }
 
 // ---------------------------------------------------------------------------
-// golden_typed_constant - pins the CURRENT, KNOWN-BUGGY output: an rr:constant
-// loses its datatype and its language tag, because R2RMLParser::buildTermMap
-// reads only the ObjValue's value field. The expectations below are therefore
-// deliberately WRONG-as-specified and RIGHT-as-implemented; the follow-up fix
-// should change them in a visible diff.
+// golden_typed_constant - an rr:constant literal keeps its datatype/language,
+// since buildTermMap passes the already-parsed rdf::Term straight into the
+// ConstantTermMap instead of rebuilding a plain literal from its bare
+// lexical form.
 // ---------------------------------------------------------------------------
-TEST_CASE("golden typed constants - records the current datatype/lang loss") {
+TEST_CASE("golden typed constants - rr:constant preserves datatype and language") {
 	MockSQLConnection conn = goldenTableConnection();
 	const std::string expected =
 	    R"GOLD(<http://data.example.com/golden/1> <http://example.com/ns#iriConst> <http://example.com/ns#Thing> .
-<http://data.example.com/golden/1> <http://example.com/ns#langConst> "chat" .
+<http://data.example.com/golden/1> <http://example.com/ns#langConst> "chat"@fr .
 <http://data.example.com/golden/1> <http://example.com/ns#plainConst> "plain" .
-<http://data.example.com/golden/1> <http://example.com/ns#typedConst> "5" .
+<http://data.example.com/golden/1> <http://example.com/ns#typedConst> "5"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <http://data.example.com/golden/2> <http://example.com/ns#iriConst> <http://example.com/ns#Thing> .
-<http://data.example.com/golden/2> <http://example.com/ns#langConst> "chat" .
+<http://data.example.com/golden/2> <http://example.com/ns#langConst> "chat"@fr .
 <http://data.example.com/golden/2> <http://example.com/ns#plainConst> "plain" .
-<http://data.example.com/golden/2> <http://example.com/ns#typedConst> "5" .)GOLD";
+<http://data.example.com/golden/2> <http://example.com/ns#typedConst> "5"^^<http://www.w3.org/2001/XMLSchema#integer> .)GOLD";
 	checkGolden("typed_constant", goldenNQuads(SOURCE_R2RML_DIR "golden_typed_constant.ttl", conn), expected);
+}
+
+// Regression coverage beyond the golden N-Quads text: a constant literal's
+// ConstantTermMap must actually carry the parsed datatype/language on its
+// rdf::Term (not just print correctly), and rr:constant "" (an empty
+// literal) must still be rejected the same way a zero-length SerdNode was.
+TEST_CASE("rr:constant literal term map carries datatype and language on the Term") {
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parse(SOURCE_R2RML_DIR "golden_typed_constant.ttl");
+	REQUIRE(mapping.isValid());
+	REQUIRE(mapping.triplesMaps.size() == 1);
+
+	// golden_typed_constant.ttl declares one predicateObjectMap per predicate,
+	// in this order: typedConst, langConst, iriConst, plainConst.
+	const auto &poms = mapping.triplesMaps[0]->predicateObjectMaps;
+	REQUIRE(poms.size() == 4);
+	MapSQLRow row = makeRow({});
+
+	REQUIRE(poms[0]->objectMaps.size() == 1);
+	rdf::Term typedTerm;
+	poms[0]->objectMaps[0]->generateRDFTerm(row, typedTerm);
+	CHECK(typedTerm.isLiteral());
+	CHECK(typedTerm.lexical() == "5");
+	CHECK(typedTerm.datatypeIri() == "http://www.w3.org/2001/XMLSchema#integer");
+	CHECK(typedTerm.lang().empty());
+
+	REQUIRE(poms[1]->objectMaps.size() == 1);
+	rdf::Term langTerm;
+	poms[1]->objectMaps[0]->generateRDFTerm(row, langTerm);
+	CHECK(langTerm.isLiteral());
+	CHECK(langTerm.lexical() == "chat");
+	CHECK(langTerm.lang() == "fr");
+	CHECK(langTerm.datatypeIri().empty());
+}
+
+TEST_CASE("rr:constant \"\" (empty literal) still produces no triple") {
+	static const char *const turtle = R"TTL(
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+<#TriplesMapEmptyConst>
+    rr:logicalTable [ rr:tableName "GOLDEN" ];
+    rr:subjectMap [ rr:template "http://data.example.com/golden/{ID}" ];
+    rr:predicateObjectMap [
+        rr:predicate ex:emptyConst;
+        rr:objectMap [ rr:constant "" ];
+    ].
+)TTL";
+
+	R2RMLParser parser;
+	R2RMLMapping mapping = parser.parseString(turtle, "http://example.com/base/");
+	REQUIRE(mapping.triplesMaps.size() == 1);
+	REQUIRE(mapping.triplesMaps[0]->predicateObjectMaps.size() == 1);
+	const auto &objectMaps = mapping.triplesMaps[0]->predicateObjectMaps[0]->objectMaps;
+	REQUIRE(objectMaps.size() == 1);
+	CHECK_FALSE(objectMaps[0]->isValid());
 }

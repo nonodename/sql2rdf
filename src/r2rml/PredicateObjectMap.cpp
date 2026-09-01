@@ -77,11 +77,22 @@ void PredicateObjectMap::processRow(const SQLRow &row, const rdf::Term &subject,
 				// mutually-exclusive choice is made once here rather than being
 				// rebuilt as loose SerdNodes at the write site. rr:language wins
 				// over any datatype, matching R2RML and RDF 1.1.
+				//
+				// computeDatatypeIRI() only reports a *static* rr:datatype (or,
+				// for ColumnTermMap, the column value's own datatype) - it
+				// returns empty for a ConstantTermMap, whose literal already
+				// carries its own datatype/language from generateRDFTerm(). An
+				// empty result must therefore leave the term's existing
+				// datatype/language alone rather than clearing it: setDatatypeIri
+				// with an empty string strips whatever is already there.
 				if (object.isLiteral()) {
 					if (objMap->languageTag) {
 						object.setLang(*objMap->languageTag);
 					} else {
-						object.setDatatypeIri(objMap->computeDatatypeIRI(row));
+						std::string dt = objMap->computeDatatypeIRI(row);
+						if (!dt.empty()) {
+							object.setDatatypeIri(dt);
+						}
 					}
 				}
 

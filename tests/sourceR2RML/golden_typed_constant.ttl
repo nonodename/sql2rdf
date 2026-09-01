@@ -2,23 +2,16 @@
 @prefix ex: <http://example.com/ns#>.
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#>.
 
-# Pins the CURRENT, KNOWN-BUGGY handling of typed and language-tagged
-# rr:constant values.
+# Pins the datatype/language of an rr:constant literal object: the Turtle
+# parser attaches datatype/language to the rdf::Term it collects for
+# rr:constant, and R2RMLParser::buildTermMap must carry that Term straight
+# into the ConstantTermMap rather than rebuilding a plain literal from its
+# bare lexical form.
 #
-# R2RMLParser::buildTermMap reads only the ObjValue's `value` field when it
-# builds a ConstantTermMap, so the datatype and language that the Turtle parser
-# already collected are silently discarded:
-#
-#   ex:typedConst  rr:constant "5"^^xsd:integer  -> emitted as a PLAIN "5"
-#   ex:langConst   rr:constant "chat"@fr         -> emitted as a PLAIN "chat"
-#   ex:iriConst    rr:constant ex:Thing          -> correct today (IRI path)
-#   ex:plainConst  rr:constant "plain"           -> correct today
-#
-# The golden expectations below record the wrong output ON PURPOSE.  This
-# fixture exists so that the follow-up commit which fixes the bug shows up as a
-# deliberate, reviewable golden diff instead of a silent behaviour change - and
-# so that the refactor preceding it cannot accidentally fix or further break it
-# without someone noticing.
+#   ex:typedConst  rr:constant "5"^^xsd:integer  -> "5"^^xsd:integer
+#   ex:langConst   rr:constant "chat"@fr         -> "chat"@fr
+#   ex:iriConst    rr:constant ex:Thing          -> IRI, unaffected
+#   ex:plainConst  rr:constant "plain"           -> plain literal, unaffected
 
 <#TriplesMapConst>
     rr:logicalTable [ rr:tableName "GOLDEN" ];

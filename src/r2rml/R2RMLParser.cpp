@@ -499,12 +499,23 @@ public:
 	}
 
 	// ------------------------------------------------------------------
-	// Wrap a literal string in a ConstantTermMap (rr:constant with a literal
-	// object, e.g. `rr:constant "active"`).
+	// Wrap an already-parsed literal term in a ConstantTermMap (rr:constant
+	// with a literal object, e.g. `rr:constant "active"` or
+	// `rr:constant "5"^^xsd:integer`). `term` carries whatever datatype/
+	// language the Turtle parser attached, so it is passed straight through
+	// rather than being rebuilt from the bare lexical form.
+	//
+	// An empty lexical form is rejected the same way the SerdNode
+	// constructor rejects a zero-length node: the term map is left with no
+	// constant value, isValid() returns false, and the enclosing
+	// predicate-object map emits nothing - preserving the long-standing
+	// behaviour that rr:constant "" produces no triple at all.
 	// ------------------------------------------------------------------
-	static std::unique_ptr<ConstantTermMap> makeConstantLiteral(const std::string &literal) {
-		SerdNode node = serd_node_from_string(SERD_LITERAL, reinterpret_cast<const uint8_t *>(literal.c_str()));
-		auto tm = std::unique_ptr<ConstantTermMap>(new ConstantTermMap(node));
+	static std::unique_ptr<ConstantTermMap> makeConstantLiteral(const rdf::Term &term) {
+		if (term.lexical().empty()) {
+			return std::unique_ptr<ConstantTermMap>(new ConstantTermMap());
+		}
+		auto tm = std::unique_ptr<ConstantTermMap>(new ConstantTermMap(term));
 		tm->termType = TermType::Literal;
 		return tm;
 	}
@@ -596,7 +607,7 @@ public:
 			}
 			for (const auto &c : *constObjs) {
 				if (c.isLiteral()) {
-					return makeConstantLiteral(c.lexical());
+					return makeConstantLiteral(c);
 				}
 			}
 		}
