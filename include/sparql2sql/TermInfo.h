@@ -1,5 +1,7 @@
 #pragma once
 
+#include "rdf/TermKind.h"
+
 #include <string>
 
 namespace sparql2sql {
@@ -7,15 +9,23 @@ namespace sparql2sql {
 /// What kind of RDF term a column or expression yields, when the R2RML mapping
 /// determines that statically.
 ///
-/// Named RdfTermKind rather than TermKind to stay readable alongside
-/// sparql::ast::TermKind, which several translator translation units pull in
-/// unqualified.
+/// An ALIAS of rdf::TermKind, so the project has one kind enum rather than one
+/// per layer. Because it is an alias of a scoped enum rather than a distinct
+/// type, RdfTermKind::Iri and rdf::TermKind::Iri are the same enumerator, and
+/// the two spellings interoperate freely.
+///
+/// The local spelling is kept deliberately: RdfTermKind rather than TermKind
+/// stays readable alongside sparql::ast::TermKind, which several translator
+/// translation units pull in unqualified.
 ///
 /// `Unknown` is the lattice's absorbing element and the default everywhere: it
 /// means "this translator cannot prove anything about this term", which is
 /// exactly the behaviour every column had before term tracking existed. Every
-/// consumer must degrade gracefully to it.
-enum class RdfTermKind { Unknown, Iri, BlankNode, Literal };
+/// consumer must degrade gracefully to it. It is the same enumerator rdf::Term
+/// uses for the absent term - the two readings ("nothing can be proven" and
+/// "there is no term") coincide, which is what makes sharing the enum honest
+/// rather than merely convenient.
+using RdfTermKind = rdf::TermKind;
 
 /// The statically-known RDF term dimension of one column or expression.
 ///

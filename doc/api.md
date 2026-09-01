@@ -290,6 +290,13 @@ Representation invariants, relied on by the serd bridge and by every consumer:
 `sql2rdf_rdf` links nothing but the standard library, so an RDF term is not defined in terms of a
 serialisation library.
 
+`rdf::TermKind` is the project's single kind enum: `sparql2sql::RdfTermKind` is an alias of it, so
+`RdfTermKind::Iri` and `rdf::TermKind::Iri` are the same enumerator. `Unknown` carries two readings
+that coincide — "there is no term here" (in `rdf::Term`) and "nothing can be proven about this term"
+(the absorbing element of `TermInfo`'s lattice). `r2rml::TermType` stays a separate three-value enum,
+because `rr:termType` is a closed declaration with no legal "unknown"; `r2rml::kindForTermType()`
+converts.
+
 ### `r2rml::SerdTerm` — the serd boundary
 
 ```cpp
