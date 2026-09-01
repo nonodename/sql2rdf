@@ -2,8 +2,6 @@
 
 namespace rdf {
 
-const char *const RDF_LANG_STRING = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-
 const char *termKindName(TermKind kind) {
 	switch (kind) {
 	case TermKind::Iri:
@@ -139,7 +137,7 @@ void Term::setLang(const std::string &language_tag) {
 
 std::string Term::effectiveDatatypeIri() const {
 	if (!lang_.empty()) {
-		return std::string(RDF_LANG_STRING);
+		return RDF_LANG_STRING;
 	}
 	return datatype_;
 }

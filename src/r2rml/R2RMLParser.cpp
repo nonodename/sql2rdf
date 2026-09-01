@@ -288,6 +288,8 @@ void TripleCollector::statement(const rdf::Term &subject, const rdf::Term &predi
 	insertResolved(subject.isBlankNode(), subjKey, predKey, resolveObjectTerm(impl_->env, object, blankScopePrefix));
 }
 
+// TODO: Investigate if it still makes sense to key these by the subject/predicate
+// expressed as strings rather than the new TermNode representation.
 void TripleCollector::insertResolved(bool subject_is_blank, const std::string &subject_key,
                                      const std::string &predicate_key, rdf::Term object) {
 	// Named-subject conflict detection across merged sources (see

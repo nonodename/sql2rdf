@@ -73,7 +73,7 @@ using r2rml::vocab::RR_TERM_TYPE;
 // use for them (it reads rr:triplesMap/rdf:type from Turtle text via Serd,
 // not by emitting these as literal predicate strings).
 static const char *const RR_TRIPLES_MAP = "http://www.w3.org/ns/r2rml#triplesMap";
-static const char *const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+static const char *const R2RML_NAMESPACE = "http://www.w3.org/ns/r2rml#";
 
 namespace {
 
@@ -450,7 +450,7 @@ struct PredicateResult {
 PredicateResult buildPredicateResult(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const std::string &raw,
                                      const std::map<std::string, std::string> &prefixes) {
 	if (raw == "a") {
-		return PredicateResult {true, RDF_TYPE, rdf::Term()};
+		return PredicateResult {true, rdf::RDF_TYPE, rdf::Term()};
 	}
 	VSpec vs = classifyValue(raw, /*allowIriSuffix=*/false, /*literalsAllowed=*/false, prefixes);
 	switch (vs.kind) {
@@ -844,7 +844,7 @@ void emitOneMapping(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, 
 		// Still a syntactically valid (but semantically inert) TriplesMap: the
 		// R2RML object model only recognises a resource as a TriplesMap when it
 		// carries rr:logicalTable/subjectMap/predicateObjectMap/subject.
-		emitUriTriple(collector, subject, RDF_TYPE, rdf::Term::iri(RR_TRIPLES_MAP));
+		emitUriTriple(collector, subject, rdf::RDF_TYPE, rdf::Term::iri(RR_TRIPLES_MAP));
 		return;
 	}
 
@@ -881,10 +881,10 @@ void emitYarrrmlDocument(const std::string &yamlText, r2rml::TripleCollector &co
 	}
 
 	std::map<std::string, std::string> knownPrefixes = {
-	    {"rr", "http://www.w3.org/ns/r2rml#"},
-	    {"rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"},
-	    {"rdfs", "http://www.w3.org/2000/01/rdf-schema#"},
-	    {"xsd", "http://www.w3.org/2001/XMLSchema#"},
+	    {"rr", R2RML_NAMESPACE},
+	    {"rdf", rdf::RDF_NAMESPACE},
+	    {"rdfs", rdf::RDFS_NAMESPACE},
+	    {"xsd", rdf::XSD_NAMESPACE},
 	};
 
 	YAML::Node prefixesNode = root["prefixes"];
