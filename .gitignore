@@ -10,7 +10,7 @@ test/python/__pycache__/
 .Rhistory
 src/test_runner
 .claude/*
-
+.VSCodeCounter
 # Local performance-benchmark inputs (customer-provided databases, mappings and
 # query sets must never be committed - sql2rdf_benchmark takes them at runtime).
 *.duckdb
