@@ -975,6 +975,29 @@ TEST_CASE("parseString: rr:constant literal object becomes a Literal-typed Const
 	REQUIRE(nodeUri(constant->constantValue) == "active");
 }
 
+TEST_CASE("ConstantTermMap: an empty-string constant is invalid, so its term map is dropped") {
+	// ConstantTermMap's constructor guards on `node.n_bytes > 0`, so a
+	// zero-length rr:constant leaves constantValue as a null SerdNode and
+	// isValid() rejects the term map - which in turn means the enclosing
+	// predicate-object map produces no triple at all.
+	//
+	// Nothing else in the suite pins this.  It is easy to lose when the stored
+	// SerdNode becomes an owning term type, because the natural port ("an empty
+	// literal") is a perfectly well-formed, NON-null term, which would silently
+	// start emitting an empty-valued triple where today none is emitted.
+	SerdNode empty = serd_node_from_string(SERD_LITERAL, reinterpret_cast<const uint8_t *>(""));
+	ConstantTermMap emptyConstant(empty);
+	REQUIRE_FALSE(emptyConstant.isValid());
+
+	SerdNode nonEmpty = serd_node_from_string(SERD_LITERAL, reinterpret_cast<const uint8_t *>("x"));
+	ConstantTermMap nonEmptyConstant(nonEmpty);
+	REQUIRE(nonEmptyConstant.isValid());
+
+	// A default-constructed one is likewise invalid: there is no term at all.
+	ConstantTermMap defaulted;
+	REQUIRE_FALSE(defaulted.isValid());
+}
+
 TEST_CASE("parseString: explicit rr:termType overrides the objectMap column default") {
 	// An rr:column in an objectMap normally defaults to rr:Literal, but an
 	// explicit rr:termType rr:IRI must win.  rr:BlankNode and rr:Literal are

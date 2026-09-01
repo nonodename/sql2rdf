@@ -1,0 +1,43 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#>.
+
+# Pins the CURRENT, KNOWN-BUGGY handling of typed and language-tagged
+# rr:constant values.
+#
+# R2RMLParser::buildTermMap reads only the ObjValue's `value` field when it
+# builds a ConstantTermMap, so the datatype and language that the Turtle parser
+# already collected are silently discarded:
+#
+#   ex:typedConst  rr:constant "5"^^xsd:integer  -> emitted as a PLAIN "5"
+#   ex:langConst   rr:constant "chat"@fr         -> emitted as a PLAIN "chat"
+#   ex:iriConst    rr:constant ex:Thing          -> correct today (IRI path)
+#   ex:plainConst  rr:constant "plain"           -> correct today
+#
+# The golden expectations below record the wrong output ON PURPOSE.  This
+# fixture exists so that the follow-up commit which fixes the bug shows up as a
+# deliberate, reviewable golden diff instead of a silent behaviour change - and
+# so that the refactor preceding it cannot accidentally fix or further break it
+# without someone noticing.
+
+<#TriplesMapConst>
+    rr:logicalTable [ rr:tableName "GOLDEN" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/golden/{ID}";
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:typedConst;
+        rr:objectMap [ rr:constant "5"^^xsd:integer ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:langConst;
+        rr:objectMap [ rr:constant "chat"@fr ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:iriConst;
+        rr:objectMap [ rr:constant ex:Thing ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:plainConst;
+        rr:objectMap [ rr:constant "plain" ];
+    ].

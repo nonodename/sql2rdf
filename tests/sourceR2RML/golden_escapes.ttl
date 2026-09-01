@@ -1,0 +1,34 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Pins literal ESCAPING and UTF-8 handling through the whole pipeline.
+#
+# ConstantTermMap is the only place in the codebase that copies SerdNodeFlags
+# and n_chars from the reader's node (ConstantTermMap.cpp) rather than letting
+# serd_node_from_string recompute them from the raw bytes.  Those flags
+# (SERD_HAS_QUOTE / SERD_HAS_NEWLINE) are what drive the writer's choice of
+# """long""" quoting, and n_chars is computed over the *unescaped* bytes.
+#
+# So a refactor that stops carrying flags/n_chars on the term and recomputes
+# them at the serd boundary could change serialisation here and nowhere else.
+# Every literal below therefore contains an embedded quote, an embedded
+# newline and multi-byte UTF-8:
+#
+#   ex:constEscaped  - the constant path (the one that copies flags today)
+#   ex:columnEscaped - the column path (already recomputes flags) as a control
+#
+# If the two ever disagree, the constant path has drifted.
+
+<#TriplesMapEscapes>
+    rr:logicalTable [ rr:tableName "GOLDEN" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/golden/{ID}";
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:constEscaped;
+        rr:objectMap [ rr:constant "He said \"hi\"\nthen left — café 日本" ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:columnEscaped;
+        rr:objectMap [ rr:column "TEXT" ];
+    ].
