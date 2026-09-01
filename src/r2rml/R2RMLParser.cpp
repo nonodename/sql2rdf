@@ -468,7 +468,7 @@ public:
 	void applyLanguage(const std::string &nodeKey, TermMap &tm) {
 		std::string lang = ts.getFirstLiteral(nodeKey, RR_LANGUAGE);
 		if (!lang.empty()) {
-			tm.languageTag = std::unique_ptr<std::string>(new std::string(lang));
+			tm.languageTag = std::unique_ptr<std::string>(new std::string(std::move(lang)));
 		}
 	}
 
