@@ -13,6 +13,7 @@
 #include "r2rml/ColumnTermMap.h"
 #include "r2rml/ConstantTermMap.h"
 #include "r2rml/TemplateTermMap.h"
+#include "rdf/Term.h"
 #include "sparql-parser/ast/Term.h"
 #include "sparql2sql/DuckDbDialect.h"
 #include "sparql2sql/TemplateUtil.h"
@@ -257,6 +258,53 @@ TEST_CASE("invertTermMapAgainstBoundTerm: ConstantTermMap matches only its own v
 	sparql::ast::Iri mismatching("http://example.com/ns#Inactive", "ex:Inactive");
 	InversionResult mismatchResult = invertTermMapAgainstBoundTerm(constant, mismatching, "t1", dialect);
 	CHECK_FALSE(mismatchResult.possible);
+}
+
+TEST_CASE("termMapToSqlExpr: a typed ConstantTermMap reports its own kind and datatype") {
+	DuckDbDialect dialect;
+	r2rml::ConstantTermMap constant(rdf::Term::typedLiteral("5", "http://www.w3.org/2001/XMLSchema#integer"));
+	SqlExpr e = termMapToSqlExpr(constant, "t1", dialect);
+	CHECK(e.expr == "'5'");
+	CHECK(e.term.kind == sparql2sql::RdfTermKind::Literal);
+	CHECK(e.term.datatypeIri == "http://www.w3.org/2001/XMLSchema#integer");
+	CHECK(e.term.lang.empty());
+}
+
+TEST_CASE("termMapToSqlExpr: a language-tagged ConstantTermMap reports its own language") {
+	DuckDbDialect dialect;
+	r2rml::ConstantTermMap constant(rdf::Term::langLiteral("chat", "fr"));
+	SqlExpr e = termMapToSqlExpr(constant, "t1", dialect);
+	CHECK(e.expr == "'chat'");
+	CHECK(e.term.kind == sparql2sql::RdfTermKind::Literal);
+	CHECK(e.term.lang == "fr");
+	CHECK(e.term.datatypeIri == sparql2sql::kRdfLangString);
+}
+
+TEST_CASE("invertTermMapAgainstBoundTerm: ConstantTermMap requires the same datatype, not just the same text") {
+	DuckDbDialect dialect;
+	r2rml::ConstantTermMap constant(rdf::Term::typedLiteral("5", "http://www.w3.org/2001/XMLSchema#integer"));
+
+	sparql::ast::RdfLiteral sameDatatype("5");
+	sameDatatype.datatype.reset(new sparql::ast::Iri("http://www.w3.org/2001/XMLSchema#integer", ""));
+	CHECK(invertTermMapAgainstBoundTerm(constant, sameDatatype, "t1", dialect).possible);
+
+	// Identical lexical form, but the bound literal is a plain string: same
+	// text is not the same RDF term.
+	sparql::ast::RdfLiteral differentDatatype("5");
+	CHECK_FALSE(invertTermMapAgainstBoundTerm(constant, differentDatatype, "t1", dialect).possible);
+}
+
+TEST_CASE("invertTermMapAgainstBoundTerm: ConstantTermMap requires the same language tag") {
+	DuckDbDialect dialect;
+	r2rml::ConstantTermMap constant(rdf::Term::langLiteral("chat", "fr"));
+
+	sparql::ast::RdfLiteral sameLang("chat");
+	sameLang.languageTag = "fr";
+	CHECK(invertTermMapAgainstBoundTerm(constant, sameLang, "t1", dialect).possible);
+
+	sparql::ast::RdfLiteral differentLang("chat");
+	differentLang.languageTag = "en";
+	CHECK_FALSE(invertTermMapAgainstBoundTerm(constant, differentLang, "t1", dialect).possible);
 }
 
 TEST_CASE("invertTermMapAgainstBoundTerm: ColumnTermMap always possible, emits an equality condition") {

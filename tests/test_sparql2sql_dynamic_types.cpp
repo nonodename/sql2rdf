@@ -260,6 +260,38 @@ TEST_CASE("sameTerm stays plain string equality when the mapping proves the dime
 	CHECK_FALSE(hasAnyTagColumn(sql));
 }
 
+// ---------------------------------------------------------------------------
+// 3b. rr:constant literals: kind/datatype/language read from the stored Term
+// ---------------------------------------------------------------------------
+
+TEST_CASE("DATATYPE over a typed rr:constant folds statically to its own datatype", "[sparql2sql][dynamic-types]") {
+	// ex:constint is "5"^^xsd:integer. Before rr:constant carried its datatype
+	// through TermInfo, this datatype was unconditionally unknown, so the
+	// FILTER below could never be proved true at translation time.
+	const std::string sql = translate("SELECT ?v WHERE { ?m ex:constint ?v . FILTER(datatype(?v) = xsd:integer) }");
+	CHECK_FALSE(hasAnyTagColumn(sql));
+	CHECK_FALSE(contains(sql, "ELSE NULL END"));
+}
+
+TEST_CASE("LANG over a language-tagged rr:constant folds statically to its own tag", "[sparql2sql][dynamic-types]") {
+	// ex:constlang is "chat"@fr. Same story as above, but for rr:language.
+	const std::string sql = translate("SELECT ?v WHERE { ?m ex:constlang ?v . FILTER(lang(?v) = \"fr\") }");
+	CHECK_FALSE(hasAnyTagColumn(sql));
+	CHECK_FALSE(contains(sql, "ELSE NULL END"));
+}
+
+TEST_CASE("sameTerm distinguishes rr:constant values with identical text but different datatypes",
+          "[sparql2sql][dynamic-types]") {
+	// ex:constint is "5"^^xsd:integer and ex:conststr is a plain "5" (=>
+	// xsd:string). Both dimensions are fully static, so this must fold to a
+	// definite FALSE rather than materialising a tag or falling back to
+	// lexical-only equality (which would wrongly say TRUE).
+	const std::string sql = translate("SELECT ?m WHERE { ?m ex:constint ?a . ?m ex:conststr ?b . "
+	                                  "FILTER(sameTerm(?a, ?b)) }");
+	CHECK_FALSE(hasAnyTagColumn(sql));
+	CHECK(contains(sql, "FALSE"));
+}
+
 TEST_CASE("equality over undetermined operands dispatches on both value spaces", "[sparql2sql][dynamic-types]") {
 	const std::string sql = translate("SELECT ?p WHERE { ?m ex:mixeddt ?v . ?m ex:desc ?d . BIND(?v AS ?p) "
 	                                  "BIND(?d AS ?q) FILTER(?p = ?q) }");
