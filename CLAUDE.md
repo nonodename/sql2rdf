@@ -42,7 +42,7 @@ If DuckDB is not installed, CMake prints a warning and skips the CLI; the librar
 
 ## Tests
 
-Catch2 (fetched via FetchContent). All tests use a mock SQL backend (`tests/MockSQL.h`) — DuckDB is never required to run them.
+Catch2 (v2 fetched via FetchContent). All tests use a mock SQL backend (`tests/MockSQL.h`) — DuckDB is never required to run them.
 
 ```sh
 cmake --build build --target tests           # build + run all tests
