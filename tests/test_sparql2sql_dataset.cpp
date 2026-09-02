@@ -15,7 +15,7 @@
  * Mapping under test is sparql2sql_graphs.ttl; see its header for the shapes.
  */
 
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 
 #include <string>
 

@@ -15,20 +15,28 @@ std::string AbstractMap::percentEncode(const std::string &value) {
 	// 2. O(1) boolean lookup array to replace std::strchr
 	static const bool unreserved[256] = {
 	    /* 0-31: Control chars */
-	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
 	    /* 32-47: Space to / */
-	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, // '-' is 45, '.' is 46
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, true, true,
+	    false, // '-' is 45, '.' is 46
 	    /* 48-63: 0-9 and symbols */
-	    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
+	    true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false,
 	    /* 64-95: @ and A-Z, [\]^_ */
-	    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, // '_' is 95
+	    false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+	    true, true, true, true, true, true, true, true, true, false, false, false, false, true, // '_' is 95
 	    /* 96-127: ` and a-z, {|}~ */
-	    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, // '~' is 126
+	    false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+	    true, true, true, true, true, true, true, true, true, false, false, false, true, false, // '~' is 126
 	    /* 128-255: Extended ASCII / UTF-8 bytes (always encoded) */
-	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false};
 
 	// 3. Exact pre-allocation scan (removes dynamic reallocation and float math)
 	size_t requiredSize = 0;

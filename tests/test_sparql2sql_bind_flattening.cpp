@@ -15,7 +15,7 @@
  * real fixtures, mirroring test_sparql2sql_filter_pushdown.cpp's style.
  */
 
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 
 #include <cstddef>
 #include <string>

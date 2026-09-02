@@ -25,7 +25,7 @@
  * change should show up as a failure.
  */
 
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 #include <serd/serd.h>
 
 #include <algorithm>

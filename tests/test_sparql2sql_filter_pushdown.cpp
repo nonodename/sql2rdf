@@ -15,7 +15,7 @@
  * the incidental SQL shape of a comparison. See literalsPerFilter().
  */
 
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 
 #include <cstddef>
 #include <string>

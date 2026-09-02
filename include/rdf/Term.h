@@ -10,15 +10,15 @@ namespace rdf {
 /// rdf:langString - the implicit datatype of every language-tagged literal
 /// (RDF 1.1 Section 3.3).
 // extern const char *const RDF_LANG_STRING;
-const std::string RDF_LANG_STRING = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const std::string XSD_INTEGER = "http://www.w3.org/2001/XMLSchema#integer";
-const std::string XSD_DOUBLE = "http://www.w3.org/2001/XMLSchema#double";
-const std::string XSD_BOOLEAN = "http://www.w3.org/2001/XMLSchema#boolean";
-const std::string XSD_DECIMAL = "http://www.w3.org/2001/XMLSchema#decimal";
-const std::string RDF_NAMESPACE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const std::string RDFS_NAMESPACE = "http://www.w3.org/2000/01/rdf-schema#";
-const std::string XSD_NAMESPACE = "http://www.w3.org/2001/XMLSchema#";
-const std::string RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+constexpr const char *const RDF_LANG_STRING = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+constexpr const char *const XSD_INTEGER = "http://www.w3.org/2001/XMLSchema#integer";
+constexpr const char *const XSD_DOUBLE = "http://www.w3.org/2001/XMLSchema#double";
+constexpr const char *const XSD_BOOLEAN = "http://www.w3.org/2001/XMLSchema#boolean";
+constexpr const char *const XSD_DECIMAL = "http://www.w3.org/2001/XMLSchema#decimal";
+constexpr const char *const RDF_NAMESPACE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+constexpr const char *const RDFS_NAMESPACE = "http://www.w3.org/2000/01/rdf-schema#";
+constexpr const char *const XSD_NAMESPACE = "http://www.w3.org/2001/XMLSchema#";
+constexpr const char *const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 /**
  * An owning, self-contained RDF term: a kind, a lexical form, and - for
  * literals - either a datatype IRI or a language tag.

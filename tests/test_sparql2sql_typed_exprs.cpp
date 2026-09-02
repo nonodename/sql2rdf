@@ -12,7 +12,7 @@
  * Whether the *rows* are right is settled by tests/duckdb/, not here.
  */
 
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 
 #include <string>
 

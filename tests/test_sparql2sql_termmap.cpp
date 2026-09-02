@@ -4,7 +4,7 @@
  * (TermMapSql). Pure string/R2RML logic - no SPARQL AST, no DuckDB.
  */
 
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 #include <serd/serd.h>
 
 #include <memory>

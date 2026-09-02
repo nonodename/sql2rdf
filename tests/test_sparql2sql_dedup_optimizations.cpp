@@ -14,7 +14,7 @@
  *    query is not itself DISTINCT and the arms are not template-disjoint.
  */
 
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 
 #include <string>
 

@@ -19,7 +19,7 @@
  *   EMP2DEPT:    (7369,10), (7369,20), (7400,10)
  */
 
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 #include <serd/serd.h>
 
 #include <map>

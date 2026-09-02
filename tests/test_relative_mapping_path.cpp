@@ -14,7 +14,7 @@
  * relative mapping paths against the current working directory first.
  */
 
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 
 #include <serd/serd.h>
 

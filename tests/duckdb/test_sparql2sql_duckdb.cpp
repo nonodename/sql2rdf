@@ -12,7 +12,7 @@
  * gated CTest target for exactly that reason.
  */
 
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 
 #include <algorithm>
 #include <cctype>
