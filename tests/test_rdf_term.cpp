@@ -72,9 +72,12 @@ TEST_CASE("rdf::Term plain literal has neither datatype nor language", "[rdfterm
 	REQUIRE(l.datatypeIri().empty());
 	REQUIRE(l.lang().empty());
 	REQUIRE_FALSE(l.hasLang());
-	// An empty datatype means "no datatype stated", which is NOT the same as a
-	// known xsd:string.
-	REQUIRE(l.effectiveDatatypeIri().empty());
+	// The STORED datatype is empty ("no datatype stated"), so it round-trips
+	// as plain rather than being serialised as typed...
+	REQUIRE(l.datatypeIri().empty());
+	// ...but the EFFECTIVE datatype is xsd:string: RDF 1.1 Concepts 3.3 treats
+	// a simple literal as sugar for an explicit xsd:string.
+	REQUIRE(l.effectiveDatatypeIri() == rdf::XSD_STRING);
 	REQUIRE(printed(l) == "\"text\"");
 }
 
@@ -201,10 +204,18 @@ TEST_CASE("rdf::Term equality compares the abstract term", "[rdfterm]") {
 	REQUIRE(Term::langLiteral("chat", "fr") != Term::langLiteral("chat", "en"));
 	REQUIRE(Term::langLiteral("chat", "fr") != Term::literal("chat"));
 
-	// Language tags compare case-sensitively. BCP 47 says they should not, but
-	// this layer deliberately does not own a folding table - see the class
-	// comment. Pinned so the choice is visible rather than accidental.
-	REQUIRE(Term::langLiteral("chat", "fr") != Term::langLiteral("chat", "FR"));
+	// A plain literal and an explicit xsd:string-typed literal with the same
+	// lexical form are the SAME abstract term (RDF 1.1 Concepts 3.3), even
+	// though their STORED datatype differs (one empty, one explicit).
+	REQUIRE(Term::literal("hello") == Term::typedLiteral("hello", rdf::XSD_STRING));
+	REQUIRE(Term::literal("hello").datatypeIri() != Term::typedLiteral("hello", rdf::XSD_STRING).datatypeIri());
+
+	// Language tags compare case-INsensitively (BCP 47 / RDF 1.1 Concepts 3.3):
+	// differently-cased equivalent tags are the same term...
+	REQUIRE(Term::langLiteral("chat", "fr") == Term::langLiteral("chat", "FR"));
+	REQUIRE(Term::langLiteral("chat", "fr") == Term::langLiteral("chat", "Fr"));
+	// ...but the stored spelling is untouched by the comparison.
+	REQUIRE(Term::langLiteral("chat", "FR").lang() == "FR");
 }
 
 TEST_CASE("rdf::Term copies are independent", "[rdfterm]") {

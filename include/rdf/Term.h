@@ -11,6 +11,7 @@ namespace rdf {
 /// (RDF 1.1 Section 3.3).
 // extern const char *const RDF_LANG_STRING;
 constexpr const char *const RDF_LANG_STRING = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+constexpr const char *const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
 constexpr const char *const XSD_INTEGER = "http://www.w3.org/2001/XMLSchema#integer";
 constexpr const char *const XSD_DOUBLE = "http://www.w3.org/2001/XMLSchema#double";
 constexpr const char *const XSD_BOOLEAN = "http://www.w3.org/2001/XMLSchema#boolean";
@@ -77,9 +78,13 @@ public:
 	/// `label` must NOT carry a "_:" prefix; see the invariants above.
 	static Term blankNode(const std::string &label);
 
-	/// A literal with neither datatype nor language tag.  This is NOT the same
-	/// as an xsd:string literal: an empty datatype means "no datatype stated",
-	/// which R2RML's natural mapping treats as distinct from a known xsd:string.
+	/// A literal with neither datatype nor language tag: RDF 1.1's "simple
+	/// literal".  Its STORED datatype (datatypeIri()) is empty - R2RML's natural
+	/// mapping treats "no datatype stated" as distinct from an explicit
+	/// xsd:string, and that distinction must survive round-tripping.  Its
+	/// EFFECTIVE datatype (effectiveDatatypeIri()) is xsd:string per RDF 1.1
+	/// Concepts 3.3, which is what makes it term-equal to an explicit
+	/// xsd:string-typed literal with the same lexical form.
 	static Term literal(const std::string &lexical_form);
 
 	/// A literal with an explicit datatype.  An empty `datatype_iri` degrades to
@@ -131,9 +136,13 @@ public:
 		return !lang_.empty();
 	}
 
-	/// rdf:langString when a language tag is present, otherwise datatypeIri().
-	/// Use this when reasoning about the term's abstract datatype (SPARQL
-	/// DATATYPE(), term equality); use datatypeIri() when serialising.
+	/// rdf:langString when a language tag is present; xsd:string when the term
+	/// is a literal with neither a language tag nor a stored datatype (RDF
+	/// 1.1's simple literal is sugar for an explicit xsd:string, Concepts 3.3);
+	/// otherwise datatypeIri().  Use this when reasoning about the term's
+	/// abstract datatype (SPARQL DATATYPE(), term equality); use datatypeIri()
+	/// when serialising, since that must preserve "no datatype stated" vs.
+	/// "stated as xsd:string".
 	std::string effectiveDatatypeIri() const;
 
 	// ---- In-place mutation, for the per-row generation path ---------------
@@ -179,12 +188,13 @@ public:
 
 	/// RDF term equality on the abstract term rather than on the
 	/// representation: two literals are equal when their lexical forms and
-	/// their EFFECTIVE datatypes agree.  Two absent terms are equal.
+	/// their EFFECTIVE datatypes agree, and - for language-tagged literals -
+	/// their language tags agree.  Two absent terms are equal.
 	///
-	/// Language tags compare case-sensitively.  BCP 47 says they should not,
-	/// but nothing here relies on case-insensitive matching, folding correctly
-	/// is a table this layer has no business owning, and both parsers preserve
-	/// the mapping author's spelling, so tags round-trip byte-for-byte.
+	/// Language tags compare case-INsensitively (ASCII fold), per RDF 1.1
+	/// Concepts 3.3 and BCP 47.  This is a comparison-only fold: the stored
+	/// tag is never rewritten, so both parsers still preserve the mapping
+	/// author's original spelling for serialisation.
 	bool operator==(const Term &other) const;
 	bool operator!=(const Term &other) const {
 		return !(*this == other);

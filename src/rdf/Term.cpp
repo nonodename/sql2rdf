@@ -1,6 +1,26 @@
 #include "rdf/Term.h"
 
+#include <cctype>
+
 namespace rdf {
+
+namespace {
+
+/// ASCII case-insensitive comparison for language tags (BCP 47 tags are
+/// always ASCII), used by operator== per RDF 1.1 Concepts 3.3.
+bool equalsIgnoreCaseAscii(const std::string &a, const std::string &b) {
+	if (a.size() != b.size()) {
+		return false;
+	}
+	for (std::string::size_type i = 0; i < a.size(); ++i) {
+		if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+} // namespace
 
 const char *termKindName(TermKind kind) {
 	switch (kind) {
@@ -139,6 +159,13 @@ std::string Term::effectiveDatatypeIri() const {
 	if (!lang_.empty()) {
 		return RDF_LANG_STRING;
 	}
+	if (datatype_.empty()) {
+		// RDF 1.1's "simple literal" (no language tag, no stated datatype) is
+		// sugar for an explicit xsd:string (Concepts 3.3): the two are the same
+		// abstract term, even though datatypeIri() keeps them apart so a plain
+		// literal round-trips as plain rather than being serialised as typed.
+		return XSD_STRING;
+	}
 	return datatype_;
 }
 
@@ -150,10 +177,14 @@ bool Term::operator==(const Term &other) const {
 		return true;
 	}
 	// Compare the EFFECTIVE datatype so that the abstract term drives equality
-	// rather than the representation.  The invariants make this equivalent to
-	// comparing the two fields directly today, but it keeps the comparison
-	// correct if a future caller ever constructs a langString by datatype.
-	return lang_ == other.lang_ && effectiveDatatypeIri() == other.effectiveDatatypeIri();
+	// rather than the representation: e.g. a plain literal and an explicit
+	// xsd:string-typed literal with the same lexical form are the same term.
+	if (effectiveDatatypeIri() != other.effectiveDatatypeIri()) {
+		return false;
+	}
+	// Language tags fold case for comparison only (BCP 47 / RDF 1.1 Concepts
+	// 3.3); for non-langString literals both sides are already empty here.
+	return equalsIgnoreCaseAscii(lang_, other.lang_);
 }
 
 std::ostream &Term::print(std::ostream &os) const {
