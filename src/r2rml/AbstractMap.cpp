@@ -9,20 +9,60 @@ namespace r2rml {
 AbstractMap::~AbstractMap() = default;
 
 std::string AbstractMap::percentEncode(const std::string &value) {
-	static const char unreserved[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	                                 "abcdefghijklmnopqrstuvwxyz"
-	                                 "0123456789-_.~";
-	std::string out;
-	out.reserve(value.size());
+	// 1. Fast hex lookup table to replace snprintf
+	static const char hexDigits[] = "0123456789ABCDEF";
+
+	// 2. O(1) boolean lookup array to replace std::strchr
+	static const bool unreserved[256] = {
+	    /* 0-31: Control chars */
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    /* 32-47: Space to / */
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, true, true,
+	    false, // '-' is 45, '.' is 46
+	    /* 48-63: 0-9 and symbols */
+	    true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false,
+	    /* 64-95: @ and A-Z, [\]^_ */
+	    false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+	    true, true, true, true, true, true, true, true, true, false, false, false, false, true, // '_' is 95
+	    /* 96-127: ` and a-z, {|}~ */
+	    false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+	    true, true, true, true, true, true, true, true, true, false, false, false, true, false, // '~' is 126
+	    /* 128-255: Extended ASCII / UTF-8 bytes (always encoded) */
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false};
+
+	// 3. Exact pre-allocation scan (removes dynamic reallocation and float math)
+	size_t requiredSize = 0;
 	for (unsigned char c : value) {
-		if (std::strchr(unreserved, static_cast<char>(c))) {
-			out += static_cast<char>(c);
+		requiredSize += unreserved[c] ? 1 : 3;
+	}
+
+	// If no encoding is needed, return early via copy to trigger NRVO
+	if (requiredSize == value.size()) {
+		return value;
+	}
+
+	std::string out;
+	out.reserve(requiredSize);
+
+	// 4. Fast conversion loop
+	for (unsigned char c : value) {
+		if (unreserved[c]) {
+			out.push_back(static_cast<char>(c));
 		} else {
-			char buf[4];
-			std::snprintf(buf, sizeof(buf), "%%%02X", static_cast<unsigned>(c));
-			out += buf;
+			out.push_back('%');
+			out.push_back(hexDigits[c >> 4]);   // Upper nibble
+			out.push_back(hexDigits[c & 0x0F]); // Lower nibble
 		}
 	}
+
 	return out;
 }
 

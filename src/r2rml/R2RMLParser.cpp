@@ -28,6 +28,8 @@
 #include "r2rml/TermMap.h"
 #include "r2rml/TriplesMap.h"
 #include "r2rml/PredicateObjectMap.h"
+#include "r2rml/SerdTerm.h"
+#include "r2rml/TripleStore.h"
 
 #include <serd/serd.h>
 
@@ -119,21 +121,6 @@ using vocab::RR_TEMPLATE;
 using vocab::RR_TERM_TYPE;
 
 // ---------------------------------------------------------------------------
-// Raw triple-store types
-// ---------------------------------------------------------------------------
-enum class ObjType { URI, Blank, Literal };
-
-struct ObjValue {
-	ObjType type;
-	std::string value;    ///< URI string, blank-node ID (no "_:" prefix), or literal text
-	std::string datatype; ///< For typed literals – full URI
-	std::string lang;     ///< For language-tagged literals
-};
-
-using PredMap = std::map<std::string, std::vector<ObjValue>>;
-using TripleStore = std::map<std::string, PredMap>;
-
-// ---------------------------------------------------------------------------
 // Node-expansion helper
 // ---------------------------------------------------------------------------
 
@@ -166,6 +153,43 @@ static std::string expandNode(SerdEnv *env, const SerdNode *node, const std::str
 		return std::string(reinterpret_cast<const char *>(node->buf), node->n_bytes);
 	}
 	return {};
+}
+
+/// expandNode() for an IRI already held as text rather than as a SerdNode.
+/// Handles relative references (e.g. "#TriplesMap1") by resolving them against
+/// the environment's base, exactly as the Turtle path does.
+static std::string expandIriText(SerdEnv *env, const std::string &text) {
+	SerdNode node = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(text.c_str()));
+	return expandNode(env, &node);
+}
+
+/// Subject/predicate lookup key for a term supplied by a caller: blank labels
+/// get the "_:" prefix and the merge-scope tag, IRIs get resolved. A literal
+/// has no key, since it cannot be a subject or a predicate.
+static std::string termKey(SerdEnv *env, const rdf::Term &term, const std::string &blankScopePrefix) {
+	if (term.isBlankNode()) {
+		return "_:" + blankScopePrefix + term.lexical();
+	}
+	if (term.isIri()) {
+		return expandIriText(env, term.lexical());
+	}
+	return {};
+}
+
+/// Apply the same resolution to an object term: scope-tag a blank label,
+/// resolve an IRI, and resolve a typed literal's datatype IRI. A plain or
+/// language-tagged literal passes through unchanged.
+static rdf::Term resolveObjectTerm(SerdEnv *env, const rdf::Term &object, const std::string &blankScopePrefix) {
+	if (object.isBlankNode()) {
+		return rdf::Term::blankNode(blankScopePrefix + object.lexical());
+	}
+	if (object.isIri()) {
+		return rdf::Term::iri(expandIriText(env, object.lexical()));
+	}
+	if (object.isLiteral() && !object.hasLang() && !object.datatypeIri().empty()) {
+		return rdf::Term::typedLiteral(object.lexical(), expandIriText(env, object.datatypeIri()));
+	}
+	return object;
 }
 
 // ---------------------------------------------------------------------------
@@ -224,43 +248,69 @@ void TripleCollector::statement(const SerdNode *subject, const SerdNode *predica
 		return;
 	}
 
+	// termFromSerdNode does the deep copy, but not the two things that need the
+	// environment or this collector's state: expanding a CURIE/relative IRI
+	// against the base, and tagging a blank label with the current merge scope.
+	rdf::Term obj;
+	if (object->type == SERD_BLANK) {
+		obj = rdf::Term::blankNode(blankScopePrefix +
+		                           std::string(reinterpret_cast<const char *>(object->buf), object->n_bytes));
+	} else if (object->type == SERD_LITERAL) {
+		const std::string text(reinterpret_cast<const char *>(object->buf), object->n_bytes);
+		// A datatype IRI may itself be a CURIE, so it must be expanded rather
+		// than copied straight across - which is why this cannot simply hand the
+		// datatype node to termFromSerdNode. Language wins over datatype, per
+		// RDF 1.1 and rdf::Term's mutually-exclusive invariant.
+		if (objectLang && objectLang->buf) {
+			obj = rdf::Term::langLiteral(
+			    text, std::string(reinterpret_cast<const char *>(objectLang->buf), objectLang->n_bytes));
+		} else if (objectDatatype && objectDatatype->buf) {
+			obj = rdf::Term::typedLiteral(text, expandNode(impl_->env, objectDatatype));
+		} else {
+			obj = rdf::Term::literal(text);
+		}
+	} else {
+		obj = rdf::Term::iri(expandNode(impl_->env, object));
+	}
+
+	insertResolved(subject->type == SERD_BLANK, subjKey, predKey, std::move(obj));
+}
+
+void TripleCollector::statement(const rdf::Term &subject, const rdf::Term &predicate, const rdf::Term &object) {
+	const std::string blankScopePrefix = impl_->blankScopePrefix();
+	const std::string subjKey = termKey(impl_->env, subject, blankScopePrefix);
+	// No scope prefix for the predicate: a predicate is always an IRI, and the
+	// SerdNode overload likewise expands it without one.
+	const std::string predKey = termKey(impl_->env, predicate, std::string());
+	if (subjKey.empty() || predKey.empty()) {
+		return;
+	}
+	insertResolved(subject.isBlankNode(), subjKey, predKey, resolveObjectTerm(impl_->env, object, blankScopePrefix));
+}
+
+// TODO: Investigate if it still makes sense to key these by the subject/predicate
+// expressed as strings rather than the new TermNode representation.
+void TripleCollector::insertResolved(bool subject_is_blank, const std::string &subject_key,
+                                     const std::string &predicate_key, rdf::Term object) {
 	// Named-subject conflict detection across merged sources (see
-	// beginSource()): blank subjects are always scope-tagged uniquely above,
-	// so they never reach this check.
-	if (subject->type != SERD_BLANK) {
-		auto ownerIt = impl_->subjectOwner.find(subjKey);
+	// beginSource()): blank subjects are always scope-tagged uniquely by the
+	// caller, so they never reach this check.
+	if (!subject_is_blank) {
+		auto ownerIt = impl_->subjectOwner.find(subject_key);
 		if (ownerIt == impl_->subjectOwner.end()) {
-			impl_->subjectOwner.emplace(subjKey, impl_->currentScope);
+			impl_->subjectOwner.emplace(subject_key, impl_->currentScope);
 		} else if (ownerIt->second != impl_->currentScope) {
-			std::string conflictTag = subjKey + "\x1f" + std::to_string(impl_->currentScope);
+			std::string conflictTag = subject_key + "\x1f" + std::to_string(impl_->currentScope);
 			if (impl_->warnedConflicts.insert(conflictTag).second) {
 				impl_->warnings.push_back(
-				    "competing definition of <" + subjKey + "> in '" + impl_->sourceLabels[impl_->currentScope] +
+				    "competing definition of <" + subject_key + "> in '" + impl_->sourceLabels[impl_->currentScope] +
 				    "' ignored (kept definition from '" + impl_->sourceLabels[ownerIt->second] + "')");
 			}
 			return;
 		}
 	}
 
-	ObjValue obj;
-	if (object->type == SERD_BLANK) {
-		obj.type = ObjType::Blank;
-		obj.value = blankScopePrefix + std::string(reinterpret_cast<const char *>(object->buf), object->n_bytes);
-	} else if (object->type == SERD_LITERAL) {
-		obj.type = ObjType::Literal;
-		obj.value = std::string(reinterpret_cast<const char *>(object->buf), object->n_bytes);
-		if (objectDatatype && objectDatatype->buf) {
-			obj.datatype = expandNode(impl_->env, objectDatatype);
-		}
-		if (objectLang && objectLang->buf) {
-			obj.lang = std::string(reinterpret_cast<const char *>(objectLang->buf), objectLang->n_bytes);
-		}
-	} else {
-		obj.type = ObjType::URI;
-		obj.value = expandNode(impl_->env, object);
-	}
-
-	impl_->triples[subjKey][predKey].push_back(std::move(obj));
+	impl_->triples.insert(subject_key, predicate_key, std::move(object));
 }
 
 void TripleCollector::addError(const std::string &message) {
@@ -324,70 +374,6 @@ static SerdStatus cbError(void *handle, const SerdError *error) {
 }
 
 // ---------------------------------------------------------------------------
-// Triple-store query helpers (pure utilities – no build state needed)
-// ---------------------------------------------------------------------------
-
-static const std::vector<ObjValue> *getObjects(const TripleStore &ts, const std::string &subj,
-                                               const std::string &pred) {
-	auto si = ts.find(subj);
-	if (si == ts.end()) {
-		return nullptr;
-	}
-	auto pi = si->second.find(pred);
-	if (pi == si->second.end()) {
-		return nullptr;
-	}
-	return &pi->second;
-}
-
-static std::string getFirstLiteral(const TripleStore &ts, const std::string &subj, const std::string &pred) {
-	const auto *objs = getObjects(ts, subj, pred);
-	if (!objs) {
-		return {};
-	}
-	for (const auto &o : *objs) {
-		if (o.type == ObjType::Literal) {
-			return o.value;
-		}
-	}
-	return {};
-}
-
-static std::string getFirstUri(const TripleStore &ts, const std::string &subj, const std::string &pred) {
-	const auto *objs = getObjects(ts, subj, pred);
-	if (!objs) {
-		return {};
-	}
-	for (const auto &o : *objs) {
-		if (o.type == ObjType::URI) {
-			return o.value;
-		}
-	}
-	return {};
-}
-
-/// Return the canonical lookup key for an ObjValue: "_:<id>" for blank nodes,
-/// URI string for named nodes, empty string for literals.
-static std::string objKey(const ObjValue &o) {
-	if (o.type == ObjType::Blank) {
-		return "_:" + o.value;
-	}
-	if (o.type == ObjType::URI) {
-		return o.value;
-	}
-	return {};
-}
-
-/// Return the first object of a predicate as a subject-lookup key.
-static std::string getFirstObjKey(const TripleStore &ts, const std::string &subj, const std::string &pred) {
-	const auto *objs = getObjects(ts, subj, pred);
-	if (!objs || objs->empty()) {
-		return {};
-	}
-	return objKey(objs->front());
-}
-
-// ---------------------------------------------------------------------------
 // ConcreteSubjectMap – private to this translation unit.
 //
 // SubjectMap inherits TermMap's pure-virtual generateRDFTerm without
@@ -398,11 +384,12 @@ class ConcreteSubjectMap : public SubjectMap {
 public:
 	std::unique_ptr<TermMap> valueMap;
 
-	SerdNode generateRDFTerm(const SQLRow &row, const SerdEnv &env) const override {
+	void generateRDFTerm(const SQLRow &row, rdf::Term &out) const override {
 		if (valueMap) {
-			return valueMap->generateRDFTerm(row, env);
+			valueMap->generateRDFTerm(row, out);
+			return;
 		}
-		return SERD_NODE_NULL;
+		out.clear();
 	}
 
 	const TermMap *valueTermMap() const override {
@@ -454,11 +441,12 @@ class ConcreteGraphMap : public GraphMap {
 public:
 	std::unique_ptr<TermMap> valueMap;
 
-	SerdNode generateRDFTerm(const SQLRow &row, const SerdEnv &env) const override {
+	void generateRDFTerm(const SQLRow &row, rdf::Term &out) const override {
 		if (valueMap) {
-			return valueMap->generateRDFTerm(row, env);
+			valueMap->generateRDFTerm(row, out);
+			return;
 		}
-		return SERD_NODE_NULL;
+		out.clear();
 	}
 
 	const TermMap *valueTermMap() const override {
@@ -484,8 +472,8 @@ public:
 // ---------------------------------------------------------------------------
 class ConcreteReferencingObjectMap : public ReferencingObjectMap {
 public:
-	SerdNode generateRDFTerm(const SQLRow & /*row*/, const SerdEnv & /*env*/) const override {
-		return SERD_NODE_NULL; // use the two-row overload for actual generation
+	void generateRDFTerm(const SQLRow & /*row*/, rdf::Term &out) const override {
+		out.clear(); // use the two-row overload for actual generation
 	}
 };
 
@@ -513,12 +501,23 @@ public:
 	}
 
 	// ------------------------------------------------------------------
-	// Wrap a literal string in a ConstantTermMap (rr:constant with a literal
-	// object, e.g. `rr:constant "active"`).
+	// Wrap an already-parsed literal term in a ConstantTermMap (rr:constant
+	// with a literal object, e.g. `rr:constant "active"` or
+	// `rr:constant "5"^^xsd:integer`). `term` carries whatever datatype/
+	// language the Turtle parser attached, so it is passed straight through
+	// rather than being rebuilt from the bare lexical form.
+	//
+	// An empty lexical form is rejected the same way the SerdNode
+	// constructor rejects a zero-length node: the term map is left with no
+	// constant value, isValid() returns false, and the enclosing
+	// predicate-object map emits nothing - preserving the long-standing
+	// behaviour that rr:constant "" produces no triple at all.
 	// ------------------------------------------------------------------
-	static std::unique_ptr<ConstantTermMap> makeConstantLiteral(const std::string &literal) {
-		SerdNode node = serd_node_from_string(SERD_LITERAL, reinterpret_cast<const uint8_t *>(literal.c_str()));
-		auto tm = std::unique_ptr<ConstantTermMap>(new ConstantTermMap(node));
+	static std::unique_ptr<ConstantTermMap> makeConstantLiteral(const rdf::Term &term) {
+		if (term.lexical().empty()) {
+			return std::unique_ptr<ConstantTermMap>(new ConstantTermMap());
+		}
+		auto tm = std::unique_ptr<ConstantTermMap>(new ConstantTermMap(term));
 		tm->termType = TermType::Literal;
 		return tm;
 	}
@@ -529,7 +528,7 @@ public:
 	// already been applied so an explicit rr:termType always wins.
 	// ------------------------------------------------------------------
 	void applyExplicitTermType(const std::string &nodeKey, TermMap &tm) {
-		std::string tt = getFirstUri(ts, nodeKey, RR_TERM_TYPE);
+		std::string tt = ts.getFirstUri(nodeKey, RR_TERM_TYPE);
 		if (tt == RR_IRI_TERM_TYPE) {
 			tm.termType = TermType::IRI;
 		} else if (tt == RR_LITERAL_TERM_TYPE) {
@@ -544,9 +543,9 @@ public:
 	// languageTag.
 	// ------------------------------------------------------------------
 	void applyLanguage(const std::string &nodeKey, TermMap &tm) {
-		std::string lang = getFirstLiteral(ts, nodeKey, RR_LANGUAGE);
+		std::string lang = ts.getFirstLiteral(nodeKey, RR_LANGUAGE);
 		if (!lang.empty()) {
-			tm.languageTag = std::unique_ptr<std::string>(new std::string(lang));
+			tm.languageTag = std::unique_ptr<std::string>(new std::string(std::move(lang)));
 		}
 	}
 
@@ -554,12 +553,12 @@ public:
 	// Build a LogicalTable from a blank-node or named-resource key.
 	// ------------------------------------------------------------------
 	std::unique_ptr<LogicalTable> buildLogicalTable(const std::string &ltKey) {
-		std::string tableName = getFirstLiteral(ts, ltKey, RR_TABLE_NAME);
+		std::string tableName = ts.getFirstLiteral(ltKey, RR_TABLE_NAME);
 		if (!tableName.empty()) {
 			return std::unique_ptr<BaseTableOrView>(new BaseTableOrView(tableName));
 		}
 
-		std::string sqlQuery = getFirstLiteral(ts, ltKey, RR_SQL_QUERY);
+		std::string sqlQuery = ts.getFirstLiteral(ltKey, RR_SQL_QUERY);
 		if (!sqlQuery.empty()) {
 			return std::unique_ptr<R2RMLView>(new R2RMLView(sqlQuery));
 		}
@@ -575,10 +574,10 @@ public:
 	// ------------------------------------------------------------------
 	std::unique_ptr<TermMap> buildTermMap(const std::string &nodeKey) {
 		// rr:column
-		std::string column = getFirstLiteral(ts, nodeKey, RR_COLUMN);
+		std::string column = ts.getFirstLiteral(nodeKey, RR_COLUMN);
 		if (!column.empty()) {
 			auto tm = std::unique_ptr<ColumnTermMap>(new ColumnTermMap(column));
-			std::string dt = getFirstUri(ts, nodeKey, RR_DATATYPE);
+			std::string dt = ts.getFirstUri(nodeKey, RR_DATATYPE);
 			if (!dt.empty()) {
 				tm->datatypeIRI = std::unique_ptr<std::string>(new std::string(dt));
 			}
@@ -588,10 +587,10 @@ public:
 		}
 
 		// rr:template
-		std::string tmpl = getFirstLiteral(ts, nodeKey, RR_TEMPLATE);
+		std::string tmpl = ts.getFirstLiteral(nodeKey, RR_TEMPLATE);
 		if (!tmpl.empty()) {
 			auto tm = std::unique_ptr<TemplateTermMap>(new TemplateTermMap(tmpl));
-			std::string dt = getFirstUri(ts, nodeKey, RR_DATATYPE);
+			std::string dt = ts.getFirstUri(nodeKey, RR_DATATYPE);
 			if (!dt.empty()) {
 				tm->datatypeIRI = std::unique_ptr<std::string>(new std::string(dt));
 			}
@@ -601,34 +600,34 @@ public:
 		}
 
 		// rr:constant (URI or literal object)
-		const auto *constObjs = getObjects(ts, nodeKey, RR_CONSTANT);
+		const auto *constObjs = ts.getObjects(nodeKey, RR_CONSTANT);
 		if (constObjs) {
 			for (const auto &c : *constObjs) {
-				if (c.type == ObjType::URI) {
-					return makeConstantUri(c.value);
+				if (c.isIri()) {
+					return makeConstantUri(c.lexical());
 				}
 			}
 			for (const auto &c : *constObjs) {
-				if (c.type == ObjType::Literal) {
-					return makeConstantLiteral(c.value);
+				if (c.isLiteral()) {
+					return makeConstantLiteral(c);
 				}
 			}
 		}
 
 		// rr:parentTriplesMap → ReferencingObjectMap
-		std::string parentUri = getFirstUri(ts, nodeKey, RR_PARENTTRIPLESMAP);
+		std::string parentUri = ts.getFirstUri(nodeKey, RR_PARENTTRIPLESMAP);
 		if (!parentUri.empty()) {
 			auto rom = std::unique_ptr<ConcreteReferencingObjectMap>(new ConcreteReferencingObjectMap());
 
-			const auto *jcObjs = getObjects(ts, nodeKey, RR_JOIN_CONDITION);
+			const auto *jcObjs = ts.getObjects(nodeKey, RR_JOIN_CONDITION);
 			if (jcObjs) {
 				for (const auto &jcObj : *jcObjs) {
-					std::string jcKey = objKey(jcObj);
+					std::string jcKey = TripleStore::objKey(jcObj);
 					if (jcKey.empty()) {
 						continue;
 					}
-					std::string child = getFirstLiteral(ts, jcKey, RR_CHILD);
-					std::string parent = getFirstLiteral(ts, jcKey, RR_PARENT);
+					std::string child = ts.getFirstLiteral(jcKey, RR_CHILD);
+					std::string parent = ts.getFirstLiteral(jcKey, RR_PARENT);
 					rom->joinConditions.emplace_back(child, parent);
 				}
 			}
@@ -650,21 +649,21 @@ public:
 	std::vector<std::unique_ptr<GraphMap>> buildGraphMaps(const std::string &nodeKey) {
 		std::vector<std::unique_ptr<GraphMap>> graphMaps;
 
-		const auto *graphObjs = getObjects(ts, nodeKey, RR_GRAPH);
+		const auto *graphObjs = ts.getObjects(nodeKey, RR_GRAPH);
 		if (graphObjs) {
 			for (const auto &g : *graphObjs) {
-				if (g.type == ObjType::URI) {
+				if (g.isIri()) {
 					auto gm = std::unique_ptr<ConcreteGraphMap>(new ConcreteGraphMap());
-					gm->valueMap = makeConstantUri(g.value);
+					gm->valueMap = makeConstantUri(g.lexical());
 					graphMaps.push_back(std::move(gm));
 				}
 			}
 		}
 
-		const auto *graphMapObjs = getObjects(ts, nodeKey, RR_GRAPH_MAP);
+		const auto *graphMapObjs = ts.getObjects(nodeKey, RR_GRAPH_MAP);
 		if (graphMapObjs) {
 			for (const auto &gmObj : *graphMapObjs) {
-				std::string gmKey = objKey(gmObj);
+				std::string gmKey = TripleStore::objKey(gmObj);
 				if (gmKey.empty()) {
 					continue;
 				}
@@ -689,9 +688,9 @@ public:
 		auto sm = std::unique_ptr<ConcreteSubjectMap>(new ConcreteSubjectMap());
 
 		// Value-generation strategy
-		std::string tmpl = getFirstLiteral(ts, smKey, RR_TEMPLATE);
-		std::string column = getFirstLiteral(ts, smKey, RR_COLUMN);
-		std::string constant = getFirstUri(ts, smKey, RR_CONSTANT);
+		std::string tmpl = ts.getFirstLiteral(smKey, RR_TEMPLATE);
+		std::string column = ts.getFirstLiteral(smKey, RR_COLUMN);
+		std::string constant = ts.getFirstUri(smKey, RR_CONSTANT);
 
 		if (!tmpl.empty()) {
 			sm->valueMap = std::unique_ptr<TemplateTermMap>(new TemplateTermMap(tmpl));
@@ -715,11 +714,11 @@ public:
 		}
 
 		// rr:class assertions
-		const auto *classObjs = getObjects(ts, smKey, RR_CLASS);
+		const auto *classObjs = ts.getObjects(smKey, RR_CLASS);
 		if (classObjs) {
 			for (const auto &cls : *classObjs) {
-				if (cls.type == ObjType::URI) {
-					sm->classIRIs.push_back(cls.value);
+				if (cls.isIri()) {
+					sm->classIRIs.push_back(cls.lexical());
 				}
 			}
 		}
@@ -736,20 +735,20 @@ public:
 		auto pom = std::unique_ptr<PredicateObjectMap>(new PredicateObjectMap());
 
 		// rr:predicate shortcut (constant predicate)
-		const auto *predObjs = getObjects(ts, pomKey, RR_PREDICATE);
+		const auto *predObjs = ts.getObjects(pomKey, RR_PREDICATE);
 		if (predObjs) {
 			for (const auto &p : *predObjs) {
-				if (p.type == ObjType::URI) {
-					pom->predicateMaps.push_back(makeConstantUri(p.value));
+				if (p.isIri()) {
+					pom->predicateMaps.push_back(makeConstantUri(p.lexical()));
 				}
 			}
 		}
 
 		// rr:predicateMap (full predicate map)
-		const auto *predMapObjs = getObjects(ts, pomKey, RR_PREDICATE_MAP);
+		const auto *predMapObjs = ts.getObjects(pomKey, RR_PREDICATE_MAP);
 		if (predMapObjs) {
 			for (const auto &pm : *predMapObjs) {
-				std::string pmKey = objKey(pm);
+				std::string pmKey = TripleStore::objKey(pm);
 				if (pmKey.empty()) {
 					continue;
 				}
@@ -761,20 +760,20 @@ public:
 		}
 
 		// rr:object shortcut (constant URI object)
-		const auto *objObjs = getObjects(ts, pomKey, RR_OBJECT);
+		const auto *objObjs = ts.getObjects(pomKey, RR_OBJECT);
 		if (objObjs) {
 			for (const auto &o : *objObjs) {
-				if (o.type == ObjType::URI) {
-					pom->objectMaps.push_back(makeConstantUri(o.value));
+				if (o.isIri()) {
+					pom->objectMaps.push_back(makeConstantUri(o.lexical()));
 				}
 			}
 		}
 
 		// rr:objectMap (full object map)
-		const auto *objMapObjs = getObjects(ts, pomKey, RR_OBJECT_MAP);
+		const auto *objMapObjs = ts.getObjects(pomKey, RR_OBJECT_MAP);
 		if (objMapObjs) {
 			for (const auto &om : *objMapObjs) {
-				std::string omKey = objKey(om);
+				std::string omKey = TripleStore::objKey(om);
 				if (omKey.empty()) {
 					continue;
 				}
@@ -784,7 +783,7 @@ public:
 					// objectMap is rr:Literal (not rr:IRI), unless an explicit
 					// rr:termType was given on the object map (already applied
 					// by buildTermMap()), which always wins.
-					if (dynamic_cast<ColumnTermMap *>(tm.get()) && getFirstUri(ts, omKey, RR_TERM_TYPE).empty()) {
+					if (dynamic_cast<ColumnTermMap *>(tm.get()) && ts.getFirstUri(omKey, RR_TERM_TYPE).empty()) {
 						tm->termType = TermType::Literal;
 					}
 					pom->objectMaps.push_back(std::move(tm));
@@ -823,7 +822,7 @@ static R2RMLMapping buildMappingFromTriples(TripleStore &triples, SerdEnv *env, 
 	// least one characteristic R2RML TriplesMap predicate.
 	for (const auto &entry : triples) {
 		const std::string &subj = entry.first;
-		const PredMap &preds = entry.second;
+		const TripleStore::PredMap &preds = entry.second;
 
 		// Skip blank nodes – they appear only as parts of maps, not TM subjects.
 		if (subj.size() >= 2 && subj[0] == '_' && subj[1] == ':') {
@@ -840,22 +839,22 @@ static R2RMLMapping buildMappingFromTriples(TripleStore &triples, SerdEnv *env, 
 		tm->id = subj;
 
 		// Logical table (inline blank node or named resource)
-		std::string ltKey = getFirstObjKey(triples, subj, RR_LOGICAL_TABLE);
+		std::string ltKey = triples.getFirstObjKey(subj, RR_LOGICAL_TABLE);
 		if (!ltKey.empty()) {
 			tm->logicalTable = ctx.buildLogicalTable(ltKey);
 		}
 
 		// Subject map
-		std::string smKey = getFirstObjKey(triples, subj, RR_SUBJECT_MAP);
+		std::string smKey = triples.getFirstObjKey(subj, RR_SUBJECT_MAP);
 		if (!smKey.empty()) {
 			tm->subjectMap = ctx.buildSubjectMap(smKey);
 		}
 
 		// Predicate-object maps (there may be several)
-		const auto *pomObjs = getObjects(triples, subj, RR_PREDICATE_OBJECT_MAP);
+		const auto *pomObjs = triples.getObjects(subj, RR_PREDICATE_OBJECT_MAP);
 		if (pomObjs) {
 			for (const auto &pomObj : *pomObjs) {
-				std::string pomKey = objKey(pomObj);
+				std::string pomKey = TripleStore::objKey(pomObj);
 				if (pomKey.empty()) {
 					continue;
 				}

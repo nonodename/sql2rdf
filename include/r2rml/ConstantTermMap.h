@@ -8,31 +8,32 @@
 namespace r2rml {
 
 /**
- * A term map which always returns a fixed RDF term.
+ * A term map which always produces a fixed RDF term.
  *
- * The constructor deep-copies the string data from the supplied SerdNode so
- * that instances remain valid even after the source buffer is freed.
+ * The SerdNode constructor deep-copies the node into an owning rdf::Term, so
+ * instances remain valid after the source buffer is freed - which is what the
+ * hand-rolled ownedUri_ sidecar used to arrange by hand.
  */
 class ConstantTermMap : public TermMap {
 public:
 	ConstantTermMap() = default;
 	explicit ConstantTermMap(const SerdNode &node);
+	explicit ConstantTermMap(rdf::Term term);
 	~ConstantTermMap() override;
 
-	SerdNode generateRDFTerm(const SQLRow &row, const SerdEnv &env) const override;
+	void generateRDFTerm(const SQLRow &row, rdf::Term &out) const override;
 
 	bool isValid() const override {
-		// constantValue must not be a null SerdNode
-		return constantValue.type != 0;
+		// An absent term means there was no usable rr:constant. Note this also
+		// rejects an EMPTY constant: the SerdNode constructor refuses a
+		// zero-length node, preserving the long-standing behaviour that
+		// rr:constant "" produces no triple at all.
+		return !constantValue.isNull();
 	}
 
 	std::ostream &print(std::ostream &os) const override;
 
-	SerdNode constantValue {nullptr};
-
-private:
-	/// Owns the string data that constantValue.buf points into (when non-empty).
-	std::string ownedUri_;
+	rdf::Term constantValue;
 };
 
 } // namespace r2rml

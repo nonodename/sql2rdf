@@ -4,7 +4,7 @@
  * it had no direct unit-test coverage.
  */
 
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 
 #include <memory>
 #include <stdexcept>

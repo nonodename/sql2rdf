@@ -24,6 +24,7 @@ cmake -B build
 Common targets:
 
 ```sh
+cmake --build build --target sql2rdf_rdf       # rdf::Term value type (stdlib only)
 cmake --build build --target sql2rdf_r2rml     # core library (no DuckDB, no yaml-cpp)
 cmake --build build --target sql2rdf_yarrrml   # YARRRML→R2RML translator library
 cmake --build build --target sql2rdf_sparql    # standalone SPARQL query parser library
@@ -41,7 +42,7 @@ If DuckDB is not installed, CMake prints a warning and skips the CLI; the librar
 
 ## Tests
 
-Catch2 (fetched via FetchContent). All tests use a mock SQL backend (`tests/MockSQL.h`) — DuckDB is never required to run them.
+Catch2 (v2 fetched via FetchContent). All tests use a mock SQL backend (`tests/MockSQL.h`) — DuckDB is never required to run them.
 
 ```sh
 cmake --build build --target tests           # build + run all tests
@@ -72,8 +73,9 @@ Run `format` and `tidy` before committing — CI enforces both. Style: LLVM base
 
 Strict dependency layering — this is the most important constraint when adding code:
 
-1. **`sql2rdf_r2rml`** (`src/r2rml/`, headers in `include/r2rml/`, namespace `r2rml::`) — the core R2RML engine. Links only Serd (vendored C library, `external/serd` submodule). Must never depend on DuckDB or yaml-cpp.
-2. **`sql2rdf_yarrrml`** (`src/yarrrml/YARRRMLParser.cpp`) — translates YARRRML YAML into R2RML **statements**, emitted as `SerdNode`s into an `r2rml::TripleCollector` and handed to `R2RMLParser::parseCollected()`. That is the same statement-insertion logic `R2RMLParser`'s own Turtle-parsing path uses, so both formats produce identical output — but it deliberately does *not* serialise Turtle text and re-parse it, which avoids the string-escaping edge cases that would come with round-tripping. Links yaml-cpp PRIVATE so it doesn't leak to consumers.
+0. **`sql2rdf_rdf`** (`src/rdf/`, headers in `include/rdf/`, namespace `rdf::`) — `rdf::Term`, the project's single owning value type for one RDF term (kind + lexical form + datatype IRI + language tag), plus the `rdf::TermKind` enum. **Links nothing but the standard library** — no Serd, no r2rml, no sparql — deliberately, so that an RDF term is not defined in terms of a serialisation library and so the stdlib-only guarantee on `sql2rdf_sparql` would survive that layer adopting it. Serd interop lives one layer up, in `include/r2rml/SerdTerm.h`, because r2rml is the only layer that reads or writes Serd. Note `rdf::Term` is *not* a wrapper around `SerdNode`: serd 0.x's `SerdNode` carries neither datatype nor language (those travel as separate nodes on the statement) and owns nothing (`serd_node_from_string` only measures its argument), so `Term` is a superset whose whole point is owning its bytes.
+1. **`sql2rdf_r2rml`** (`src/r2rml/`, headers in `include/r2rml/`, namespace `r2rml::`) — the core R2RML engine. Links Serd (vendored C library, `external/serd` submodule) and `sql2rdf_rdf`. Must never depend on DuckDB or yaml-cpp. Term *values* flow through the model as `rdf::Term`; Serd remains in the **reader** (`R2RMLParser`/`TripleCollector`, where nodes can still be unexpanded CURIEs that `rdf::Term` deliberately cannot represent) and the **writer** (`SerdWriter` is still a parameter of `processDatabase`/`generateTriples`/`processRow`, and `AbstractMap::checkWriteStatus` takes a `SerdStatus`, so the model headers still include `serd/serd.h` transitively — decoupling that needs an output-sink abstraction and has not been done).
+2. **`sql2rdf_yarrrml`** (`src/yarrrml/YARRRMLParser.cpp`) — translates YARRRML YAML into R2RML **statements**, emitted as `rdf::Term`s into an `r2rml::TripleCollector` and handed to `R2RMLParser::parseCollected()`. That is the same statement-insertion logic `R2RMLParser`'s own Turtle-parsing path uses, so both formats produce identical output — but it deliberately does *not* serialise Turtle text and re-parse it, which avoids the string-escaping edge cases that would come with round-tripping. Links yaml-cpp PRIVATE so it doesn't leak to consumers.
 3. **`SQL2RDF++` CLI** (`src/main.cpp`, `src/DuckDBConnection.*`) — the only code that touches DuckDB. `DuckDBConnection.h` deliberately lives in `src/`, not `include/`.
 
 **`sql2rdf_type_catalog_loader`** (`src/TypeCatalogLoader.*`, headers in `include/sql2rdf/`, namespace `sql2rdf::`) fills a `sparql2sql::TypeCatalog` from a live `r2rml::SQLConnection` (an `information_schema` sweep plus a `DESCRIBE` per `rr:sqlQuery` view). It's written entirely against the abstract `SQLConnection`/`SQLResultSet`/`SQLRow`/`SQLValue` interfaces — no DuckDB dependency of its own — so, like `sql2rdf_sparql2sql`, it's exposed unconditionally, not gated behind `SQL2RDF_BUILD_CLI`/DuckDB. This is what lets a downstream FetchContent consumer with its own `SQLConnection` backend (e.g. a DuckDB extension driving a live `ClientContext`) link `sql2rdf::type_catalog_loader` directly instead of reaching into this project's source tree. It depends on `sql2rdf_r2rml` + `sql2rdf_sparql2sql` and is shared by the CLI, the benchmark harness and `sparql2sql_duckdb_tests` via the `sql2rdf_duckdb` static library, which links it alongside `DuckDBConnection.cpp`.

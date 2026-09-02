@@ -17,7 +17,7 @@ public:
 	explicit TemplateTermMap(const std::string &templ);
 	~TemplateTermMap() override;
 
-	SerdNode generateRDFTerm(const SQLRow &row, const SerdEnv &env) const override;
+	void generateRDFTerm(const SQLRow &row, rdf::Term &out) const override;
 
 	bool isValid() const override {
 		// templateString must not be empty
@@ -27,10 +27,6 @@ public:
 	std::ostream &print(std::ostream &os) const override;
 
 	std::string templateString;
-
-private:
-	/// Buffer for the last expanded URI; keeps buf pointer in returned SerdNode valid.
-	mutable std::string expanded_;
 };
 
 } // namespace r2rml

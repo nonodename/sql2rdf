@@ -1,0 +1,36 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+
+# Pins the rr:language branch of PredicateObjectMap::processRow, which builds a
+# SERD_LITERAL-typed node to carry a language *tag* and passes it as serd's
+# separate `lang` parameter.  That branch and its rr:datatype sibling are
+# mutually exclusive, and nothing else in the golden set exercises the lang arm
+# end-to-end.
+#
+#   ex:label     - rr:language on a column object map -> "..."@en
+#   ex:labelFr   - a second tag, so a hard-coded "en" would not pass
+#   ex:typed     - the rr:datatype arm, as the control that proves the two
+#                  branches stay mutually exclusive
+#   ex:plain     - neither, so the natural-datatype path is visible alongside
+
+<#TriplesMapLang>
+    rr:logicalTable [ rr:tableName "GOLDEN" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/golden/{ID}";
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:label;
+        rr:objectMap [ rr:column "TEXT"; rr:language "en" ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:labelFr;
+        rr:objectMap [ rr:column "TEXT"; rr:language "fr-CA" ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:typed;
+        rr:objectMap [ rr:column "NUM"; rr:datatype <http://www.w3.org/2001/XMLSchema#integer> ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:plain;
+        rr:objectMap [ rr:column "TEXT" ];
+    ].

@@ -1,4 +1,5 @@
 #include "sparql-parser/Parser.h"
+#include "rdf/Term.h"
 
 namespace sparql {
 
@@ -22,9 +23,6 @@ using ast::Var;
 using ast::VarExpr;
 
 namespace {
-const char *const XSD_INTEGER_EXPR = "http://www.w3.org/2001/XMLSchema#integer";
-const char *const XSD_DECIMAL_EXPR = "http://www.w3.org/2001/XMLSchema#decimal";
-const char *const XSD_DOUBLE_EXPR = "http://www.w3.org/2001/XMLSchema#double";
 
 struct KeywordFn {
 	const char *kw;
@@ -185,11 +183,11 @@ std::unique_ptr<Expression> Parser::parseAdditiveExpression() {
 			std::string unsignedLex = current_.text.substr(1);
 			advance();
 			std::unique_ptr<RdfLiteral> lit(new RdfLiteral(unsignedLex));
-			const char *dt = XSD_DOUBLE_EXPR;
+			auto dt = rdf::XSD_DOUBLE;
 			if (t == TokenType::Integer) {
-				dt = XSD_INTEGER_EXPR;
+				dt = rdf::XSD_INTEGER;
 			} else if (t == TokenType::Decimal) {
-				dt = XSD_DECIMAL_EXPR;
+				dt = rdf::XSD_DECIMAL;
 			}
 			lit->datatype = makeIri(dt, "");
 			std::unique_ptr<Expression> rhs(new LiteralExpr(std::move(lit)));

@@ -26,7 +26,10 @@ public:
 
 	std::unique_ptr<SQLResultSet> getJoinedRows(SQLConnection &dbConnection, const SQLRow &childRow) const;
 
-	SerdNode generateRDFTerm(const SQLRow &childRow, const SQLRow &parentRow, const SerdEnv &env) const;
+	/// The two-row variant: the object term is the PARENT triples map's subject
+	/// for the joined parent row. Leaves `out` absent if the parent map or its
+	/// subject map is missing.
+	void generateRDFTerm(const SQLRow &childRow, const SQLRow &parentRow, rdf::Term &out) const;
 
 	std::ostream &print(std::ostream &os) const override;
 

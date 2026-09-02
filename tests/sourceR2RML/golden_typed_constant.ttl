@@ -1,0 +1,36 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#>.
+@prefix ex: <http://example.com/ns#>.
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#>.
+
+# Pins the datatype/language of an rr:constant literal object: the Turtle
+# parser attaches datatype/language to the rdf::Term it collects for
+# rr:constant, and R2RMLParser::buildTermMap must carry that Term straight
+# into the ConstantTermMap rather than rebuilding a plain literal from its
+# bare lexical form.
+#
+#   ex:typedConst  rr:constant "5"^^xsd:integer  -> "5"^^xsd:integer
+#   ex:langConst   rr:constant "chat"@fr         -> "chat"@fr
+#   ex:iriConst    rr:constant ex:Thing          -> IRI, unaffected
+#   ex:plainConst  rr:constant "plain"           -> plain literal, unaffected
+
+<#TriplesMapConst>
+    rr:logicalTable [ rr:tableName "GOLDEN" ];
+    rr:subjectMap [
+        rr:template "http://data.example.com/golden/{ID}";
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:typedConst;
+        rr:objectMap [ rr:constant "5"^^xsd:integer ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:langConst;
+        rr:objectMap [ rr:constant "chat"@fr ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:iriConst;
+        rr:objectMap [ rr:constant ex:Thing ];
+    ];
+    rr:predicateObjectMap [
+        rr:predicate ex:plainConst;
+        rr:objectMap [ rr:constant "plain" ];
+    ].

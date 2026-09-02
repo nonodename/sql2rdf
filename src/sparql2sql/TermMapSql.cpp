@@ -15,11 +15,28 @@ namespace sparql2sql {
 
 namespace {
 
-std::string constantTermMapText(const r2rml::ConstantTermMap &constant) {
-	if (constant.constantValue.buf == nullptr) {
-		return std::string();
+// Derive a TermInfo directly from a stored rr:constant value. Unlike
+// annotate() below, this reads the term's own kind/datatype/language rather
+// than the enclosing TermMap's termType/rr:datatype/rr:language fields: those
+// parser-level fields describe column- and template-valued term maps, and are
+// never populated for a constant (its datatype/language, if any, travelled
+// with the literal itself - see ParseContext::makeConstantLiteral). A plain
+// literal with no datatype or language is RDF 1.1's simple literal, i.e.
+// xsd:string, matching termInfoOfTerm's treatment of an untyped AST literal.
+TermInfo termInfoOfRdfTerm(const rdf::Term &term) {
+	TermInfo out;
+	out.kind = term.kind();
+	if (out.kind != RdfTermKind::Literal) {
+		return out;
 	}
-	return std::string(reinterpret_cast<const char *>(constant.constantValue.buf), constant.constantValue.n_bytes);
+	if (term.hasLang()) {
+		out.lang = term.lang();
+		out.datatypeIri = kRdfLangString;
+		out.maybeLangTagged = true;
+		return out;
+	}
+	out.datatypeIri = term.datatypeIri().empty() ? xsd::kString : term.datatypeIri();
+	return out;
 }
 
 // Render a plain rr:column reference for comparison/projection. Wrapped in
@@ -200,8 +217,8 @@ SqlExpr termMapToSqlExpr(const r2rml::TermMap &termMap, const std::string &sourc
 	}
 	if (const auto *constant = dynamic_cast<const r2rml::ConstantTermMap *>(&termMap)) {
 		SqlExpr result;
-		result.expr = dialect.stringLiteral(constantTermMapText(*constant));
-		result.term = annotate(termMap, std::string(), catalog, tableIdentity);
+		result.expr = dialect.stringLiteral(constant->constantValue.lexical());
+		result.term = termInfoOfRdfTerm(constant->constantValue);
 		return result;
 	}
 	throw std::logic_error("termMapToSqlExpr: unrecognized TermMap subtype");
@@ -214,7 +231,10 @@ InversionResult invertTermMapAgainstBoundTerm(const r2rml::TermMap &termMap, con
 	const std::string boundValue = termLexicalForm(boundTerm);
 
 	if (const auto *constant = dynamic_cast<const r2rml::ConstantTermMap *>(&termMap)) {
-		result.possible = (constantTermMapText(*constant) == boundValue);
+		const TermInfo boundInfo = termInfoOfTerm(boundTerm);
+		const TermInfo constInfo = termInfoOfRdfTerm(constant->constantValue);
+		result.possible = constInfo.kind == boundInfo.kind && constant->constantValue.lexical() == boundValue &&
+		                  constInfo.datatypeIri == boundInfo.datatypeIri && constInfo.lang == boundInfo.lang;
 		return result;
 	}
 	if (const auto *col = dynamic_cast<const r2rml::ColumnTermMap *>(&termMap)) {

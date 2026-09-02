@@ -7,7 +7,7 @@
  * operator is covered by tests/duckdb/test_sparql2sql_duckdb.cpp.
  */
 
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 
 #include <string>
 

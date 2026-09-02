@@ -1,0 +1,217 @@
+#include "rdf/Term.h"
+
+#include <cctype>
+
+namespace rdf {
+
+namespace {
+
+/// ASCII case-insensitive comparison for language tags (BCP 47 tags are
+/// always ASCII), used by operator== per RDF 1.1 Concepts 3.3.
+bool equalsIgnoreCaseAscii(const std::string &a, const std::string &b) {
+	if (a.size() != b.size()) {
+		return false;
+	}
+	for (std::string::size_type i = 0; i < a.size(); ++i) {
+		if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+} // namespace
+
+const char *termKindName(TermKind kind) {
+	switch (kind) {
+	case TermKind::Iri:
+		return "Iri";
+	case TermKind::BlankNode:
+		return "BlankNode";
+	case TermKind::Literal:
+		return "Literal";
+	case TermKind::Unknown:
+		break;
+	}
+	return "Unknown";
+}
+
+// ---------------------------------------------------------------------------
+// Named constructors
+//
+// Each delegates to the corresponding assign* mutator so that the invariants
+// are established in exactly one place per kind.
+// ---------------------------------------------------------------------------
+
+Term Term::iri(const std::string &value) {
+	Term t;
+	t.assignIri(value);
+	return t;
+}
+
+Term Term::blankNode(const std::string &label) {
+	Term t;
+	t.assignBlankNode(label);
+	return t;
+}
+
+Term Term::literal(const std::string &lexical_form) {
+	Term t;
+	t.assignLiteral(lexical_form);
+	return t;
+}
+
+Term Term::typedLiteral(const std::string &lexical_form, const std::string &datatype_iri) {
+	Term t;
+	t.assignTypedLiteral(lexical_form, datatype_iri);
+	return t;
+}
+
+Term Term::langLiteral(const std::string &lexical_form, const std::string &language_tag) {
+	Term t;
+	t.assignLangLiteral(lexical_form, language_tag);
+	return t;
+}
+
+// ---------------------------------------------------------------------------
+// Mutators
+// ---------------------------------------------------------------------------
+
+void Term::clear() {
+	// Assign rather than clear() the strings so the capacity survives: this is
+	// what lets a caller hoist one Term out of a per-row loop and stop
+	// allocating after the first few rows.  std::string::clear() also preserves
+	// capacity, but spelling it this way keeps the three fields uniform.
+	kind_ = TermKind::Unknown;
+	lexical_.clear();
+	datatype_.clear();
+	lang_.clear();
+}
+
+void Term::assignIri(const std::string &value) {
+	kind_ = TermKind::Iri;
+	lexical_ = value;
+	datatype_.clear();
+	lang_.clear();
+}
+
+void Term::assignBlankNode(const std::string &label) {
+	kind_ = TermKind::BlankNode;
+	lexical_ = label;
+	datatype_.clear();
+	lang_.clear();
+}
+
+void Term::assignLiteral(const std::string &lexical_form) {
+	kind_ = TermKind::Literal;
+	lexical_ = lexical_form;
+	datatype_.clear();
+	lang_.clear();
+}
+
+void Term::assignTypedLiteral(const std::string &lexical_form, const std::string &datatype_iri) {
+	// An empty datatype is "no datatype stated", which is exactly a plain
+	// literal.  rdf:langString without a tag is not a well-formed term, so it
+	// degrades the same way rather than being stored and later serialised as a
+	// datatype IRI that no parser would accept back.
+	if (datatype_iri.empty() || datatype_iri == RDF_LANG_STRING) {
+		assignLiteral(lexical_form);
+		return;
+	}
+	kind_ = TermKind::Literal;
+	lexical_ = lexical_form;
+	datatype_ = datatype_iri;
+	lang_.clear();
+}
+
+void Term::assignLangLiteral(const std::string &lexical_form, const std::string &language_tag) {
+	if (language_tag.empty()) {
+		assignLiteral(lexical_form);
+		return;
+	}
+	kind_ = TermKind::Literal;
+	lexical_ = lexical_form;
+	datatype_.clear();
+	lang_ = language_tag;
+}
+
+void Term::setDatatypeIri(const std::string &datatype_iri) {
+	if (kind_ != TermKind::Literal) {
+		return;
+	}
+	lang_.clear();
+	datatype_ = (datatype_iri == RDF_LANG_STRING) ? std::string() : datatype_iri;
+}
+
+void Term::setLang(const std::string &language_tag) {
+	if (kind_ != TermKind::Literal) {
+		return;
+	}
+	datatype_.clear();
+	lang_ = language_tag;
+}
+
+// ---------------------------------------------------------------------------
+// Queries
+// ---------------------------------------------------------------------------
+
+std::string Term::effectiveDatatypeIri() const {
+	if (!lang_.empty()) {
+		return RDF_LANG_STRING;
+	}
+	if (datatype_.empty()) {
+		// RDF 1.1's "simple literal" (no language tag, no stated datatype) is
+		// sugar for an explicit xsd:string (Concepts 3.3): the two are the same
+		// abstract term, even though datatypeIri() keeps them apart so a plain
+		// literal round-trips as plain rather than being serialised as typed.
+		return XSD_STRING;
+	}
+	return datatype_;
+}
+
+bool Term::operator==(const Term &other) const {
+	if (kind_ != other.kind_ || lexical_ != other.lexical_) {
+		return false;
+	}
+	if (kind_ != TermKind::Literal) {
+		return true;
+	}
+	// Compare the EFFECTIVE datatype so that the abstract term drives equality
+	// rather than the representation: e.g. a plain literal and an explicit
+	// xsd:string-typed literal with the same lexical form are the same term.
+	if (effectiveDatatypeIri() != other.effectiveDatatypeIri()) {
+		return false;
+	}
+	// Language tags fold case for comparison only (BCP 47 / RDF 1.1 Concepts
+	// 3.3); for non-langString literals both sides are already empty here.
+	return equalsIgnoreCaseAscii(lang_, other.lang_);
+}
+
+std::ostream &Term::print(std::ostream &os) const {
+	switch (kind_) {
+	case TermKind::Iri:
+		os << "<" << lexical_ << ">";
+		break;
+	case TermKind::BlankNode:
+		os << "_:" << lexical_;
+		break;
+	case TermKind::Literal:
+		os << "\"" << lexical_ << "\"";
+		if (!lang_.empty()) {
+			os << "@" << lang_;
+		} else if (!datatype_.empty()) {
+			os << "^^<" << datatype_ << ">";
+		}
+		break;
+	case TermKind::Unknown:
+		os << "(null)";
+		break;
+	}
+	return os;
+}
+
+std::ostream &operator<<(std::ostream &os, const Term &term) {
+	return term.print(os);
+}
+
+} // namespace rdf

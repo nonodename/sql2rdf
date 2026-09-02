@@ -9,7 +9,7 @@
  * but ex:department only ever comes from EMP.
  */
 
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 
 #include <string>
 

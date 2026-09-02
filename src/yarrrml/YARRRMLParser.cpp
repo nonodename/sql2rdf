@@ -73,7 +73,7 @@ using r2rml::vocab::RR_TERM_TYPE;
 // use for them (it reads rr:triplesMap/rdf:type from Turtle text via Serd,
 // not by emitting these as literal predicate strings).
 static const char *const RR_TRIPLES_MAP = "http://www.w3.org/ns/r2rml#triplesMap";
-static const char *const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+static const char *const R2RML_NAMESPACE = "http://www.w3.org/ns/r2rml#";
 
 namespace {
 
@@ -367,95 +367,62 @@ std::string extractColumnRef(const YAML::Node &param) {
 // Turtle-parsing paths use.
 // ---------------------------------------------------------------------------
 
-/// A reference to a node already known to a translation step: either a named
-/// IRI (possibly relative, e.g. "#TriplesMap1") or a blank node minted via
-/// BlankNodeMinter. `valid == false` denotes "no node" (nothing to link).
-struct NodeRef {
-	bool valid;
-	bool isBlank;
-	std::string text;
-
-	NodeRef() : valid(false), isBlank(false) {
-	}
-	NodeRef(bool isBlankIn, std::string textIn) : valid(true), isBlank(isBlankIn), text(std::move(textIn)) {
-	}
-
-	static NodeRef uri(std::string v) {
-		return NodeRef(false, std::move(v));
-	}
-	static NodeRef blank(std::string id) {
-		return NodeRef(true, std::move(id));
-	}
-};
-
-SerdNode toSerdNode(const NodeRef &n) {
-	const auto *buf = reinterpret_cast<const uint8_t *>(n.text.c_str());
-	return n.isBlank ? serd_node_from_string(SERD_BLANK, buf) : serd_node_from_string(SERD_URI, buf);
-}
-
 /// Mints sequential blank-node identifiers ("b0", "b1", ...) for one YARRRML
 /// document -- replaces the anonymous node IDs Serd used to generate
 /// implicitly for "[ ... ]" Turtle syntax.
+///
+/// The minted label is BARE, with no "_:" prefix: TripleCollector adds that,
+/// along with the merge-scope tag, when it derives a lookup key.
 class BlankNodeMinter {
 public:
-	NodeRef next() {
-		return NodeRef::blank("b" + std::to_string(counter_++));
+	rdf::Term next() {
+		return rdf::Term::blankNode("b" + std::to_string(counter_++));
 	}
 
 private:
 	unsigned counter_ {0};
 };
 
-void emitUriTriple(r2rml::TripleCollector &collector, const NodeRef &subject, const std::string &predicateIri,
-                   const NodeRef &object) {
-	SerdNode s = toSerdNode(subject);
-	SerdNode p = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(predicateIri.c_str()));
-	SerdNode o = toSerdNode(object);
-	collector.statement(&s, &p, &o);
+void emitUriTriple(r2rml::TripleCollector &collector, const rdf::Term &subject, const std::string &predicateIri,
+                   const rdf::Term &object) {
+	collector.statement(subject, rdf::Term::iri(predicateIri), object);
 }
 
-void emitLiteralTriple(r2rml::TripleCollector &collector, const NodeRef &subject, const std::string &predicateIri,
+void emitLiteralTriple(r2rml::TripleCollector &collector, const rdf::Term &subject, const std::string &predicateIri,
                        const std::string &literalText, const std::string &datatypeIri = std::string(),
                        const std::string &language = std::string()) {
-	SerdNode s = toSerdNode(subject);
-	SerdNode p = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(predicateIri.c_str()));
-	SerdNode o = serd_node_from_string(SERD_LITERAL, reinterpret_cast<const uint8_t *>(literalText.c_str()));
-
-	SerdNode dt = SERD_NODE_NULL;
-	SerdNode lang = SERD_NODE_NULL;
-	if (!datatypeIri.empty()) {
-		dt = serd_node_from_string(SERD_URI, reinterpret_cast<const uint8_t *>(datatypeIri.c_str()));
-	}
-	if (!language.empty()) {
-		lang = serd_node_from_string(SERD_LITERAL, reinterpret_cast<const uint8_t *>(language.c_str()));
-	}
-	collector.statement(&s, &p, &o, datatypeIri.empty() ? nullptr : &dt, language.empty() ? nullptr : &lang);
+	// typedLiteral() degrades to a plain literal when the datatype is empty, so
+	// this covers all three literal shapes. Language wins if both are somehow
+	// supplied, per RDF 1.1 and rdf::Term's mutually-exclusive invariant.
+	collector.statement(subject, rdf::Term::iri(predicateIri),
+	                    language.empty() ? rdf::Term::typedLiteral(literalText, datatypeIri)
+	                                     : rdf::Term::langLiteral(literalText, language));
 }
 
 /// Mint a blank node and emit the rr:column / rr:template / rr:constant (+
 /// optional rr:termType / rr:datatype / rr:language) statements describing
 /// `vs` on it. Equivalent to what used to be a "[ rr:x ... ]" Turtle
-/// fragment; the returned NodeRef is that blank node, ready to be linked in
+/// fragment; the returned rdf::Term is that blank node, ready to be linked in
 /// as e.g. an rr:objectMap value.
-NodeRef emitValueSpecAsMap(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const VSpec &vs,
-                           const std::map<std::string, std::string> &prefixes, const ValueExtra &extra) {
-	NodeRef node = blanks.next();
+rdf::Term emitValueSpecAsMap(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const VSpec &vs,
+                             const std::map<std::string, std::string> &prefixes, const ValueExtra &extra) {
+	rdf::Term node = blanks.next();
 	switch (vs.kind) {
 	case VKind::Column:
 		emitLiteralTriple(collector, node, RR_COLUMN, vs.text);
 		if (vs.forceIri) {
-			emitUriTriple(collector, node, RR_TERM_TYPE, NodeRef::uri(RR_IRI_TERM_TYPE));
+			emitUriTriple(collector, node, RR_TERM_TYPE, rdf::Term::iri(RR_IRI_TERM_TYPE));
 		}
 		break;
 	case VKind::Template:
 		emitLiteralTriple(collector, node, RR_TEMPLATE, vs.text);
 		if (vs.forceIri) {
-			emitUriTriple(collector, node, RR_TERM_TYPE, NodeRef::uri(RR_IRI_TERM_TYPE));
+			emitUriTriple(collector, node, RR_TERM_TYPE, rdf::Term::iri(RR_IRI_TERM_TYPE));
 		}
 		break;
 	case VKind::ConstIri:
 		// Per R2RML, rr:constant with an IRI object carries no datatype/language.
-		emitUriTriple(collector, node, RR_CONSTANT, NodeRef::uri(resolveIri(vs.text, prefixes)));
+		emitUriTriple(collector, node, RR_CONSTANT, rdf::Term::iri(resolveIri(vs.text, prefixes)));
 		return node;
 	case VKind::ConstLit:
 	default:
@@ -463,7 +430,7 @@ NodeRef emitValueSpecAsMap(r2rml::TripleCollector &collector, BlankNodeMinter &b
 		break;
 	}
 	if (!extra.datatypeIri.empty()) {
-		emitUriTriple(collector, node, RR_DATATYPE, NodeRef::uri(extra.datatypeIri));
+		emitUriTriple(collector, node, RR_DATATYPE, rdf::Term::iri(extra.datatypeIri));
 	}
 	if (!extra.language.empty()) {
 		emitLiteralTriple(collector, node, RR_LANGUAGE, extra.language);
@@ -477,39 +444,39 @@ NodeRef emitValueSpecAsMap(r2rml::TripleCollector &collector, BlankNodeMinter &b
 struct PredicateResult {
 	bool isConstant;
 	std::string constantIri;
-	NodeRef mapNode;
+	rdf::Term mapNode;
 };
 
 PredicateResult buildPredicateResult(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const std::string &raw,
                                      const std::map<std::string, std::string> &prefixes) {
 	if (raw == "a") {
-		return PredicateResult {true, RDF_TYPE, NodeRef()};
+		return PredicateResult {true, rdf::RDF_TYPE, rdf::Term()};
 	}
 	VSpec vs = classifyValue(raw, /*allowIriSuffix=*/false, /*literalsAllowed=*/false, prefixes);
 	switch (vs.kind) {
 	case VKind::Template: {
-		NodeRef node = blanks.next();
+		rdf::Term node = blanks.next();
 		emitLiteralTriple(collector, node, RR_TEMPLATE, vs.text);
 		return PredicateResult {false, "", node};
 	}
 	case VKind::Column: {
-		NodeRef node = blanks.next();
+		rdf::Term node = blanks.next();
 		emitLiteralTriple(collector, node, RR_COLUMN, vs.text);
 		return PredicateResult {false, "", node};
 	}
 	case VKind::ConstIri:
 	default:
-		return PredicateResult {true, resolveIri(vs.text, prefixes), NodeRef()};
+		return PredicateResult {true, resolveIri(vs.text, prefixes), rdf::Term()};
 	}
 }
 
 /// Translate one object-list entry (a plain scalar, a [value, dtOrLang]
 /// array, a {value:/v:, datatype:/language:} map, or a {mapping: ...,
 /// condition(s): ...} mapping reference) into a freshly minted rr:objectMap
-/// blank node. Returns an invalid NodeRef (and records a warning) on failure.
-NodeRef emitObjectNode(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const YAML::Node &objNode,
-                       const std::map<std::string, std::string> &prefixes, const ValueExtra &extraIn,
-                       const std::string &mappingName) {
+/// blank node. Returns an absent term (and records a warning) on failure.
+rdf::Term emitObjectNode(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const YAML::Node &objNode,
+                         const std::map<std::string, std::string> &prefixes, const ValueExtra &extraIn,
+                         const std::string &mappingName) {
 	if (objNode.IsScalar()) {
 		VSpec vs =
 		    classifyValue(objNode.as<std::string>(), /*allowIriSuffix=*/true, /*literalsAllowed=*/true, prefixes);
@@ -519,7 +486,7 @@ NodeRef emitObjectNode(r2rml::TripleCollector &collector, BlankNodeMinter &blank
 	if (objNode.IsSequence()) {
 		if (objNode.size() < 1 || !objNode[0].IsScalar()) {
 			collector.addError("YARRRML parser: mapping '" + mappingName + "': malformed object value array, skipped");
-			return NodeRef();
+			return rdf::Term();
 		}
 		ValueExtra extra = extraIn;
 		if (objNode.size() >= 2 && objNode[1].IsScalar()) {
@@ -538,8 +505,8 @@ NodeRef emitObjectNode(r2rml::TripleCollector &collector, BlankNodeMinter &blank
 	if (objNode.IsMap()) {
 		YAML::Node mappingRefNode = objNode["mapping"];
 		if (mappingRefNode && mappingRefNode.IsScalar()) {
-			NodeRef node = blanks.next();
-			emitUriTriple(collector, node, RR_PARENTTRIPLESMAP, NodeRef::uri("#" + mappingRefNode.as<std::string>()));
+			rdf::Term node = blanks.next();
+			emitUriTriple(collector, node, RR_PARENTTRIPLESMAP, rdf::Term::iri("#" + mappingRefNode.as<std::string>()));
 
 			YAML::Node condNode = firstOf(objNode, {"condition", "conditions"});
 			for (const YAML::Node &c : flattenList(condNode)) {
@@ -566,7 +533,7 @@ NodeRef emitObjectNode(r2rml::TripleCollector &collector, BlankNodeMinter &blank
 					                   "': join condition parameters not recognised, skipped");
 					continue;
 				}
-				NodeRef jc = blanks.next();
+				rdf::Term jc = blanks.next();
 				emitLiteralTriple(collector, jc, RR_CHILD, childCol);
 				emitLiteralTriple(collector, jc, RR_PARENT, parentCol);
 				emitUriTriple(collector, node, RR_JOIN_CONDITION, jc);
@@ -589,11 +556,11 @@ NodeRef emitObjectNode(r2rml::TripleCollector &collector, BlankNodeMinter &blank
 		}
 
 		collector.addError("YARRRML parser: mapping '" + mappingName + "': unrecognised object entry, skipped");
-		return NodeRef();
+		return rdf::Term();
 	}
 
 	collector.addError("YARRRML parser: mapping '" + mappingName + "': unrecognised object entry, skipped");
-	return NodeRef();
+	return rdf::Term();
 }
 
 /// Attach YARRRML `graph`/`graphs` entries to `target`, which is either a
@@ -608,9 +575,9 @@ NodeRef emitObjectNode(r2rml::TripleCollector &collector, BlankNodeMinter &blank
 /// an IRI, and without the explicit term type a bare rr:column would be read
 /// back as a literal.
 void emitGraphMaps(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const YAML::Node &graphNode,
-                   const NodeRef &target, const std::string &mappingName,
+                   const rdf::Term &target, const std::string &mappingName,
                    const std::map<std::string, std::string> &prefixes) {
-	if (!graphNode || !target.valid) {
+	if (!graphNode || target.isNull()) {
 		return;
 	}
 	for (const YAML::Node &entry : flattenList(graphNode)) {
@@ -621,11 +588,11 @@ void emitGraphMaps(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, c
 		VSpec vs = classifyValue(entry.as<std::string>(), /*allowIriSuffix=*/false,
 		                         /*literalsAllowed=*/false, prefixes);
 		if (vs.kind == VKind::ConstIri) {
-			emitUriTriple(collector, target, RR_GRAPH, NodeRef::uri(resolveIri(vs.text, prefixes)));
+			emitUriTriple(collector, target, RR_GRAPH, rdf::Term::iri(resolveIri(vs.text, prefixes)));
 			continue;
 		}
 		vs.forceIri = true;
-		NodeRef graphMap = emitValueSpecAsMap(collector, blanks, vs, prefixes, ValueExtra());
+		rdf::Term graphMap = emitValueSpecAsMap(collector, blanks, vs, prefixes, ValueExtra());
 		emitUriTriple(collector, target, RR_GRAPH_MAP, graphMap);
 	}
 }
@@ -635,7 +602,7 @@ void emitGraphMaps(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, c
 /// everything else becomes a regular rr:predicateObjectMap blank node.
 struct PoResult {
 	std::vector<std::string> classIris;
-	std::vector<NodeRef> pomNodes;
+	std::vector<rdf::Term> pomNodes;
 };
 
 void emitPredObjPair(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const YAML::Node &predNode,
@@ -672,11 +639,11 @@ void emitPredObjPair(r2rml::TripleCollector &collector, BlankNodeMinter &blanks,
 					continue;
 				}
 			}
-			NodeRef objMap = emitObjectNode(collector, blanks, obj, prefixes, extra, mappingName);
-			if (objMap.valid) {
-				NodeRef pom = blanks.next();
+			rdf::Term objMap = emitObjectNode(collector, blanks, obj, prefixes, extra, mappingName);
+			if (!objMap.isNull()) {
+				rdf::Term pom = blanks.next();
 				if (predResult.isConstant) {
-					emitUriTriple(collector, pom, RR_PREDICATE, NodeRef::uri(predResult.constantIri));
+					emitUriTriple(collector, pom, RR_PREDICATE, rdf::Term::iri(predResult.constantIri));
 				} else {
 					emitUriTriple(collector, pom, RR_PREDICATE_MAP, predResult.mapNode);
 				}
@@ -733,20 +700,20 @@ PoResult emitPredicateObjectMaps(r2rml::TripleCollector &collector, BlankNodeMin
 }
 
 /// Mint a blank node for the mapping's logical table (rr:tableName or
-/// rr:sqlQuery) and emit its statements. Returns an invalid NodeRef (and
+/// rr:sqlQuery) and emit its statements. Returns an absent term (and
 /// records a warning) if no usable source was found.
-NodeRef emitLogicalTable(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const YAML::Node &mNode,
-                         const std::map<std::string, YAML::Node> &namedSources, const std::string &mappingName) {
+rdf::Term emitLogicalTable(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const YAML::Node &mNode,
+                           const std::map<std::string, YAML::Node> &namedSources, const std::string &mappingName) {
 	YAML::Node sourcesNode = firstOf(mNode, {"sources", "source"});
 	if (!sourcesNode) {
 		collector.addError("YARRRML parser: mapping '" + mappingName + "' has no source; logicalTable omitted");
-		return NodeRef();
+		return rdf::Term();
 	}
 
 	std::vector<YAML::Node> sourceList = flattenList(sourcesNode);
 	if (sourceList.empty()) {
 		collector.addError("YARRRML parser: mapping '" + mappingName + "' has no source; logicalTable omitted");
-		return NodeRef();
+		return rdf::Term();
 	}
 	if (sourceList.size() > 1) {
 		collector.addError("YARRRML parser: mapping '" + mappingName +
@@ -760,7 +727,7 @@ NodeRef emitLogicalTable(r2rml::TripleCollector &collector, BlankNodeMinter &bla
 		if (it == namedSources.end()) {
 			collector.addError("YARRRML parser: mapping '" + mappingName + "' references unknown source '" + refName +
 			                   "'; logicalTable omitted");
-			return NodeRef();
+			return rdf::Term();
 		}
 		src = it->second;
 	}
@@ -768,33 +735,33 @@ NodeRef emitLogicalTable(r2rml::TripleCollector &collector, BlankNodeMinter &bla
 	if (!src.IsMap()) {
 		collector.addError("YARRRML parser: mapping '" + mappingName +
 		                   "' source is not a mapping; logicalTable omitted");
-		return NodeRef();
+		return rdf::Term();
 	}
 
 	YAML::Node queryNode = src["query"];
 	if (queryNode && queryNode.IsScalar()) {
-		NodeRef node = blanks.next();
+		rdf::Term node = blanks.next();
 		emitLiteralTriple(collector, node, RR_SQL_QUERY, queryNode.as<std::string>());
 		return node;
 	}
 	YAML::Node tableNode = src["table"];
 	if (tableNode && tableNode.IsScalar()) {
-		NodeRef node = blanks.next();
+		rdf::Term node = blanks.next();
 		emitLiteralTriple(collector, node, RR_TABLE_NAME, tableNode.as<std::string>());
 		return node;
 	}
 
 	collector.addError("YARRRML parser: mapping '" + mappingName +
 	                   "' source has neither 'table' nor 'query'; logicalTable omitted");
-	return NodeRef();
+	return rdf::Term();
 }
 
 /// Mint a blank node for the mapping's subject map (value strategy + any
-/// rr:class assertions) and emit its statements. Returns an invalid NodeRef
+/// rr:class assertions) and emit its statements. Returns an absent term
 /// if there is neither a subject value nor any classes to assert.
-NodeRef emitSubjectMap(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const YAML::Node &mNode,
-                       const std::vector<std::string> &classIris, const std::string &mappingName,
-                       const std::map<std::string, std::string> &prefixes) {
+rdf::Term emitSubjectMap(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const YAML::Node &mNode,
+                         const std::vector<std::string> &classIris, const std::string &mappingName,
+                         const std::map<std::string, std::string> &prefixes) {
 	bool haveValue = false;
 	VKind valueKind = VKind::ConstIri;
 	std::string valueText;
@@ -821,10 +788,10 @@ NodeRef emitSubjectMap(r2rml::TripleCollector &collector, BlankNodeMinter &blank
 	}
 
 	if (!haveValue && classIris.empty()) {
-		return NodeRef();
+		return rdf::Term();
 	}
 
-	NodeRef node = blanks.next();
+	rdf::Term node = blanks.next();
 	if (haveValue) {
 		switch (valueKind) {
 		case VKind::Column:
@@ -835,12 +802,12 @@ NodeRef emitSubjectMap(r2rml::TripleCollector &collector, BlankNodeMinter &blank
 			break;
 		case VKind::ConstIri:
 		default:
-			emitUriTriple(collector, node, RR_CONSTANT, NodeRef::uri(resolveIri(valueText, prefixes)));
+			emitUriTriple(collector, node, RR_CONSTANT, rdf::Term::iri(resolveIri(valueText, prefixes)));
 			break;
 		}
 	}
 	for (const std::string &c : classIris) {
-		emitUriTriple(collector, node, RR_CLASS, NodeRef::uri(c));
+		emitUriTriple(collector, node, RR_CLASS, rdf::Term::iri(c));
 	}
 	return node;
 }
@@ -854,9 +821,9 @@ const std::set<std::string> &mappingKnownKeys() {
 void emitOneMapping(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, const std::string &name,
                     const YAML::Node &mNode, const std::map<std::string, YAML::Node> &namedSources,
                     const std::map<std::string, std::string> &prefixes) {
-	NodeRef logicalTable = emitLogicalTable(collector, blanks, mNode, namedSources, name);
+	rdf::Term logicalTable = emitLogicalTable(collector, blanks, mNode, namedSources, name);
 	PoResult poResult = emitPredicateObjectMaps(collector, blanks, mNode, name, prefixes);
-	NodeRef subjectMap = emitSubjectMap(collector, blanks, mNode, poResult.classIris, name, prefixes);
+	rdf::Term subjectMap = emitSubjectMap(collector, blanks, mNode, poResult.classIris, name, prefixes);
 
 	// Mapping-level graphs attach to the subject map, so they apply to every
 	// triple this mapping generates (including the rr:class rdf:type triples) -
@@ -871,23 +838,23 @@ void emitOneMapping(r2rml::TripleCollector &collector, BlankNodeMinter &blanks, 
 		}
 	}
 
-	NodeRef subject = NodeRef::uri("#" + name);
+	rdf::Term subject = rdf::Term::iri("#" + name);
 
-	if (!logicalTable.valid && !subjectMap.valid && poResult.pomNodes.empty()) {
+	if (logicalTable.isNull() && subjectMap.isNull() && poResult.pomNodes.empty()) {
 		// Still a syntactically valid (but semantically inert) TriplesMap: the
 		// R2RML object model only recognises a resource as a TriplesMap when it
 		// carries rr:logicalTable/subjectMap/predicateObjectMap/subject.
-		emitUriTriple(collector, subject, RDF_TYPE, NodeRef::uri(RR_TRIPLES_MAP));
+		emitUriTriple(collector, subject, rdf::RDF_TYPE, rdf::Term::iri(RR_TRIPLES_MAP));
 		return;
 	}
 
-	if (logicalTable.valid) {
+	if (!logicalTable.isNull()) {
 		emitUriTriple(collector, subject, RR_LOGICAL_TABLE, logicalTable);
 	}
-	if (subjectMap.valid) {
+	if (!subjectMap.isNull()) {
 		emitUriTriple(collector, subject, RR_SUBJECT_MAP, subjectMap);
 	}
-	for (const NodeRef &pom : poResult.pomNodes) {
+	for (const rdf::Term &pom : poResult.pomNodes) {
 		emitUriTriple(collector, subject, RR_PREDICATE_OBJECT_MAP, pom);
 	}
 }
@@ -914,10 +881,10 @@ void emitYarrrmlDocument(const std::string &yamlText, r2rml::TripleCollector &co
 	}
 
 	std::map<std::string, std::string> knownPrefixes = {
-	    {"rr", "http://www.w3.org/ns/r2rml#"},
-	    {"rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"},
-	    {"rdfs", "http://www.w3.org/2000/01/rdf-schema#"},
-	    {"xsd", "http://www.w3.org/2001/XMLSchema#"},
+	    {"rr", R2RML_NAMESPACE},
+	    {"rdf", rdf::RDF_NAMESPACE},
+	    {"rdfs", rdf::RDFS_NAMESPACE},
+	    {"xsd", rdf::XSD_NAMESPACE},
 	};
 
 	YAML::Node prefixesNode = root["prefixes"];

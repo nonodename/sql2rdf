@@ -1,5 +1,5 @@
 #include "r2rml/StringSQLValue.h"
-
+#include "rdf/Term.h"
 namespace r2rml {
 
 StringSQLValue::StringSQLValue() : type_(Type::Null) {
@@ -20,11 +20,11 @@ std::unique_ptr<SQLValue> StringSQLValue::clone() const {
 std::string StringSQLValue::datatypeIRI() const {
 	switch (type_) {
 	case Type::Integer:
-		return "http://www.w3.org/2001/XMLSchema#integer";
+		return rdf::XSD_INTEGER;
 	case Type::Double:
-		return "http://www.w3.org/2001/XMLSchema#double";
+		return rdf::XSD_DOUBLE;
 	case Type::Boolean:
-		return "http://www.w3.org/2001/XMLSchema#boolean";
+		return rdf::XSD_BOOLEAN;
 	default:
 		return std::string();
 	}

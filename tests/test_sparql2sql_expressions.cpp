@@ -5,7 +5,7 @@
  * of the generated SQL, plus negative tests for every deferred builtin.
  */
 
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 
 #include <string>
 

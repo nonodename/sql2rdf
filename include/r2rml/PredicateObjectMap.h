@@ -1,5 +1,7 @@
 #pragma once
 
+#include "rdf/Term.h"
+
 #include "AbstractMap.h"
 
 #include <memory>
@@ -33,7 +35,7 @@ public:
 	 * into are the union of those and this predicate-object map's own
 	 * graphMaps.
 	 */
-	void processRow(const SQLRow &row, const SerdNode &subject, SerdWriter &rdfWriter, const R2RMLMapping &mapping,
+	void processRow(const SQLRow &row, const rdf::Term &subject, SerdWriter &rdfWriter, const R2RMLMapping &mapping,
 	                SQLConnection &dbConnection, const std::vector<std::unique_ptr<GraphMap>> &subjectGraphMaps) const;
 
 	bool isValid() const;

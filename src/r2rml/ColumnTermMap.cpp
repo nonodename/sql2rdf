@@ -1,4 +1,5 @@
 #include "r2rml/ColumnTermMap.h"
+#include "r2rml/SerdTerm.h"
 #include "r2rml/SQLRow.h"
 #include "r2rml/SQLValue.h"
 
@@ -11,24 +12,22 @@ ColumnTermMap::ColumnTermMap(const std::string &column) : columnName(column) {
 
 ColumnTermMap::~ColumnTermMap() = default;
 
-SerdNode ColumnTermMap::generateRDFTerm(const SQLRow &row, const SerdEnv & /*env*/) const {
+void ColumnTermMap::generateRDFTerm(const SQLRow &row, rdf::Term &out) const {
+	out.clear();
 	auto val = row.getValue(columnName);
 	if (val->isNull()) {
-		return SERD_NODE_NULL;
+		return; // NULL column - no term for this row
 	}
-
-	cachedValue_ = val->asString();
 
 	// R2RML 7.4's three term types. rr:BlankNode takes the column's value as
 	// the blank node identifier; per the spec the mapping is responsible for
 	// that value being a valid one.
-	SerdType nodeType = SERD_LITERAL;
-	if (termType == TermType::IRI) {
-		nodeType = SERD_URI;
-	} else if (termType == TermType::BlankNode) {
-		nodeType = SERD_BLANK;
-	}
-	return serd_node_from_string(nodeType, reinterpret_cast<const uint8_t *>(cachedValue_.c_str()));
+	//
+	// The datatype deliberately does NOT go on the term here: computeDatatypeIRI
+	// is the caller's business, because it applies only in the object position -
+	// folding it in would start annotating subjects and graph terms too.
+	out.mutableLexical() = val->asString();
+	out.setKind(kindForTermType(termType));
 }
 
 std::string ColumnTermMap::computeDatatypeIRI(const SQLRow &row) const {

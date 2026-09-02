@@ -14,7 +14,7 @@
  * relative mapping paths against the current working directory first.
  */
 
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 
 #include <serd/serd.h>
 
@@ -88,9 +88,8 @@ std::string firstPredicateIri(const R2RMLMapping &mapping) {
 	REQUIRE(pom->predicateMaps.size() == 1);
 	auto *predMap = dynamic_cast<ConstantTermMap *>(pom->predicateMaps[0].get());
 	REQUIRE(predMap != nullptr);
-	const SerdNode &node = predMap->constantValue;
-	REQUIRE(node.buf != nullptr);
-	return std::string(reinterpret_cast<const char *>(node.buf), node.n_bytes);
+	REQUIRE_FALSE(predMap->constantValue.isNull());
+	return predMap->constantValue.lexical();
 }
 
 bool endsWith(const std::string &value, const std::string &suffix) {

@@ -1,4 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch.hpp>
 
 #include <serd/serd.h>
 
@@ -32,6 +32,7 @@
 #include "r2rml/PredicateMap.h"
 #include "r2rml/LogicalTable.h"
 #include "r2rml/ConstantTermMap.h"
+#include "r2rml/SerdTerm.h"
 #include "r2rml/MapSQLRow.h"
 #include "r2rml/SQLRow.h"
 #include "r2rml/GraphMap.h"
@@ -153,24 +154,103 @@ TEST_CASE("ConstantTermMap returns given node") {
 	const uint8_t uri[] = "http://example/";
 	SerdNode node = serd_node_from_string(SERD_URI, uri);
 	ConstantTermMap c(node);
-	SerdEnv *env1 = serd_env_new(nullptr);
-	SerdNode out = c.generateRDFTerm(MapSQLRow(), *env1);
-	// Use serd_node_equals to compare nodes
-	REQUIRE(serd_node_equals(&node, &out));
-	serd_env_free(env1);
+	rdf::Term out;
+	c.generateRDFTerm(MapSQLRow(), out);
+	REQUIRE(out == r2rml::termFromSerdNode(&node));
 }
 
 TEST_CASE("Column/Template term maps return default null node") {
 	ColumnTermMap ct("col");
 	TemplateTermMap tt("{col}");
-	SerdEnv *env2 = serd_env_new(nullptr);
+	rdf::Term cn;
+	rdf::Term tn;
+	ct.generateRDFTerm(MapSQLRow(), cn);
+	tt.generateRDFTerm(MapSQLRow(), tn);
 
-	SerdNode cn = ct.generateRDFTerm(MapSQLRow(), *env2);
-	SerdNode tn = tt.generateRDFTerm(MapSQLRow(), *env2);
+	REQUIRE(cn.isNull());
+	REQUIRE(tn.isNull());
+}
 
-	REQUIRE(serd_node_equals(&cn, &SERD_NODE_NULL));
-	REQUIRE(serd_node_equals(&tn, &SERD_NODE_NULL));
-	serd_env_free(env2);
+// AbstractMap::percentEncode is protected, so it is exercised the same way
+// production code reaches it: through TemplateTermMap::generateRDFTerm, whose
+// default rr:termType is rr:IRI (R2RML 7.3 percent-encodes substituted values
+// only for IRIs).
+TEST_CASE("TemplateTermMap percent-encodes substituted values (rr:IRI default)") {
+	TemplateTermMap tt("http://example/{VAL}");
+
+	{
+		SECTION("unreserved characters pass through unencoded (fast no-op path)") {
+			auto row = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string("abcXYZ019-_.~"))}});
+			rdf::Term out;
+			tt.generateRDFTerm(row, out);
+			REQUIRE(out.lexical() == "http://example/abcXYZ019-_.~");
+		}
+	}
+
+	{
+		SECTION("reserved ASCII characters are percent-encoded, uppercase hex") {
+			auto row = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string("a b/c:d@e,f"))}});
+			rdf::Term out;
+			tt.generateRDFTerm(row, out);
+			REQUIRE(out.lexical() == "http://example/a%20b%2Fc%3Ad%40e%2Cf");
+		}
+	}
+	{
+		SECTION("characters adjacent to unreserved ranges are still encoded") {
+			// '-' (0x2D) and '.' (0x2E) are unreserved; their neighbours ',' (0x2C)
+			// and '/' (0x2F) are not - regression guard for the boundary bits in the
+			// lookup table.
+			auto row = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string(",-./"))}});
+			rdf::Term out;
+			tt.generateRDFTerm(row, out);
+			REQUIRE(out.lexical() == "http://example/%2C-.%2F");
+		}
+	}
+	{
+		SECTION("control characters are percent-encoded") {
+			auto row = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string("\t\n"))}});
+			rdf::Term out;
+			tt.generateRDFTerm(row, out);
+			REQUIRE(out.lexical() == "http://example/%09%0A");
+		}
+	}
+	{
+		SECTION("high-bit / multi-byte UTF-8 bytes are percent-encoded byte-by-byte") {
+			// U+00E9 (e-acute) encodes as UTF-8 bytes 0xC3 0xA9.
+			auto row = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string("caf\xC3\xA9"))}});
+			rdf::Term out;
+			tt.generateRDFTerm(row, out);
+			REQUIRE(out.lexical() == "http://example/caf%C3%A9");
+		}
+	}
+	{
+		SECTION("empty substituted value leaves the template text untouched") {
+			auto row = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string(""))}});
+			rdf::Term out;
+			tt.generateRDFTerm(row, out);
+			REQUIRE(out.lexical() == "http://example/");
+		}
+	}
+	{
+		SECTION("repeated calls on the same output reuse capacity without stale bytes") {
+			auto encoded = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string("a b"))}});
+			auto plain = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string("ab"))}});
+			rdf::Term out;
+			tt.generateRDFTerm(encoded, out);
+			REQUIRE(out.lexical() == "http://example/a%20b");
+			tt.generateRDFTerm(plain, out);
+			REQUIRE(out.lexical() == "http://example/ab");
+		}
+	}
+}
+
+TEST_CASE("TemplateTermMap does not percent-encode non-IRI term types") {
+	TemplateTermMap tt("{VAL}");
+	tt.termType = r2rml::TermType::Literal;
+	auto row = r2rml::testing::makeRow({{"VAL", StringSQLValue(std::string("a b/c"))}});
+	rdf::Term out;
+	tt.generateRDFTerm(row, out);
+	REQUIRE(out.lexical() == "a b/c");
 }
 
 TEST_CASE("BaseTableOrView and R2RMLView defaults") {
@@ -255,8 +335,8 @@ TEST_CASE("TermMap isValid methods") {
 // Helpers for parsed-mapping tests
 // ---------------------------------------------------------------------------
 
-static std::string nodeUri(const SerdNode &n) {
-	return std::string(reinterpret_cast<const char *>(n.buf), n.n_bytes);
+static std::string nodeUri(const rdf::Term &t) {
+	return t.lexical();
 }
 
 static TriplesMap *findById(R2RMLMapping &m, const std::string &fragment) {
@@ -815,10 +895,10 @@ TEST_CASE("R2RML parser populates rr:graph on a subject map as a constant GraphM
 
 	SerdEnv *env = serd_env_new(nullptr);
 	MapSQLRow row;
-	SerdNode graphNode = sm->graphMaps[0]->generateRDFTerm(row, *env);
-	REQUIRE(graphNode.type == SERD_URI);
-	REQUIRE(std::string(reinterpret_cast<const char *>(graphNode.buf), graphNode.n_bytes) ==
-	        "http://example.com/graph/employees");
+	rdf::Term graphNode;
+	sm->graphMaps[0]->generateRDFTerm(row, graphNode);
+	REQUIRE(graphNode.isIri());
+	REQUIRE(graphNode.lexical() == "http://example.com/graph/employees");
 	serd_env_free(env);
 
 	// valueTermMap() exposes the delegated value strategy, so a consumer can
@@ -844,11 +924,10 @@ TEST_CASE("R2RML parser populates rr:graphMap on a predicate-object map as a tem
 
 	SerdEnv *env = serd_env_new(nullptr);
 	MapSQLRow row = r2rml::testing::makeRow({{"JOB", StringSQLValue(std::string("CLERK"))}});
-	SerdNode graphNode = poms[1]->graphMaps[0]->generateRDFTerm(row, *env);
-	REQUIRE(graphNode.type == SERD_URI);
-	REQUIRE(std::string(reinterpret_cast<const char *>(graphNode.buf), graphNode.n_bytes) ==
-	        "http://example.com/graph/jobs/CLERK");
-	serd_env_free(env);
+	rdf::Term graphNode;
+	poms[1]->graphMaps[0]->generateRDFTerm(row, graphNode);
+	REQUIRE(graphNode.isIri());
+	REQUIRE(graphNode.lexical() == "http://example.com/graph/jobs/CLERK");
 
 	// The template shape is visible through valueTermMap(), including the
 	// original template string - which is what lets sparql2sql invert a bound

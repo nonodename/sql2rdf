@@ -58,6 +58,15 @@
 #   because every row of it has a perfectly good datatype that just is not the
 #   same one. It is also the fixture for value-space dispatch: comparing an
 #   xsd:integer row against an xsd:string row is a type error, not a false.
+#
+# ex:constint/ex:conststr/ex:constlang are rr:constant literals - single-arm,
+# so their TermInfo is fully static and none of the three should ever
+# materialise a tag. ex:constint ("5"^^xsd:integer) and ex:conststr ("5", no
+# datatype => xsd:string) share a lexical form but not a datatype: they exist
+# to prove sameTerm()/= tell them apart rather than falling back to lexical
+# equality. ex:constlang ("chat"@fr) exists to prove LANG()/DATATYPE() read a
+# constant's own language/datatype rather than the term map's (nonexistent,
+# for a constant) rr:language/rr:datatype fields.
 
 <#Measure>
     rr:logicalTable [ rr:tableName "MEASURES" ];
@@ -85,7 +94,13 @@
     rr:predicateObjectMap [ rr:predicate ex:mixedtag;
         rr:objectMap [ rr:column "TITLE"; rr:language "en" ] ];
     rr:predicateObjectMap [ rr:predicate ex:mixeddt;
-        rr:objectMap [ rr:column "AMOUNT"; rr:datatype xsd:integer ] ].
+        rr:objectMap [ rr:column "AMOUNT"; rr:datatype xsd:integer ] ];
+    rr:predicateObjectMap [ rr:predicate ex:constint;
+        rr:objectMap [ rr:constant "5"^^xsd:integer ] ];
+    rr:predicateObjectMap [ rr:predicate ex:conststr;
+        rr:objectMap [ rr:constant "5" ] ];
+    rr:predicateObjectMap [ rr:predicate ex:constlang;
+        rr:objectMap [ rr:constant "chat"@fr ] ].
 
 # A blank-node subject map - only reachable since buildSubjectMap started
 # honouring rr:termType (see tests/sourceR2RML/subject_blanknode.ttl).
