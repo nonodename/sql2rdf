@@ -15,6 +15,7 @@
 #include "sparql2sql/TermInference.h"
 #include "sparql2sql/TermInfo.h"
 #include "sparql2sql/TranslationError.h"
+#include "sparql2sql/ValuesFolder.h"
 #include "sparql2sql/ir/Optimizer.h"
 #include "sparql2sql/ir/RelNode.h"
 #include "sparql2sql/ir/SqlRenderer.h"
@@ -343,7 +344,20 @@ TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, Transla
 	// that happens - see markPreFoldTagNeeds's doc comment.
 	markPreFoldTagNeeds(query, ctx);
 
-	RelNodePtr rootNode = query.where ? fold(*query.where, ctx) : identityRelation(ctx);
+	RelNodePtr rootNode;
+	{
+		// This query's own trailing VALUES clause folds into its WHERE patterns
+		// just like an inline one (see ValuesFolder.h). Replacing rather than
+		// merging is what keeps an enclosing group's bindings out of a
+		// sub-select, which is evaluated independently of them.
+		TranslationContext::ConstantBindingGuard constantGuard(
+		    ctx, inlineConstantScope(ConstantBindings(), query.where.get(), query.valuesClause.get()));
+		rootNode = query.where ? fold(*query.where, ctx) : identityRelation(ctx);
+	}
+	// Everything below renders SQL, including the FILTER/BIND expressions and
+	// EXISTS bodies held over from the fold - none of which may see a folded
+	// binding, so an enclosing scope must not leak back in here either.
+	TranslationContext::ConstantBindingGuard noConstants(ctx, ConstantBindings());
 	if (query.valuesClause) {
 		rootNode = innerJoin(std::move(rootNode), translateInlineData(*query.valuesClause, ctx), ctx);
 	}

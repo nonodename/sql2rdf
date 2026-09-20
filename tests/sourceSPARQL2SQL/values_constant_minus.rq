@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?e
+WHERE {
+  VALUES ?e { <http://data.example.com/employee/7369> }
+  ?e a ex:Employee .
+  MINUS { ?e ex:name "SMITH" }
+}

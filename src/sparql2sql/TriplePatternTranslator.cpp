@@ -741,8 +741,20 @@ TermSpec termSpecFor(const sparql::ast::Term &term, TranslationContext &ctx) {
 	using sparql::ast::Var;
 	TermSpec spec;
 	if (term.kind() == TermKind::Var) {
+		// A variable an enclosing VALUES block pins to a single constant term is
+		// translated as though that constant had been written here, so the term
+		// map gets inverted (a raw column equality the engine can push into the
+		// scan) instead of built forwards and joined on. See ValuesFolder.h for
+		// when a binding qualifies; the VALUES relation is still emitted and
+		// joined, so the variable itself stays bound and projected.
+		const std::string &name = static_cast<const Var &>(term).name;
+		if (const sparql::ast::Term *pinned = ctx.constantBinding(name)) {
+			spec.isVar = false;
+			spec.boundTerm = pinned;
+			return spec;
+		}
 		spec.isVar = true;
-		spec.varName = static_cast<const Var &>(term).name;
+		spec.varName = name;
 	} else if (term.kind() == TermKind::BlankNode) {
 		spec.isVar = true;
 		spec.varName = "_bnode_" + static_cast<const BlankNode &>(term).label;

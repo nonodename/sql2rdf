@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?e ?n
+WHERE {
+  VALUES ?e { <http://data.example.com/employee/7369> }
+  ?e ex:name ?n .
+  FILTER(STRLEN(STR(?e)) > 0)
+}

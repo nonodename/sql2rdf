@@ -15,10 +15,22 @@ namespace r2rml {
 class R2RMLMapping;
 } // namespace r2rml
 
+namespace sparql {
+namespace ast {
+class Term;
+} // namespace ast
+} // namespace sparql
+
 namespace sparql2sql {
 
 class SqlDialect;
 struct TypeCatalog;
+
+/// Variables a VALUES block pins to one and the same constant term in every
+/// one of its rows, mapped to that term (which is owned by the query's AST and
+/// so outlives the whole translation). Folded into the triple patterns that
+/// read those variables - see ValuesFolder.h.
+typedef std::map<std::string, const sparql::ast::Term *> ConstantBindings;
 
 /// One entry of a top-level WITH [RECURSIVE] clause: `name AS (bodySql)`.
 struct CteDef {
@@ -203,6 +215,46 @@ public:
 		TranslationContext &ctx_;
 	};
 
+	/// The constant term `varName` is pinned to by an enclosing VALUES block, or
+	/// nullptr if it is an ordinary variable. A triple pattern reading a pinned
+	/// variable in subject/object position is translated as if the constant had
+	/// been written there (see termSpecFor and ValuesFolder.h).
+	///
+	/// Only ever non-empty inside fold(): the scope is pushed around the fold of
+	/// one element list and popped before anything is rendered, so a FILTER/BIND
+	/// expression - translated later, against the relation the fold produced -
+	/// never sees it and keeps reading the variable as a variable.
+	const sparql::ast::Term *constantBinding(const std::string &varName) const {
+		ConstantBindings::const_iterator it = constantBindings_.find(varName);
+		return it == constantBindings_.end() ? nullptr : it->second;
+	}
+
+	const ConstantBindings &constantBindings() const {
+		return constantBindings_;
+	}
+
+	/// Make `bindings` the complete set of folded VALUES constants for as long
+	/// as the guard is alive. Replaces rather than merges - a caller that wants
+	/// the enclosing scope's bindings too merges them in itself (fold() does),
+	/// and the callers that must *not* inherit them (a MINUS body, a sub-select)
+	/// push an empty map.
+	class ConstantBindingGuard {
+	public:
+		ConstantBindingGuard(TranslationContext &ctx, ConstantBindings bindings)
+		    : ctx_(ctx), saved_(ctx.constantBindings_) {
+			ctx_.constantBindings_ = std::move(bindings);
+		}
+		~ConstantBindingGuard() {
+			ctx_.constantBindings_ = saved_;
+		}
+		ConstantBindingGuard(const ConstantBindingGuard &) = delete;
+		ConstantBindingGuard &operator=(const ConstantBindingGuard &) = delete;
+
+	private:
+		TranslationContext &ctx_;
+		ConstantBindings saved_;
+	};
+
 	/// Produce a fresh, unique table alias ("t1", "t2", ...).
 	std::string nextAlias() {
 		return "t" + std::to_string(++aliasCounter_);
@@ -359,6 +411,7 @@ private:
 	std::size_t subqueryDepth_ = 0;
 	GraphConstraint activeGraph_;
 	ActiveDataset dataset_;
+	ConstantBindings constantBindings_;
 };
 
 /// Mangle a SPARQL variable name into its projected SQL column name

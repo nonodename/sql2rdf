@@ -17,6 +17,7 @@
 #include "sparql2sql/TranslationError.h"
 #include "sparql2sql/Translator.h"
 #include "sparql2sql/TriplePatternTranslator.h"
+#include "sparql2sql/ValuesFolder.h"
 #include "sparql2sql/ir/RelNode.h"
 #include "sparql2sql/ir/SqlRenderer.h"
 
@@ -317,6 +318,15 @@ RelNodePtr fold(const sparql::ast::GroupGraphPattern &pattern, TranslationContex
 
 	RelNodePtr acc = identityRelation(ctx);
 
+	// VALUES columns pinned to a single constant term are folded into this
+	// element list's triple patterns (and, by inheritance, into every nested
+	// element list this fold recurses into) rather than joined onto them - see
+	// ValuesFolder.h. Scoped to the loop below: FILTER/BIND expressions are
+	// translated later, after the guard is gone, and must still read the
+	// variable as a variable.
+	TranslationContext::ConstantBindingGuard constantGuard(
+	    ctx, inlineConstantScope(ctx.constantBindings(), &pattern, nullptr));
+
 	for (const auto &elPtr : pattern.elements) {
 		const auto &el = *elPtr;
 		switch (el.kind()) {
@@ -349,7 +359,16 @@ RelNodePtr fold(const sparql::ast::GroupGraphPattern &pattern, TranslationContex
 		}
 		case ElementKind::MinusGraphPattern: {
 			const auto &mn = static_cast<const MinusGraphPattern &>(el);
-			acc = antiJoin(std::move(acc), fold(*mn.pattern, ctx), ctx);
+			// MINUS removes a solution only when the two sides share a variable
+			// (Section 18.2), so a variable folded out of the right-hand side
+			// would turn a real anti-join into a no-op. The body may of course
+			// still fold its own VALUES, which stay on the same side.
+			RelNodePtr minusBody;
+			{
+				TranslationContext::ConstantBindingGuard noInherit(ctx, ConstantBindings());
+				minusBody = fold(*mn.pattern, ctx);
+			}
+			acc = antiJoin(std::move(acc), std::move(minusBody), ctx);
 			break;
 		}
 		case ElementKind::Filter: {

@@ -450,6 +450,71 @@ TEST_CASE("emp_dept_values.rq: VALUES restricts to the given ?n bindings") {
 	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7400"}, {"V_N", "JONES"}}));
 }
 
+// --- VALUES constant folding (ValuesFolder.h). The point of these is that the
+// folded query answers exactly what the unfolded one did; the SQL-shape side
+// (that the fold actually happened) is asserted in
+// tests/test_sparql2sql_values_folding.cpp.
+
+TEST_CASE("values_constant_subject.rq: a VALUES-pinned subject returns that employee's name only") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_subject.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_N", "SMITH"}}));
+}
+
+TEST_CASE("values_constant_subject_path.rq: the pinned subject still walks the sequence path") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_subject_path.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_DN", "APPSERVER"}}));
+}
+
+TEST_CASE("values_constant_object.rq: a VALUES-pinned object returns the same row as the two-row form") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_object.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_N", "SMITH"}}));
+}
+
+TEST_CASE("values_constant_trailing.rq: a trailing VALUES clause answers like the inline one") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_trailing.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_N", "SMITH"}}));
+}
+
+TEST_CASE("values_constant_optional.rq: the pinned subject keeps its OPTIONAL match") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_optional.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_N", "SMITH"}}));
+}
+
+TEST_CASE("values_constant_filtered.rq: a FILTER over the pinned variable still sees it bound") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_filtered.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_N", "SMITH"}}));
+}
+
+TEST_CASE("values_constant_minus.rq: MINUS over the pinned subject still removes the matching solution") {
+	auto conn = makeSeededDatabase();
+	// 7369 IS named SMITH, so the anti-join must remove it and leave nothing.
+	// Folding the constant into the MINUS body would leave the two sides
+	// sharing no variable, which Section 18.2 makes a no-op - the row would
+	// wrongly survive.
+	auto rows = translateAndRun(*conn, "values_constant_minus.rq", "example_emp_dept.ttl");
+	CHECK(rows.empty());
+}
+
+TEST_CASE("values_constant_undef.rq: an UNDEF-only column binds nothing and matches every subject") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_undef.rq", "example_emp_dept.ttl");
+	// UNDEF constrains nothing, so every ex:name triple survives: two employees
+	// plus two departments.
+	CHECK(rows.size() == 4);
+}
+
 TEST_CASE("sparql2sql_self_ref.rq: the self-join guard matches the single widget") {
 	auto conn = makeSeededDatabase();
 	auto rows = translateAndRun(*conn, "sparql2sql_self_ref.rq", "sparql2sql_self_ref.ttl");

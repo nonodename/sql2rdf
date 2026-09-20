@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?e ?dn
+WHERE {
+  VALUES ?e { <http://data.example.com/employee/7369> }
+  ?e a ex:Employee ;
+     ex:department/ex:name ?dn .
+}

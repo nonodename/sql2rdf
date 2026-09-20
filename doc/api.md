@@ -621,6 +621,26 @@ emitting SQL strings directly, then applies a fixed pipeline of semantics-preser
    is `SELECT DISTINCT`/`ASK`, and likewise inside an EXISTS body (an existence check cannot see
    duplicates).
 
+**A `VALUES` column bound to a single constant term is folded into the triple patterns that read
+it**, before any of the above (`sparql2sql/ValuesFolder.h`). `VALUES ?s { <http://ex/emp/7369> }`
+followed by `?s ex:name ?n` translates identically to writing the IRI in the pattern: the subject
+template is inverted into `EMPNO = '7369'`, a predicate the engine pushes into the table scan.
+Without the fold the subject was built in the forward direction instead — concatenating and
+URL-encoding the template's columns — and the one-row inline relation was joined onto that
+constructed string, which no engine can invert, so the pattern materialised in full before the join
+pruned it. The inline relation is still emitted and joined either way, which is what keeps the
+variable bound, projected and correctly tagged once the patterns stop binding it themselves.
+
+Only a column holding the *same* term in every row folds (at least one row, no `UNDEF` cell, every
+row identical) — a genuine multi-row alternatives list still translates to the union/join it always
+did. Four further cases deliberately do not fold, each because folding would change an answer
+rather than merely a plan: a variable a `FILTER`/`BIND` expression reads (it would go out of scope
+in the relation the expression is applied to); every variable in a group whose expressions contain
+`EXISTS` (an `EXISTS` body correlates on shared variables, and a variable folded out of one side
+drops the correlation); a `MINUS` body (SPARQL 1.1 §18.2 makes `MINUS` a no-op when the two sides
+share no variable); and a sub-select (evaluated independently, so a `LIMIT` or aggregate inside it
+makes restricting the body observably different from restricting the result).
+
 **Each distinct `rr:sqlQuery` view is hoisted into one shared `WITH` CTE** and referenced by name,
 rather than inlined as a derived table at every use site. One view commonly backs many sites — each
 predicate-object map of its triples map, both sides of a referencing object map, and every arm of a
@@ -941,6 +961,10 @@ and joins use the VARCHAR-cast fallback.
   nothing, consistent with a triple pattern that provably matches nothing. Listing the same graph
   twice is one graph. The dataset is fixed once for the whole query (the grammar only allows dataset
   clauses on the top-level query), so nested sub-selects and `EXISTS` bodies inherit it.
+- **`VALUES` / inline data**: supported in every position the grammar allows (a group element and
+  the query's trailing clause). A column pinned to one constant term is constant-folded into the
+  triple patterns reading it, so it generates the same SQL as writing that term in the pattern —
+  see the fold's rules and exclusions above.
 - **No `SERVICE`** (federated query): always throws, matching `sql2rdf_sparql`'s own "no
   federated-query execution semantics" stance.
 - **Every SPARQL variable is a plain SQL `VARCHAR`** holding the RDF term's lexical string form
