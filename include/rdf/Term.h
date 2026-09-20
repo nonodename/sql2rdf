@@ -9,7 +9,7 @@ namespace rdf {
 
 /// rdf:langString - the implicit datatype of every language-tagged literal
 /// (RDF 1.1 Section 3.3).
-// extern const char *const RDF_LANG_STRING;
+
 constexpr const char *const RDF_LANG_STRING = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 constexpr const char *const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
 constexpr const char *const XSD_INTEGER = "http://www.w3.org/2001/XMLSchema#integer";
@@ -20,6 +20,20 @@ constexpr const char *const RDF_NAMESPACE = "http://www.w3.org/1999/02/22-rdf-sy
 constexpr const char *const RDFS_NAMESPACE = "http://www.w3.org/2000/01/rdf-schema#";
 constexpr const char *const XSD_NAMESPACE = "http://www.w3.org/2001/XMLSchema#";
 constexpr const char *const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+constexpr const char *const XSD_BYTE = "http://www.w3.org/2001/XMLSchema#byte";
+constexpr const char *const XSD_SHORT = "http://www.w3.org/2001/XMLSchema#short";
+constexpr const char *const XSD_INT = "http://www.w3.org/2001/XMLSchema#int";
+constexpr const char *const XSD_LONG = "http://www.w3.org/2001/XMLSchema#long";
+constexpr const char *const XSD_UNSIGNED_BYTE = "http://www.w3.org/2001/XMLSchema#unsignedByte";
+constexpr const char *const XSD_UNSIGNED_SHORT = "http://www.w3.org/2001/XMLSchema#unsignedShort";
+constexpr const char *const XSD_UNSIGNED_INT = "http://www.w3.org/2001/XMLSchema#unsignedInt";
+constexpr const char *const XSD_UNSIGNED_LONG = "http://www.w3.org/2001/XMLSchema#unsignedLong";
+constexpr const char *const XSD_NON_NEGATIVE_INT = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
+constexpr const char *const XSD_FLOAT = "http://www.w3.org/2001/XMLSchema#float";
+constexpr const char *const XSD_DATE = "http://www.w3.org/2001/XMLSchema#date";
+constexpr const char *const XSD_TIME = "http://www.w3.org/2001/XMLSchema#time";
+constexpr const char *const XSD_DATETIME = "http://www.w3.org/2001/XMLSchema#dateTime";
+constexpr const char *const XSD_DATETIME_STAMP = "http://www.w3.org/2001/XMLSchema#dateTimeStamp";
 /**
  * An owning, self-contained RDF term: a kind, a lexical form, and - for
  * literals - either a datatype IRI or a language tag.
