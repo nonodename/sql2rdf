@@ -59,6 +59,22 @@ std::string tagLiteral(const TermInfo &info, const SqlDialect &dialect);
 std::string coalescedTag(const std::string &leftValueSql, const std::string &leftTagSql,
                          const std::string &rightValueSql, const std::string &rightTagSql);
 
+/// A boolean expression testing whether two tags may denote terms of the same
+/// RDF dimension - the tag half of RDF term equality on a join key, to be
+/// AND'ed with the ordinary lexical-form comparison.
+///
+/// Deliberately not a plain `=`: kTagLiteralUntyped ("L") means the mapping does
+/// not determine *which* datatype the literal has, so it must compare compatible
+/// with any D<iri> rather than distinct from all of them - see
+/// dimensionsMayConflict, whose static answer this is the per-row counterpart
+/// of. Everything else compares exactly, including "L" against a "@lang" tag.
+///
+/// NULL in either operand yields NULL, which drops the row - correct here
+/// because a NULL tag accompanies a NULL value, whose own comparison is NULL
+/// too. Null-tolerant (OPTIONAL-lineage) keys must not use this at all; their
+/// dimension check is skipped, as in the merged path.
+std::string tagDimensionsCompatible(const std::string &leftTag, const std::string &rightTag, const SqlDialect &dialect);
+
 /// An integer-valued expression giving `tagSql`'s value space (one of the
 /// kValueSpace* ids above), or SQL NULL when the tag is NULL.
 std::string tagValueSpace(const std::string &tagSql, const SqlDialect &dialect);

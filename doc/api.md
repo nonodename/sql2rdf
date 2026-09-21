@@ -1069,11 +1069,27 @@ and joins use the VARCHAR-cast fallback.
     still works. Every typed branch keeps `TRY_CAST`, so a value contradicting its declared datatype
     yields `NULL` (row dropped) rather than a runtime error.
   - An equi-**join** on a shared variable is RDF term equality, so where the two sides' dimensions
-    are statically known *and different*, the join additionally compares them — two rows with the
-    same lexical form but different datatypes do not join. Where they are statically equal the
-    conjunct is trivially true and is not emitted, so an ordinary single-mapping join is byte-for-byte
-    unchanged. Where either side's dimension is undeterminable there is nothing to compare and the
-    join stays lexical-only.
+    can differ, the join additionally compares them — two rows with the same lexical form but
+    different datatypes do not join. This holds however the join is rendered: a flattened
+    inner-join block folds the comparison into its `WHERE`, while a join that stays a real SQL
+    `JOIN` (and a `MINUS`'s anti-join, whose compatibility test is the same equality) puts it in the
+    `ON`/`NOT EXISTS` clause, over the two sides' `d_<var>` columns. Which of the two a query gets
+    is an optimizer detail and does not change the answer.
+
+    Three things keep this from costing anything it need not. Dimensions the mapping proves *equal*
+    emit no conjunct at all, so an ordinary single-mapping join is byte-for-byte unchanged. Where
+    either side's dimension is undeterminable — no tag at all — there is nothing to compare and the
+    join stays lexical-only; no default tag is ever synthesised. And an *undeclared* datatype (`L`)
+    is compatible with any declared one rather than distinct from it, because `L` says only that the
+    mapping does not determine which datatype the literal has — the same degradation the comparison
+    operators make for a `L` operand. (`L` does assert the absence of a *language* tag, so it
+    conflicts with `@en`.) A null-tolerant (`OPTIONAL`-lineage) key skips the check entirely: it is
+    vacuous when either side is unbound, and checking it would break `OPTIONAL`'s compatibility
+    semantics.
+
+    A `UNION` column exposes the tag its arms agree on, which is what lets a join against a variable
+    predicate — whose candidate arms all produce an IRI — see that a `VALUES` literal merely spelling
+    a predicate IRI is a different term.
   - Arithmetic over two statically integral operands (`xsd:integer` and its narrower aliases) stays
     integral via `TRY_CAST(... AS BIGINT)`, so `?a + 1` renders `"10"` rather than `"10.0"`. The same
     applies to `SUM()`, and to `ABS()`/`CEIL()`/`FLOOR()`/`ROUND()`. Division, and any operand of

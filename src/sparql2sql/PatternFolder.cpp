@@ -296,7 +296,7 @@ RelNodePtr unionAll(std::vector<RelNodePtr> branches, TranslationContext &ctx, b
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = boundV.count(v) != 0;
-		col.term = meetAcrossArms(v, branches);
+		annotateFromArms(col, branches);
 		un.schema().push_back(col);
 	}
 	un.arms = std::move(branches);

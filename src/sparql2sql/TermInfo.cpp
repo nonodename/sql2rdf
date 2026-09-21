@@ -152,6 +152,32 @@ TermInfo decodeTag(const std::string &tag) {
 	return out;
 }
 
+namespace {
+
+// A literal the mapping knows nothing more about than its being a literal -
+// encodeTag's kTagLiteralUntyped case.
+bool isUntypedLiteral(const TermInfo &info) {
+	return info.kind == RdfTermKind::Literal && info.datatypeIri.empty() && info.lang.empty();
+}
+
+// A literal with a definite datatype (and no language) - encodeTag's D<iri>
+// case, the only one an untyped literal is compatible with.
+bool isDatatypedLiteral(const TermInfo &info) {
+	return info.kind == RdfTermKind::Literal && !info.datatypeIri.empty() && info.lang.empty();
+}
+
+} // namespace
+
+bool dimensionsMayConflict(const TermInfo &a, const TermInfo &b) {
+	if (!isFullyDetermined(a) || !isFullyDetermined(b)) {
+		return true;
+	}
+	if (encodeTag(a) == encodeTag(b)) {
+		return false;
+	}
+	return !((isUntypedLiteral(a) && isDatatypedLiteral(b)) || (isUntypedLiteral(b) && isDatatypedLiteral(a)));
+}
+
 TermInfo meet(const TermInfo &a, const TermInfo &b) {
 	TermInfo out;
 	// Sticky record of "something actually disagreed somewhere below", kept

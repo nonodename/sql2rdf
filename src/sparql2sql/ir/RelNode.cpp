@@ -73,4 +73,36 @@ TermInfo meetAcrossArms(const std::string &var, const std::vector<RelNodePtr> &a
 	return meetColumns(sources);
 }
 
+namespace {
+
+// A tag minted by tagLiteral is a plain single-quoted SQL string literal, so it
+// means the same thing in any scope. Every other tag expression (mergeInner's
+// CASE, a folded BIND's rewritten expression) references its own block's
+// aliases and must never escape the arm that produced it - hence this guard
+// rather than a bare textual-agreement test.
+bool isConstantTag(const std::string &tag) {
+	return tag.size() >= 2 && tag[0] == '\'' && tag[tag.size() - 1] == '\'' && tag.find('\'', 1) == tag.size() - 1;
+}
+
+} // namespace
+
+void annotateFromArms(ColumnInfo &col, const std::vector<RelNodePtr> &arms) {
+	col.term = meetAcrossArms(col.var, arms);
+	col.tagExpr.clear();
+	std::string agreed;
+	for (const auto &arm : arms) {
+		// A null column is an arm that doesn't bind the variable at all: NULL
+		// denotes no term, so like meetColumns it contributes nothing.
+		const ColumnInfo *c = arm ? arm->column(col.var) : nullptr;
+		if (c == nullptr) {
+			continue;
+		}
+		if (c->tagExpr.empty() || !isConstantTag(c->tagExpr) || (!agreed.empty() && agreed != c->tagExpr)) {
+			return;
+		}
+		agreed = c->tagExpr;
+	}
+	col.tagExpr = agreed;
+}
+
 } // namespace sparql2sql

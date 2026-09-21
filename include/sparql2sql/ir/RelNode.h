@@ -88,9 +88,12 @@ struct ColumnInfo {
 	/// is honest, whereas degrading to "no tag" would throw away a fact the
 	/// mapping does supply.
 	///
-	/// Empty on any column a *node* combines from children (a union's arms, a
-	/// join's COALESCE): there the tag is projected from the child's own tag
-	/// column rather than recomputed, exactly as the value column is.
+	/// Empty on any column a *node* combines from children (a join's COALESCE):
+	/// there the tag is projected from the child's own tag column rather than
+	/// recomputed, exactly as the value column is. A union column is the one
+	/// exception, and only when every arm mints the very same constant - see
+	/// annotateFromArms, which is what lets a join against a union still see
+	/// that the union's arms all agree the term is (say) an IRI.
 	std::string tagExpr;
 };
 
@@ -158,6 +161,21 @@ TermInfo meetColumns(const std::vector<const ColumnInfo *> &sources);
 /// Call this while the arms are still owned by the caller: after
 /// `node.arms = std::move(branches)` the moved-from pointers are null.
 TermInfo meetAcrossArms(const std::string &var, const std::vector<RelNodePtr> &arms);
+
+/// Annotate one column of a union node's schema from the arms feeding it: its
+/// term annotation is their meet (meetAcrossArms), and its tag is the constant
+/// they *all* mint for it - empty when they disagree, when any contributing arm
+/// supplies no tag, or when the agreed tag is not a scope-independent constant.
+///
+/// The tag half matters because an empty tagExpr reads as "the mapping does not
+/// determine the dimension here" to markJoinKeys, which then declines to demand
+/// a tag column and leaves an equi-join against the union comparing lexical text
+/// only - even when every arm agrees the term is an IRI and the other side is a
+/// literal that merely spells the same characters. Propagating the agreed tag is
+/// not a new claim: it is the one `term` already makes, spelled as SQL.
+///
+/// Call this while the arms are still owned by the caller (see meetAcrossArms).
+void annotateFromArms(ColumnInfo &col, const std::vector<RelNodePtr> &arms);
 
 /// One FROM source of an SpjRelation: a table/view/inline-join SQL fragment
 /// already suffixed with its alias ("TABLE" AS t1 / (view) AS t1 / child JOIN

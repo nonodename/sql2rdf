@@ -169,13 +169,14 @@ TEST_CASE("values folding: a literal spelling a predicate IRI is not folded into
 	// on a literal would make it indistinguishable from the IRI by
 	// construction - the arms would be pruned to ex:name with nothing left
 	// that could ever tell the two terms apart. Keeping the unfolded path
-	// leaves the term-kind distinction expressible in the join key. (It is not
-	// in fact demanded for a predicate key today, so this query does currently
-	// return the ex:name rows - see the matching duckdb case.)
+	// leaves the term-kind distinction expressible in the join key - and it is
+	// expressed: the join compares the predicate's tag column too, so the
+	// literal matches nothing (see the matching duckdb case).
 	const std::string sql = translateFixture("values_predicate_literal.rq");
 	CHECK(sql.find(kExLocation) != std::string::npos);
 	CHECK(sql.find(kExKnows) != std::string::npos);
 	CHECK(sql.find(kRdfType) != std::string::npos);
+	CHECK(sql.find("\"d_p\"") != std::string::npos);
 }
 
 TEST_CASE("values folding: a multi-row VALUES predicate keeps every arm") {

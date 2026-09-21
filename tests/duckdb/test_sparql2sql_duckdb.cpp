@@ -540,15 +540,35 @@ TEST_CASE("values_predicate_literal.rq: a literal spelling a predicate IRI is le
 	// is a VARCHAR of the lexical form, and constantPredicate() would make the
 	// two spellings indistinguishable by construction.
 	//
-	// Row count here pins today's behaviour, which is not what strict RDF-term
-	// semantics would give. The unfolded variable-predicate path joins the
-	// VALUES relation on lexical form alone - no term-kind tag is demanded for
-	// a predicate join key - so the literal already matches the ex:name arms
-	// and four rows come back. That is a pre-existing gap in the unfolded path
-	// (it predates predicate folding and is unchanged by it); the assertion
-	// exists to catch the fold silently taking over this case.
+	// The unfolded path does tell them apart: the candidate union's arms all
+	// agree the predicate is an IRI, so the join key carries a d_p tag column
+	// and the join compares it against the VALUES cell's xsd:string tag. No
+	// triple in the graph has a *literal* predicate, so the answer is empty.
 	auto rows = translateAndRun(*conn, "values_predicate_literal.rq", "example_emp_dept.ttl");
-	CHECK(rows.size() == 4);
+	CHECK(rows.empty());
+}
+
+TEST_CASE("values_object_literal_spelling_iri.rq: a literal spelling an object IRI matches no triple") {
+	auto conn = makeSeededDatabase();
+	// ex:knows produces an IRI object; the VALUES cell is a plain literal that
+	// merely spells the same characters. An equi-join on a shared variable is
+	// RDF *term* equality, so the two must not join - and because both sides
+	// are unfolded relations (two VALUES rows keep ValuesFolder out of it),
+	// this is the un-merged join path, where only the ON clause's tag
+	// comparison can tell them apart.
+	auto rows = translateAndRun(*conn, "values_object_literal_spelling_iri.rq", "example_emp_dept.ttl");
+	CHECK(rows.empty());
+}
+
+TEST_CASE("values_object_iri.rq: the same join with real IRIs is unchanged") {
+	auto conn = makeSeededDatabase();
+	// The control for the two cases above: identical query shape, but now both
+	// sides agree the term is an IRI. Agreement must cost nothing - no tag is
+	// demanded, no comparison is added, and SMITH -> JONES still comes back.
+	auto rows = translateAndRun(*conn, "values_object_iri.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(
+	    rows, {{"V_S", "http://data.example.com/employee/7369"}, {"V_O", "http://data.example.com/employee/7400"}}));
 }
 
 TEST_CASE("values_predicate_multi.rq: a two-row VALUES predicate keeps both predicates' rows") {

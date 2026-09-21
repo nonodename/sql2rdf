@@ -996,7 +996,7 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = true;
-		col.term = meetAcrossArms(v, branches);
+		annotateFromArms(col, branches);
 		un.schema().push_back(col);
 	}
 	un.arms = std::move(branches);
@@ -1101,14 +1101,14 @@ RelNodePtr graphAwareTermUniverse(const std::vector<std::string> &varNames, Tran
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = true;
-		col.term = meetAcrossArms(v, arms);
+		annotateFromArms(col, arms);
 		un.schema().push_back(col);
 	}
 	if (!graphVar.empty()) {
 		ColumnInfo col;
 		col.var = graphVar;
 		col.nonNull = true;
-		col.term = meetAcrossArms(graphVar, arms);
+		annotateFromArms(col, arms);
 		un.schema().push_back(col);
 	}
 	un.arms = std::move(arms);
@@ -1191,7 +1191,7 @@ RelNodePtr allTermsRelation(const std::vector<std::string> &varNames, Translatio
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = true;
-		col.term = meetAcrossArms(v, arms);
+		annotateFromArms(col, arms);
 		un.schema().push_back(col);
 	}
 	un.arms = std::move(arms);
@@ -1294,7 +1294,7 @@ RelNodePtr allNamedGraphsRelation(const std::string &varName, TranslationContext
 	ColumnInfo col;
 	col.var = varName;
 	col.nonNull = true;
-	col.term = meetAcrossArms(varName, arms);
+	annotateFromArms(col, arms);
 	un.schema().push_back(col);
 	un.arms = std::move(arms);
 	return node;

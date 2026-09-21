@@ -12,7 +12,12 @@ on:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    
+    env:
+      CC: gcc-10
+      CXX: g++-10
+      GEN: ninja
 
     steps:
     - uses: actions/checkout@v7

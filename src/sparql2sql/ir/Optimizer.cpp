@@ -40,6 +40,12 @@ std::string termDimensionEquality(const ColumnInfo &lc, const ColumnInfo &rc) {
 	if (lc.tagExpr.empty() || rc.tagExpr.empty() || lc.tagExpr == rc.tagExpr) {
 		return std::string();
 	}
+	if (!dimensionsMayConflict(lc.term, rc.term)) {
+		// Two tags can differ textually and still describe compatible terms: an
+		// untyped literal ("L") against a datatyped one says only that this side's
+		// datatype is undeclared, which is no evidence of inequality.
+		return std::string();
+	}
 	return "(" + lc.tagExpr + ") = (" + rc.tagExpr + ")";
 }
 
@@ -333,7 +339,7 @@ RelNodePtr distributeJoinOverUnion(RelNodePtr node, bool unionOnLeft, const Opti
 				break;
 			}
 		}
-		col.term = meetAcrossArms(v, mergedArms);
+		annotateFromArms(col, mergedArms);
 		outU.schema().push_back(col);
 	}
 	outU.arms = std::move(mergedArms);
@@ -1276,7 +1282,7 @@ void refreshUnionSchema(UnionByNameNode &side) {
 	}
 	for (auto &col : side.schema()) {
 		col.nonNull = boundV.count(col.var) != 0;
-		col.term = meetAcrossArms(col.var, side.arms);
+		annotateFromArms(col, side.arms);
 	}
 }
 

@@ -25,6 +25,7 @@
 
 #include <catch2/catch.hpp>
 
+#include <cctype>
 #include <string>
 
 #ifndef SOURCE_R2RML_DIR
@@ -78,6 +79,29 @@ bool contains(const std::string &haystack, const std::string &needle) {
 // native join keys use `k_`), so its absence is a reliable "no tags here".
 bool hasAnyTagColumn(const std::string &sql) {
 	return contains(sql, "\"d_");
+}
+
+// Table alias numbers (t1, t8, ...) shift whenever the plan changes, so any
+// assertion about join text is made against a form with every `tN.` collapsed
+// to `T.` - the structure is the claim, not which alias got which number.
+std::string withoutAliasNumbers(const std::string &sql) {
+	std::string out;
+	out.reserve(sql.size());
+	for (std::size_t i = 0; i < sql.size(); ++i) {
+		const bool startsWord =
+		    i == 0 || (std::isalnum(static_cast<unsigned char>(sql[i - 1])) == 0 && sql[i - 1] != '_');
+		std::size_t j = i + 1;
+		while (j < sql.size() && std::isdigit(static_cast<unsigned char>(sql[j])) != 0) {
+			++j;
+		}
+		if (startsWord && sql[i] == 't' && j > i + 1 && j < sql.size() && sql[j] == '.') {
+			out += "T";
+			i = j - 1;
+			continue;
+		}
+		out += sql[i];
+	}
+	return out;
 }
 
 TermInfo lit(const char *datatype = "", const char *lang = "") {
@@ -317,6 +341,75 @@ TEST_CASE("a dynamic comparison still falls back to the untyped form for an unde
 	const std::string sql = translate("SELECT ?y WHERE { ?m ex:mixeddt ?v . BIND(?v AS ?y) FILTER(?y > 50) }");
 	CHECK(contains(sql, "TRY_CAST"));
 	CHECK(contains(sql, "\"d_y\""));
+}
+
+// ---------------------------------------------------------------------------
+// 3c. Join keys: an equi-join on a shared variable is RDF term equality
+//
+// The merged inner-join path (Optimizer's termDimensionEquality) folds the
+// dimension check into a flattened block's WHERE; the un-merged path
+// (SqlRenderer's keyTagComparison) has to put it in the ON clause instead,
+// over the two sides' tag columns. Which path a query takes is an optimizer
+// detail, so both must decide the same way.
+//
+// A two-row VALUES is what keeps these off the merged path: it stops
+// ValuesFolder folding the column into a constant, and a Raw relation never
+// merges into an SpjRelation.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("an un-merged join compares the tag as well as the lexical form", "[sparql2sql][dynamic-types]") {
+	// ex:homepage is an IRI; the VALUES cells are plain literals that could
+	// spell the same characters. Before this, the tag column was demanded,
+	// materialised on both sides and then never looked at.
+	const std::string sql = translate("SELECT ?h WHERE { ?m ex:homepage ?h . VALUES ?h { \"a\" \"b\" } }");
+	CHECK(contains(sql, "'I' AS \"d_h\""));
+	CHECK(contains(withoutAliasNumbers(sql), "ON T.\"v_h\" = T.\"v_h\" AND (T.\"d_h\" = T.\"d_h\""));
+}
+
+TEST_CASE("a MINUS anti-join compares the tag too", "[sparql2sql][dynamic-types]") {
+	// MINUS's compatibility test is RDF term equality as well, so a right-hand
+	// language-tagged literal must not eliminate a left-hand IRI.
+	const std::string sql = translate("SELECT ?h WHERE { ?m ex:homepage ?h . MINUS { ?n ex:title ?h } }");
+	CHECK(contains(sql, "'@en' AS \"d_h\""));
+	CHECK(contains(withoutAliasNumbers(sql), "WHERE T.\"v_h\" = T.\"v_h\" AND (T.\"d_h\" = T.\"d_h\""));
+}
+
+TEST_CASE("an un-merged join whose sides agree on the dimension costs nothing", "[sparql2sql][dynamic-types]") {
+	// The headline invariant: agreement must generate exactly the SQL this
+	// generated before tags existed - no column, no conjunct.
+	const std::string sql = translate("SELECT ?t WHERE { ?m ex:title ?t . VALUES ?t { \"x\"@en \"y\"@en } }");
+	CHECK_FALSE(hasAnyTagColumn(sql));
+}
+
+TEST_CASE("an undeclared datatype is not evidence of a dimension mismatch", "[sparql2sql][dynamic-types]") {
+	// ex:plain is a literal whose datatype the mapping does not determine ("L")
+	// and the VALUES cells are xsd:string. The tags differ textually, but "L"
+	// says only that this side's datatype is undeclared - concluding the terms
+	// differ would drop rows that genuinely match. Same rule as an *empty* tag:
+	// undetermined is not mismatched.
+	const std::string sql = translate("SELECT ?r WHERE { ?m ex:plain ?r . VALUES ?r { \"a\" \"b\" } }");
+	CHECK_FALSE(hasAnyTagColumn(sql));
+}
+
+TEST_CASE("an untyped literal still conflicts with a language-tagged one", "[sparql2sql][dynamic-types]") {
+	// The limit of the rule above: "L" is compatible with any D<iri>, but it
+	// does assert the absence of a language tag (tagLang answers "" for it), so
+	// it is not compatible with "@en".
+	const std::string sql = translate("SELECT ?p WHERE { ?m ex:plain ?p . MINUS { ?n ex:title ?p } }");
+	CHECK(contains(sql, "'L' AS \"d_p\""));
+	CHECK(contains(sql, "'@en' AS \"d_p\""));
+}
+
+TEST_CASE("a union arm's agreed tag reaches the join key", "[sparql2sql][dynamic-types]") {
+	// A variable predicate enumerates every candidate arm of the mapping. Each
+	// arm's predicate is statically an IRI, so the UnionByName column can expose
+	// that agreed tag - without it the join key sees "no tag" and silently
+	// degrades to comparing lexical text, which is how a literal spelling a
+	// predicate IRI used to match.
+	const std::string sql = translate("SELECT ?s ?p ?o WHERE { VALUES ?p { \"http://example.com/ns#amount\" } "
+	                                  "?s ?p ?o }");
+	CHECK(contains(sql, "'I' AS \"d_p\""));
+	CHECK(contains(withoutAliasNumbers(sql), "ON T.\"v_p\" = T.\"v_p\" AND (T.\"d_p\" = T.\"d_p\""));
 }
 
 // ---------------------------------------------------------------------------

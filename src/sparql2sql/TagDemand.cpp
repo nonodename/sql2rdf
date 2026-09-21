@@ -201,7 +201,7 @@ void markJoinKeys(const std::vector<EquiKey> &keys, TranslationContext &ctx) {
 		if (k.leftCol.tagExpr.empty() || k.rightCol.tagExpr.empty()) {
 			continue;
 		}
-		if (k.leftCol.tagExpr != k.rightCol.tagExpr) {
+		if (k.leftCol.tagExpr != k.rightCol.tagExpr && dimensionsMayConflict(k.leftCol.term, k.rightCol.term)) {
 			ctx.markNeedsTag(k.var);
 		}
 	}
