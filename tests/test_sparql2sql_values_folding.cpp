@@ -119,3 +119,74 @@ TEST_CASE("values folding: a MINUS body keeps the shared variable that makes it 
 	CHECK(sql.find("NOT EXISTS") != std::string::npos);
 	CHECK(buildsSubjectIri(sql));
 }
+
+// Predicate position. A bare variable predicate is not just one unknown
+// column: translateAtomicPattern enumerates a candidate arm per
+// predicate-object map of every triples map that could match, so `?s ?p ?o`
+// fans out over the whole mapping. Pinning ?p prunes that to the arms whose
+// predicate map can produce the constant - which is why the assertions below
+// look for the *absence* of the other predicates' arms.
+namespace {
+
+const char *const kExName = "http://example.com/ns#name";
+const char *const kExLocation = "http://example.com/ns#location";
+const char *const kExStaff = "http://example.com/ns#staff";
+const char *const kExKnows = "http://example.com/ns#knows";
+const char *const kExDepartment = "http://example.com/ns#department";
+const char *const kRdfType = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+
+} // namespace
+
+TEST_CASE("values folding: a single-constant VALUES predicate prunes the candidate arms") {
+	const std::string sql = translateFixture("values_constant_predicate.rq");
+	// The two ex:name arms survive: DNAME from the department view, ENAME from EMP.
+	CHECK(sql.find("\"DNAME\"") != std::string::npos);
+	CHECK(sql.find("\"ENAME\"") != std::string::npos);
+	// Every other predicate-object map is gone, not merely filtered later.
+	CHECK(sql.find(kExLocation) == std::string::npos);
+	CHECK(sql.find(kExStaff) == std::string::npos);
+	CHECK(sql.find(kExKnows) == std::string::npos);
+	CHECK(sql.find(kExDepartment) == std::string::npos);
+	CHECK(sql.find(kRdfType) == std::string::npos);
+	// The inline relation is still emitted and joined, so ?p stays bound.
+	CHECK(sql.find(kExName) != std::string::npos);
+}
+
+TEST_CASE("values folding: a pinned predicate translates like the constant written in the pattern") {
+	const std::string folded = translateFixture("values_constant_predicate.rq");
+	const std::string bare = translateFixture("values_constant_predicate_bare.rq");
+	// Same arms on both sides - the fold's whole point. The folded query keeps
+	// the extra VALUES join that binds and projects ?p, so the two SQL strings
+	// are not identical; what must match is which arms were enumerated.
+	CHECK(bare.find(kExLocation) == std::string::npos);
+	CHECK(bare.find(kExKnows) == std::string::npos);
+	CHECK(bare.find("\"DNAME\"") != std::string::npos);
+	CHECK(bare.find("\"ENAME\"") != std::string::npos);
+}
+
+TEST_CASE("values folding: a literal spelling a predicate IRI is not folded into predicate position") {
+	// Every variable is a VARCHAR of the lexical form, so constantPredicate()
+	// on a literal would make it indistinguishable from the IRI by
+	// construction - the arms would be pruned to ex:name with nothing left
+	// that could ever tell the two terms apart. Keeping the unfolded path
+	// leaves the term-kind distinction expressible in the join key. (It is not
+	// in fact demanded for a predicate key today, so this query does currently
+	// return the ex:name rows - see the matching duckdb case.)
+	const std::string sql = translateFixture("values_predicate_literal.rq");
+	CHECK(sql.find(kExLocation) != std::string::npos);
+	CHECK(sql.find(kExKnows) != std::string::npos);
+	CHECK(sql.find(kRdfType) != std::string::npos);
+}
+
+TEST_CASE("values folding: a multi-row VALUES predicate keeps every arm") {
+	const std::string sql = translateFixture("values_predicate_multi.rq");
+	CHECK(sql.find(kExStaff) != std::string::npos);
+	CHECK(sql.find(kExKnows) != std::string::npos);
+	CHECK(sql.find(kRdfType) != std::string::npos);
+}
+
+TEST_CASE("values folding: a predicate variable a FILTER reads is not folded out of its scope") {
+	const std::string sql = translateFixture("values_constant_predicate_filtered.rq");
+	CHECK(sql.find(kExKnows) != std::string::npos);
+	CHECK(sql.find(kRdfType) != std::string::npos);
+}

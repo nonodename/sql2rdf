@@ -631,6 +631,16 @@ constructed string, which no engine can invert, so the pattern materialised in f
 pruned it. The inline relation is still emitted and joined either way, which is what keeps the
 variable bound, projected and correctly tagged once the patterns stop binding it themselves.
 
+The fold reaches **subject, predicate and object** position. Predicate position is where it pays
+most, and not for the reason the others do: a bare variable predicate enumerates one candidate arm
+per `rr:predicateObjectMap` of every triples map that could match, so `?s ?p ?o` fans out into a
+`UNION` over the whole mapping. Pinning `?p` prunes that to the arms whose predicate map can
+produce the constant, which on a mapping with a catch-all `$(predicate)` term map is the dominant
+cost in the plan. Only an **IRI**-kind term folds into predicate position: every variable is a
+`VARCHAR` of the lexical form, so folding a literal that happened to spell a predicate IRI would
+make the two indistinguishable by construction. A graph variable (`GRAPH ?g`) is never folded — it
+interacts with `FROM NAMED` dataset restriction and has not been analysed.
+
 Only a column holding the *same* term in every row folds (at least one row, no `UNDEF` cell, every
 row identical) — a genuine multi-row alternatives list still translates to the union/join it always
 did. Four further cases deliberately do not fold, each because folding would change an answer
@@ -963,8 +973,10 @@ and joins use the VARCHAR-cast fallback.
   clauses on the top-level query), so nested sub-selects and `EXISTS` bodies inherit it.
 - **`VALUES` / inline data**: supported in every position the grammar allows (a group element and
   the query's trailing clause). A column pinned to one constant term is constant-folded into the
-  triple patterns reading it, so it generates the same SQL as writing that term in the pattern —
-  see the fold's rules and exclusions above.
+  subject, predicate and object positions of the triple patterns reading it, so it generates the
+  same SQL as writing that term in the pattern — for a predicate that means pruning the candidate
+  arms the pattern enumerates, not just inverting a term map. Predicate position folds an IRI only;
+  a graph variable never folds. See the fold's rules and exclusions above.
 - **No `SERVICE`** (federated query): always throws, matching `sql2rdf_sparql`'s own "no
   federated-query execution semantics" stance.
 - **Every SPARQL variable is a plain SQL `VARCHAR`** holding the RDF term's lexical string form

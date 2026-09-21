@@ -21,6 +21,14 @@ namespace sparql2sql {
 /// before the join pruned it. Folding the constant back into the pattern makes
 /// the two spellings generate the same SQL.
 ///
+/// The same scope is consumed in predicate position, where the payoff is a
+/// different one: a bare variable predicate enumerates a candidate arm per
+/// predicate-object map of every triples map that could match, so `?s ?p ?o`
+/// fans out into a union over the whole mapping and pinning `?p` prunes it to
+/// the arms that can produce the constant. Only an *IRI* folds there - see
+/// PropertyPathTranslator.cpp's PathKind::Variable case. Graph variables are
+/// never folded; that interacts with FROM NAMED restriction and is unanalysed.
+///
 /// WHAT IS FOLDABLE. Only a column that binds the *same* constant term in every
 /// row (so: at least one row, no UNDEF cell, every row's term identical) - a
 /// genuine multi-row alternatives list still translates to the union/join it

@@ -1,0 +1,5 @@
+SELECT ?s ?p ?o
+WHERE {
+  VALUES ?p { "http://example.com/ns#name" }
+  ?s ?p ?o .
+}

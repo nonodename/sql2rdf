@@ -515,6 +515,59 @@ TEST_CASE("values_constant_undef.rq: an UNDEF-only column binds nothing and matc
 	CHECK(rows.size() == 4);
 }
 
+TEST_CASE("values_constant_predicate.rq: a pinned predicate answers exactly like the constant form") {
+	auto conn = makeSeededDatabase();
+	// Every ex:name triple: two employees plus two departments. The bare
+	// constant form is the oracle - pruning the other candidate arms must not
+	// change a single row.
+	auto folded = translateAndRun(*conn, "values_constant_predicate.rq", "example_emp_dept.ttl");
+	auto bare = translateAndRun(*conn, "values_constant_predicate_bare.rq", "example_emp_dept.ttl");
+	REQUIRE(folded.size() == 4);
+	REQUIRE(bare.size() == 4);
+	// The VALUES relation is still joined, so ?p stays bound and projected.
+	CHECK(containsRow(
+	    folded,
+	    {{"V_S", "http://data.example.com/employee/7369"}, {"V_P", "http://example.com/ns#name"}, {"V_O", "SMITH"}}));
+	CHECK(containsRow(folded, {{"V_S", "http://data.example.com/department/10"},
+	                           {"V_P", "http://example.com/ns#name"},
+	                           {"V_O", "APPSERVER"}}));
+}
+
+TEST_CASE("values_predicate_literal.rq: a literal spelling a predicate IRI is left on the unfolded path") {
+	auto conn = makeSeededDatabase();
+	// A VALUES cell holding the *literal* "http://example.com/ns#name" is not
+	// an IRI, so it must not be folded into predicate position: every variable
+	// is a VARCHAR of the lexical form, and constantPredicate() would make the
+	// two spellings indistinguishable by construction.
+	//
+	// Row count here pins today's behaviour, which is not what strict RDF-term
+	// semantics would give. The unfolded variable-predicate path joins the
+	// VALUES relation on lexical form alone - no term-kind tag is demanded for
+	// a predicate join key - so the literal already matches the ex:name arms
+	// and four rows come back. That is a pre-existing gap in the unfolded path
+	// (it predates predicate folding and is unchanged by it); the assertion
+	// exists to catch the fold silently taking over this case.
+	auto rows = translateAndRun(*conn, "values_predicate_literal.rq", "example_emp_dept.ttl");
+	CHECK(rows.size() == 4);
+}
+
+TEST_CASE("values_predicate_multi.rq: a two-row VALUES predicate keeps both predicates' rows") {
+	auto conn = makeSeededDatabase();
+	// Four ex:name rows plus two ex:location rows - the control showing the
+	// fold is confined to the single-constant case.
+	auto rows = translateAndRun(*conn, "values_predicate_multi.rq", "example_emp_dept.ttl");
+	CHECK(rows.size() == 6);
+	CHECK(containsRow(rows, {{"V_S", "http://data.example.com/department/10"},
+	                         {"V_P", "http://example.com/ns#location"},
+	                         {"V_O", "NEW YORK"}}));
+}
+
+TEST_CASE("values_constant_predicate_filtered.rq: a FILTER over the pinned predicate still sees it bound") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_predicate_filtered.rq", "example_emp_dept.ttl");
+	CHECK(rows.size() == 4);
+}
+
 TEST_CASE("sparql2sql_self_ref.rq: the self-join guard matches the single widget") {
 	auto conn = makeSeededDatabase();
 	auto rows = translateAndRun(*conn, "sparql2sql_self_ref.rq", "sparql2sql_self_ref.ttl");
