@@ -114,13 +114,13 @@ std::string keyComparison(const EquiKey &k, const std::string &lcol, const std::
 //    runtime tag at all means the mapping does not determine the dimension,
 //    and there is nothing better than today's lexical-only comparison (never a
 //    synthesised default).
-//  - the key is not null-tolerant. A null-tolerant key is vacuous when either
-//    side is unbound, so an unguarded dimension check would break OPTIONAL's
-//    compatibility semantics - the same call the merged path makes, so which
-//    path the optimizer happens to pick stays unobservable.
+//  - a null-tolerant key is vacuous when either side is unbound, so the
+//    dimension check is guarded with the same IS NULL disjunct on both value
+//    columns; when both sides are actually bound it still enforces RDF term
+//    equality, matching the merged path's guard in mergeInner.
 std::string keyTagComparison(const EquiKey &k, TranslationContext &ctx, const std::string &leftAlias,
-                             const std::string &rightAlias) {
-	if (k.nullSafe || !ctx.needsTag(k.var)) {
+                             const std::string &rightAlias, const std::string &lcol, const std::string &rcol) {
+	if (!ctx.needsTag(k.var)) {
 		return std::string();
 	}
 	if (!tagsMayDiffer(k.leftCol, k.rightCol)) {
@@ -130,8 +130,12 @@ std::string keyTagComparison(const EquiKey &k, TranslationContext &ctx, const st
 		return std::string();
 	}
 	const SqlDialect &dialect = ctx.dialect();
-	return tagDimensionsCompatible(leftAlias + "." + mangleVarTag(k.var, dialect),
-	                               rightAlias + "." + mangleVarTag(k.var, dialect), dialect);
+	const std::string tagCond = tagDimensionsCompatible(leftAlias + "." + mangleVarTag(k.var, dialect),
+	                                                    rightAlias + "." + mangleVarTag(k.var, dialect), dialect);
+	if (!k.nullSafe) {
+		return tagCond;
+	}
+	return "(" + lcol + " IS NULL OR " + rcol + " IS NULL OR " + tagCond + ")";
 }
 
 // Extra projected columns to append to an SpjRelation's SELECT list: the
@@ -271,7 +275,7 @@ std::string renderJoin(const JoinNode &join, TranslationContext &ctx) {
 		// Not folded into keyComparison: a native-key rewrite replaces the
 		// lexical comparison but says nothing about the dimension, so the tag
 		// check applies to every form of the key equally.
-		const std::string tagCond = keyTagComparison(k, ctx, leftAlias, rightAlias);
+		const std::string tagCond = keyTagComparison(k, ctx, leftAlias, rightAlias, lcol, rcol);
 		if (!tagCond.empty()) {
 			onConditions.push_back(tagCond);
 		}
@@ -354,13 +358,14 @@ std::string renderAntiJoin(const AntiJoinNode &anti, TranslationContext &ctx) {
 	conds.reserve(anti.keys.size() * 2 + nativeConds.size());
 	for (std::size_t i = 0; i < anti.keys.size(); ++i) {
 		const EquiKey &k = anti.keys[i];
+		std::string lcol = leftAlias + "." + mangleVar(k.var, dialect);
+		std::string rcol = rightAlias + "." + mangleVar(k.var, dialect);
 		if (!rewritten[i]) {
-			conds.push_back(keyComparison(k, leftAlias + "." + mangleVar(k.var, dialect),
-			                              rightAlias + "." + mangleVar(k.var, dialect)));
+			conds.push_back(keyComparison(k, lcol, rcol));
 		}
 		// MINUS's compatibility test is RDF term equality too: a right-hand row
 		// whose term merely spells the same text must not eliminate a left row.
-		const std::string tagCond = keyTagComparison(k, ctx, leftAlias, rightAlias);
+		const std::string tagCond = keyTagComparison(k, ctx, leftAlias, rightAlias, lcol, rcol);
 		if (!tagCond.empty()) {
 			conds.push_back(tagCond);
 		}

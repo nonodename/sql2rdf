@@ -118,11 +118,16 @@ RelNodePtr mergeInner(JoinNode &join, const TypeCatalog *catalog) {
 			// fast path returning early, and the dimension check applies to every
 			// form of the key equally.
 			const std::string dimension = termDimensionEquality(*lc, *rc);
-			if (!dimension.empty() && !k.nullSafe) {
-				// A null-tolerant key is vacuous when either side is unbound, so the
-				// dimension check would have to be guarded the same way; leaving it
-				// off keeps OPTIONAL's compatibility semantics exactly as they were.
-				out.whereConds.push_back(dimension);
+			if (!dimension.empty()) {
+				if (k.nullSafe) {
+					// A null-tolerant key is vacuous when either side is unbound, but
+					// still enforces RDF term equality once both sides are bound -
+					// the same guard keyTagComparison applies on the un-merged path.
+					out.whereConds.push_back("(" + lc->renderedExpr + " IS NULL OR " + rc->renderedExpr +
+					                         " IS NULL OR " + dimension + ")");
+				} else {
+					out.whereConds.push_back(dimension);
+				}
 			}
 		}
 		const ColumnInfo *jc = join.column(k.var);
