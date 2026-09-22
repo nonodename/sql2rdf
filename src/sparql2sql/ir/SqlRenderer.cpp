@@ -105,12 +105,15 @@ std::string keyComparison(const EquiKey &k, const std::string &lcol, const std::
 // gated on exactly the conditions markJoinKeys used when it decided to demand
 // the d_<var> columns this reads:
 //
-//  - both sides supply a tag, those tags differ, and the two annotations can
-//    actually conflict (dimensionsMayConflict). Equal tags are trivially equal
-//    at run time too, so a well-typed mapping keeps generating the SQL it
-//    generated before tags existed; an *empty* tag means the mapping does not
-//    determine the dimension, and there is nothing better than today's
-//    lexical-only comparison (never a synthesised default).
+//  - both sides can supply a runtime tag and those tags are not provably
+//    identical (tagsMayDiffer - either differing hoisted constants, or either
+//    side a heterogeneous union's tagProjectable column), and the two
+//    annotations can actually conflict (dimensionsMayConflict). Equal hoisted
+//    tags are trivially equal at run time too, so a well-typed mapping keeps
+//    generating the SQL it generated before tags existed; a side with no
+//    runtime tag at all means the mapping does not determine the dimension,
+//    and there is nothing better than today's lexical-only comparison (never a
+//    synthesised default).
 //  - the key is not null-tolerant. A null-tolerant key is vacuous when either
 //    side is unbound, so an unguarded dimension check would break OPTIONAL's
 //    compatibility semantics - the same call the merged path makes, so which
@@ -120,7 +123,7 @@ std::string keyTagComparison(const EquiKey &k, TranslationContext &ctx, const st
 	if (k.nullSafe || !ctx.needsTag(k.var)) {
 		return std::string();
 	}
-	if (k.leftCol.tagExpr.empty() || k.rightCol.tagExpr.empty() || k.leftCol.tagExpr == k.rightCol.tagExpr) {
+	if (!tagsMayDiffer(k.leftCol, k.rightCol)) {
 		return std::string();
 	}
 	if (!dimensionsMayConflict(k.leftCol.term, k.rightCol.term)) {

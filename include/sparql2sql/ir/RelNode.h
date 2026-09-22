@@ -95,7 +95,36 @@ struct ColumnInfo {
 	/// annotateFromArms, which is what lets a join against a union still see
 	/// that the union's arms all agree the term is (say) an IRI.
 	std::string tagExpr;
+
+	/// True when `tagExpr` above is empty *specifically* because a
+	/// UnionByNameNode's arms disagree on tag (or aren't all constants), yet
+	/// every arm still supplies some tag of its own - so a per-row `d_<var>`
+	/// column is projectable on demand (each arm renders its own tagExpr in its
+	/// own scope; combineByName assembles them), even though there is no single
+	/// constant to hoist to this column's own tagExpr.
+	///
+	/// Set only by annotateFromArms. Consulted by markJoinKeys/keyTagComparison
+	/// via hasRuntimeTag/tagsMayDiffer instead of testing `tagExpr.empty()`
+	/// directly - otherwise a heterogeneous union's join key reads as "the
+	/// mapping supplies no tag at all" and silently falls back to comparing
+	/// lexical text only, letting an IRI and a same-spelled literal from
+	/// different arms join.
+	bool tagProjectable = false;
 };
+
+/// True when a runtime tag can be requested for `col`: either it already
+/// carries a single hoisted constant (`tagExpr` non-empty), or it is a
+/// heterogeneous union column whose arms can each still supply their own tag
+/// (`tagProjectable`).
+bool hasRuntimeTag(const ColumnInfo &col);
+
+/// True when both sides of an equi-key have runtime tags (hasRuntimeTag) that
+/// are not provably identical - i.e. comparing them at run time could actually
+/// discriminate rows, rather than being a guaranteed-true no-op. Two hoisted
+/// constants that are textually equal are provably identical; anything
+/// involving a `tagProjectable` side is not, since its tag varies per row by
+/// construction.
+bool tagsMayDiffer(const ColumnInfo &a, const ColumnInfo &b);
 
 enum class RelKind {
 	Spj,              ///< fused Select-Project-Join block (base of flattening/self-join).
@@ -166,13 +195,18 @@ TermInfo meetAcrossArms(const std::string &var, const std::vector<RelNodePtr> &a
 /// term annotation is their meet (meetAcrossArms), and its tag is the constant
 /// they *all* mint for it - empty when they disagree, when any contributing arm
 /// supplies no tag, or when the agreed tag is not a scope-independent constant.
+/// In the disagreeing case, `tagProjectable` is set instead whenever every arm
+/// still supplies *some* tag of its own (see ColumnInfo::tagProjectable).
 ///
 /// The tag half matters because an empty tagExpr reads as "the mapping does not
 /// determine the dimension here" to markJoinKeys, which then declines to demand
 /// a tag column and leaves an equi-join against the union comparing lexical text
 /// only - even when every arm agrees the term is an IRI and the other side is a
 /// literal that merely spells the same characters. Propagating the agreed tag is
-/// not a new claim: it is the one `term` already makes, spelled as SQL.
+/// not a new claim: it is the one `term` already makes, spelled as SQL. The same
+/// applies when arms disagree: `tagProjectable` lets markJoinKeys/
+/// keyTagComparison still demand and compare a per-row tag instead of reading
+/// the disagreement as "no information at all."
 ///
 /// Call this while the arms are still owned by the caller (see meetAcrossArms).
 void annotateFromArms(ColumnInfo &col, const std::vector<RelNodePtr> &arms);

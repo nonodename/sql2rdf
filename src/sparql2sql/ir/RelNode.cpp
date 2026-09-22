@@ -89,6 +89,10 @@ bool isConstantTag(const std::string &tag) {
 void annotateFromArms(ColumnInfo &col, const std::vector<RelNodePtr> &arms) {
 	col.term = meetAcrossArms(col.var, arms);
 	col.tagExpr.clear();
+	col.tagProjectable = false;
+
+	bool everyArmHasTag = true;
+	bool allAgreeOnConstant = true;
 	std::string agreed;
 	for (const auto &arm : arms) {
 		// A null column is an arm that doesn't bind the variable at all: NULL
@@ -97,12 +101,39 @@ void annotateFromArms(ColumnInfo &col, const std::vector<RelNodePtr> &arms) {
 		if (c == nullptr) {
 			continue;
 		}
-		if (c->tagExpr.empty() || !isConstantTag(c->tagExpr) || (!agreed.empty() && agreed != c->tagExpr)) {
-			return;
+		if (c->tagExpr.empty()) {
+			everyArmHasTag = false;
+			allAgreeOnConstant = false;
+			continue;
 		}
-		agreed = c->tagExpr;
+		if (!isConstantTag(c->tagExpr) || (!agreed.empty() && agreed != c->tagExpr)) {
+			allAgreeOnConstant = false;
+		} else {
+			agreed = c->tagExpr;
+		}
 	}
-	col.tagExpr = agreed;
+	if (allAgreeOnConstant) {
+		col.tagExpr = agreed;
+		return;
+	}
+	// Arms disagree (or aren't all constants): no single constant to hoist, but
+	// if every arm still mints its own tag, renderUnion can still project a
+	// correct per-row d_<var> from each arm's own scope on demand.
+	col.tagProjectable = everyArmHasTag;
+}
+
+bool hasRuntimeTag(const ColumnInfo &col) {
+	return !col.tagExpr.empty() || col.tagProjectable;
+}
+
+bool tagsMayDiffer(const ColumnInfo &a, const ColumnInfo &b) {
+	if (!hasRuntimeTag(a) || !hasRuntimeTag(b)) {
+		return false;
+	}
+	if (!a.tagExpr.empty() && !b.tagExpr.empty() && a.tagExpr == b.tagExpr) {
+		return false; // Both hoisted to the identical constant: provably equal.
+	}
+	return true;
 }
 
 } // namespace sparql2sql
