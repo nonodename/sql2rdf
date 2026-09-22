@@ -199,6 +199,12 @@ RelNodePtr innerJoin(RelNodePtr left, RelNodePtr right, TranslationContext &ctx)
 	JoinNode &join = static_cast<JoinNode &>(*node);
 	join.joinKind = JoinKind::Inner;
 	join.keys = buildKeys(*left, *right);
+	std::set<std::string> nullSafeKeys;
+	for (const auto &k : join.keys) {
+		if (k.nullSafe) {
+			nullSafeKeys.insert(k.var);
+		}
+	}
 	// Meet before the children are moved below - after the move, left->column()
 	// would dereference a null unique_ptr. A side that doesn't bind the variable
 	// yields nullptr, which meetColumns skips rather than treating as Unknown.
@@ -206,7 +212,10 @@ RelNodePtr innerJoin(RelNodePtr left, RelNodePtr right, TranslationContext &ctx)
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = boundV.count(v) != 0;
-		col.term = meetColumns({left->column(v), right->column(v)});
+		const ColumnInfo *lc = left->column(v);
+		const ColumnInfo *rc = right->column(v);
+		col.term = meetColumns({lc, rc});
+		annotateJoinColumnTag(col, lc, rc, nullSafeKeys.count(v) != 0);
 		join.schema().push_back(col);
 	}
 	join.left = std::move(left);
@@ -232,6 +241,12 @@ RelNodePtr leftOuterJoin(RelNodePtr left, RelNodePtr right, TranslationContext &
 	JoinNode &join = static_cast<JoinNode &>(*node);
 	join.joinKind = JoinKind::LeftOuter;
 	join.keys = buildKeys(*left, *right);
+	std::set<std::string> nullSafeKeys;
+	for (const auto &k : join.keys) {
+		if (k.nullSafe) {
+			nullSafeKeys.insert(k.var);
+		}
+	}
 	// Meet both sides, as for an inner join, and for the same reason: a shared
 	// variable is either equal on both sides (matched rows) or NULL on the right
 	// (unmatched), and NULL denotes no term. Must run before the moves below.
@@ -239,7 +254,10 @@ RelNodePtr leftOuterJoin(RelNodePtr left, RelNodePtr right, TranslationContext &
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = boundV.count(v) != 0;
-		col.term = meetColumns({left->column(v), right->column(v)});
+		const ColumnInfo *lc = left->column(v);
+		const ColumnInfo *rc = right->column(v);
+		col.term = meetColumns({lc, rc});
+		annotateJoinColumnTag(col, lc, rc, nullSafeKeys.count(v) != 0);
 		join.schema().push_back(col);
 	}
 	join.left = std::move(left);

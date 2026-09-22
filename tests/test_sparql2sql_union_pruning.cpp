@@ -109,6 +109,21 @@ TEST_CASE("translateQuery: joining two heterogeneous-kind unions on their shared
 	CHECK(sql.find("\"d_o\" = t") != std::string::npos);
 }
 
+TEST_CASE("translateQuery: a var made optional by one OPTIONAL keeps its runtime tag through a second OPTIONAL "
+          "join") {
+	// Regression test: innerJoin/leftOuterJoin's own schema-building never set
+	// tagExpr/tagProjectable on a Join node's output columns, so a variable
+	// already made optional by the first OPTIONAL (ex:iri, always an IRI) lost
+	// its runtime tag entirely once folded into the second OPTIONAL (ex:lit,
+	// always a literal) on top of it - markJoinKeys read the first join's own
+	// schema column as having no runtime tag at all and silently fell back to
+	// comparing ?o's lexical text only, even though an IRI and a same-spelled
+	// literal must never satisfy that COALESCE-driven equi-key.
+	std::string sql = translateFixture("join_tag_double_optional.rq", "sparql2sql_join_tag.ttl");
+	CHECK(sql.find("\"d_o\"") != std::string::npos);
+	CHECK(sql.find("\"d_o\" = t") != std::string::npos);
+}
+
 TEST_CASE("translateQuery: joining an ambiguous object against a subject prunes the literal-kind arm") {
 	// ex:tag's subject (TableC) is - like every R2RML subject map - never a
 	// literal, so once ?o is also constrained to be ex:tag's subject,

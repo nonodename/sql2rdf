@@ -122,6 +122,37 @@ void annotateFromArms(ColumnInfo &col, const std::vector<RelNodePtr> &arms) {
 	col.tagProjectable = everyArmHasTag;
 }
 
+void annotateJoinColumnTag(ColumnInfo &col, const ColumnInfo *leftCol, const ColumnInfo *rightCol, bool nullSafe) {
+	col.tagExpr.clear();
+	col.tagProjectable = false;
+	if (leftCol == nullptr) {
+		if (rightCol == nullptr) {
+			return; // Bound on neither side - nothing to annotate.
+		}
+		col.tagExpr = rightCol->tagExpr;
+		col.tagProjectable = rightCol->tagProjectable;
+		return;
+	}
+	if (rightCol == nullptr || !nullSafe) {
+		// Non-shared (right absent), or a shared key whose merged value
+		// renderJoin always takes from the left side - see this function's doc
+		// comment.
+		col.tagExpr = leftCol->tagExpr;
+		col.tagProjectable = leftCol->tagProjectable;
+		return;
+	}
+	// Shared and null-safe: renderJoin projects COALESCE(ltag, rtag). tagExpr
+	// stays the invariant-preserving hoisted constant only when both sides
+	// already agree on one; leftCol/rightCol's own tagExpr is never anything
+	// but empty or such a constant, so no isConstantTag re-check is needed
+	// here (unlike annotateFromArms, which hoists from arbitrary expressions).
+	if (!leftCol->tagExpr.empty() && leftCol->tagExpr == rightCol->tagExpr) {
+		col.tagExpr = leftCol->tagExpr;
+		return;
+	}
+	col.tagProjectable = hasRuntimeTag(*leftCol) && hasRuntimeTag(*rightCol);
+}
+
 bool hasRuntimeTag(const ColumnInfo &col) {
 	return !col.tagExpr.empty() || col.tagProjectable;
 }

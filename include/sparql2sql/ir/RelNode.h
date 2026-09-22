@@ -211,6 +211,36 @@ TermInfo meetAcrossArms(const std::string &var, const std::vector<RelNodePtr> &a
 /// Call this while the arms are still owned by the caller (see meetAcrossArms).
 void annotateFromArms(ColumnInfo &col, const std::vector<RelNodePtr> &arms);
 
+/// Annotate one column of a binary Join/LeftOuterJoin node's schema with the
+/// runtime tag it can supply, mirroring the value renderJoin actually projects
+/// for that column so a *later* join folded on top of this one (buildKeys's
+/// `left->column(v)`/`right->column(v)`) sees the same runtime-tag picture
+/// markJoinKeys would see if it could look straight through to the base
+/// producers instead of stopping at this node's own schema.
+///
+///  - `leftCol`/`rightCol` are nullptr when that side does not bind the
+///    variable at all (matching meetColumns's convention).
+///  - Not shared (only one side non-null): passed straight through - renderJoin
+///    projects that side's own value and tag column unchanged, so the
+///    annotation must too.
+///  - Shared, not null-safe (an inner-join key, or an OPTIONAL key guaranteed
+///    bound on both sides): renderJoin projects `lcol`/`ltag` only, so the
+///    annotation comes from `leftCol` alone.
+///  - Shared and null-safe: renderJoin projects `COALESCE(ltag, rtag)`. That is
+///    a known constant only when both sides already hoist the identical
+///    constant; otherwise it is still a valid per-row tag whenever both sides
+///    can supply one (hasRuntimeTag), so `tagProjectable` is set instead - the
+///    same "disagree but still projectable" outcome annotateFromArms reaches
+///    for a heterogeneous union arm.
+///
+/// Without this, a variable made optional by one OPTIONAL and then folded into
+/// a second join loses its runtime tag entirely at that second join: the first
+/// join's own schema column reports `hasRuntimeTag() == false` to markJoinKeys
+/// even though a `d_<var>` column is available (and would be projected) at
+/// render time, so the second join's equi-key silently falls back to comparing
+/// lexical text only.
+void annotateJoinColumnTag(ColumnInfo &col, const ColumnInfo *leftCol, const ColumnInfo *rightCol, bool nullSafe);
+
 /// One FROM source of an SpjRelation: a table/view/inline-join SQL fragment
 /// already suffixed with its alias ("TABLE" AS t1 / (view) AS t1 / child JOIN
 /// parent ON ...), plus the driving alias and a logical-table identity key
