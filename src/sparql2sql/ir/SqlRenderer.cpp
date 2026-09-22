@@ -131,7 +131,7 @@ std::string keyTagComparison(const EquiKey &k, TranslationContext &ctx, const st
 	}
 	const SqlDialect &dialect = ctx.dialect();
 	std::string tagCond = tagDimensionsCompatible(leftAlias + "." + mangleVarTag(k.var, dialect),
-	                                                    rightAlias + "." + mangleVarTag(k.var, dialect), dialect);
+	                                              rightAlias + "." + mangleVarTag(k.var, dialect), dialect);
 	if (!k.nullSafe) {
 		return tagCond;
 	}
