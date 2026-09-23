@@ -96,6 +96,48 @@ std::string keyComparison(const EquiKey &k, const std::string &lcol, const std::
 	return "(" + cond + ")";
 }
 
+// The tag-column half of one equi-key comparison, or "" when there is nothing
+// to compare.
+//
+// An equi-join on a shared variable is RDF *term* equality, so two candidate
+// sources whose dimensions can differ must compare tags as well as lexical
+// text - the un-merged counterpart of Optimizer's termDimensionEquality, and
+// gated on exactly the conditions markJoinKeys used when it decided to demand
+// the d_<var> columns this reads:
+//
+//  - both sides can supply a runtime tag and those tags are not provably
+//    identical (tagsMayDiffer - either differing hoisted constants, or either
+//    side a heterogeneous union's tagProjectable column), and the two
+//    annotations can actually conflict (dimensionsMayConflict). Equal hoisted
+//    tags are trivially equal at run time too, so a well-typed mapping keeps
+//    generating the SQL it generated before tags existed; a side with no
+//    runtime tag at all means the mapping does not determine the dimension,
+//    and there is nothing better than today's lexical-only comparison (never a
+//    synthesised default).
+//  - a null-tolerant key is vacuous when either side is unbound, so the
+//    dimension check is guarded with the same IS NULL disjunct on both value
+//    columns; when both sides are actually bound it still enforces RDF term
+//    equality, matching the merged path's guard in mergeInner.
+std::string keyTagComparison(const EquiKey &k, TranslationContext &ctx, const std::string &leftAlias,
+                             const std::string &rightAlias, const std::string &lcol, const std::string &rcol) {
+	if (!ctx.needsTag(k.var)) {
+		return std::string();
+	}
+	if (!tagsMayDiffer(k.leftCol, k.rightCol)) {
+		return std::string();
+	}
+	if (!dimensionsMayConflict(k.leftCol.term, k.rightCol.term)) {
+		return std::string();
+	}
+	const SqlDialect &dialect = ctx.dialect();
+	std::string tagCond = tagDimensionsCompatible(leftAlias + "." + mangleVarTag(k.var, dialect),
+	                                              rightAlias + "." + mangleVarTag(k.var, dialect), dialect);
+	if (!k.nullSafe) {
+		return tagCond;
+	}
+	return "(" + lcol + " IS NULL OR " + rcol + " IS NULL OR " + tagCond + ")";
+}
+
 // Extra projected columns to append to an SpjRelation's SELECT list: the
 // (mangled name, SQL expression) pairs a join renderer needs exposed through
 // the derived-table boundary so it can compare native key columns.
@@ -230,6 +272,13 @@ std::string renderJoin(const JoinNode &join, TranslationContext &ctx) {
 		if (!rewritten[i]) {
 			onConditions.push_back(keyComparison(k, lcol, rcol));
 		}
+		// Not folded into keyComparison: a native-key rewrite replaces the
+		// lexical comparison but says nothing about the dimension, so the tag
+		// check applies to every form of the key equally.
+		const std::string tagCond = keyTagComparison(k, ctx, leftAlias, rightAlias, lcol, rcol);
+		if (!tagCond.empty()) {
+			onConditions.push_back(tagCond);
+		}
 		if (k.nullSafe) {
 			projectExprs.push_back("COALESCE(" + lcol + ", " + rcol + ") AS " + mangleVar(k.var, dialect));
 		} else {
@@ -306,14 +355,20 @@ std::string renderAntiJoin(const AntiJoinNode &anti, TranslationContext &ctx) {
 	}
 
 	std::vector<std::string> conds;
-	conds.reserve(anti.keys.size() + nativeConds.size());
+	conds.reserve(anti.keys.size() * 2 + nativeConds.size());
 	for (std::size_t i = 0; i < anti.keys.size(); ++i) {
-		if (rewritten[i]) {
-			continue;
-		}
 		const EquiKey &k = anti.keys[i];
-		conds.push_back(keyComparison(k, leftAlias + "." + mangleVar(k.var, dialect),
-		                              rightAlias + "." + mangleVar(k.var, dialect)));
+		std::string lcol = leftAlias + "." + mangleVar(k.var, dialect);
+		std::string rcol = rightAlias + "." + mangleVar(k.var, dialect);
+		if (!rewritten[i]) {
+			conds.push_back(keyComparison(k, lcol, rcol));
+		}
+		// MINUS's compatibility test is RDF term equality too: a right-hand row
+		// whose term merely spells the same text must not eliminate a left row.
+		const std::string tagCond = keyTagComparison(k, ctx, leftAlias, rightAlias, lcol, rcol);
+		if (!tagCond.empty()) {
+			conds.push_back(tagCond);
+		}
 	}
 	conds.insert(conds.end(), nativeConds.begin(), nativeConds.end());
 	std::string cond = joinConditions(conds, ctx);

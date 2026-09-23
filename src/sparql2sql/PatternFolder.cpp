@@ -17,6 +17,7 @@
 #include "sparql2sql/TranslationError.h"
 #include "sparql2sql/Translator.h"
 #include "sparql2sql/TriplePatternTranslator.h"
+#include "sparql2sql/ValuesFolder.h"
 #include "sparql2sql/ir/RelNode.h"
 #include "sparql2sql/ir/SqlRenderer.h"
 
@@ -198,6 +199,12 @@ RelNodePtr innerJoin(RelNodePtr left, RelNodePtr right, TranslationContext &ctx)
 	JoinNode &join = static_cast<JoinNode &>(*node);
 	join.joinKind = JoinKind::Inner;
 	join.keys = buildKeys(*left, *right);
+	std::set<std::string> nullSafeKeys;
+	for (const auto &k : join.keys) {
+		if (k.nullSafe) {
+			nullSafeKeys.insert(k.var);
+		}
+	}
 	// Meet before the children are moved below - after the move, left->column()
 	// would dereference a null unique_ptr. A side that doesn't bind the variable
 	// yields nullptr, which meetColumns skips rather than treating as Unknown.
@@ -205,7 +212,10 @@ RelNodePtr innerJoin(RelNodePtr left, RelNodePtr right, TranslationContext &ctx)
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = boundV.count(v) != 0;
-		col.term = meetColumns({left->column(v), right->column(v)});
+		const ColumnInfo *lc = left->column(v);
+		const ColumnInfo *rc = right->column(v);
+		col.term = meetColumns({lc, rc});
+		annotateJoinColumnTag(col, lc, rc, nullSafeKeys.count(v) != 0);
 		join.schema().push_back(col);
 	}
 	join.left = std::move(left);
@@ -231,6 +241,12 @@ RelNodePtr leftOuterJoin(RelNodePtr left, RelNodePtr right, TranslationContext &
 	JoinNode &join = static_cast<JoinNode &>(*node);
 	join.joinKind = JoinKind::LeftOuter;
 	join.keys = buildKeys(*left, *right);
+	std::set<std::string> nullSafeKeys;
+	for (const auto &k : join.keys) {
+		if (k.nullSafe) {
+			nullSafeKeys.insert(k.var);
+		}
+	}
 	// Meet both sides, as for an inner join, and for the same reason: a shared
 	// variable is either equal on both sides (matched rows) or NULL on the right
 	// (unmatched), and NULL denotes no term. Must run before the moves below.
@@ -238,7 +254,10 @@ RelNodePtr leftOuterJoin(RelNodePtr left, RelNodePtr right, TranslationContext &
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = boundV.count(v) != 0;
-		col.term = meetColumns({left->column(v), right->column(v)});
+		const ColumnInfo *lc = left->column(v);
+		const ColumnInfo *rc = right->column(v);
+		col.term = meetColumns({lc, rc});
+		annotateJoinColumnTag(col, lc, rc, nullSafeKeys.count(v) != 0);
 		join.schema().push_back(col);
 	}
 	join.left = std::move(left);
@@ -295,7 +314,7 @@ RelNodePtr unionAll(std::vector<RelNodePtr> branches, TranslationContext &ctx, b
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = boundV.count(v) != 0;
-		col.term = meetAcrossArms(v, branches);
+		annotateFromArms(col, branches);
 		un.schema().push_back(col);
 	}
 	un.arms = std::move(branches);
@@ -316,6 +335,15 @@ RelNodePtr fold(const sparql::ast::GroupGraphPattern &pattern, TranslationContex
 	using sparql::ast::UnionGraphPattern;
 
 	RelNodePtr acc = identityRelation(ctx);
+
+	// VALUES columns pinned to a single constant term are folded into this
+	// element list's triple patterns (and, by inheritance, into every nested
+	// element list this fold recurses into) rather than joined onto them - see
+	// ValuesFolder.h. Scoped to the loop below: FILTER/BIND expressions are
+	// translated later, after the guard is gone, and must still read the
+	// variable as a variable.
+	TranslationContext::ConstantBindingGuard constantGuard(
+	    ctx, inlineConstantScope(ctx.constantBindings(), &pattern, nullptr));
 
 	for (const auto &elPtr : pattern.elements) {
 		const auto &el = *elPtr;
@@ -349,7 +377,16 @@ RelNodePtr fold(const sparql::ast::GroupGraphPattern &pattern, TranslationContex
 		}
 		case ElementKind::MinusGraphPattern: {
 			const auto &mn = static_cast<const MinusGraphPattern &>(el);
-			acc = antiJoin(std::move(acc), fold(*mn.pattern, ctx), ctx);
+			// MINUS removes a solution only when the two sides share a variable
+			// (Section 18.2), so a variable folded out of the right-hand side
+			// would turn a real anti-join into a no-op. The body may of course
+			// still fold its own VALUES, which stay on the same side.
+			RelNodePtr minusBody;
+			{
+				TranslationContext::ConstantBindingGuard noInherit(ctx, ConstantBindings());
+				minusBody = fold(*mn.pattern, ctx);
+			}
+			acc = antiJoin(std::move(acc), std::move(minusBody), ctx);
 			break;
 		}
 		case ElementKind::Filter: {

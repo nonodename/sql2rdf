@@ -621,6 +621,36 @@ emitting SQL strings directly, then applies a fixed pipeline of semantics-preser
    is `SELECT DISTINCT`/`ASK`, and likewise inside an EXISTS body (an existence check cannot see
    duplicates).
 
+**A `VALUES` column bound to a single constant term is folded into the triple patterns that read
+it**, before any of the above (`sparql2sql/ValuesFolder.h`). `VALUES ?s { <http://ex/emp/7369> }`
+followed by `?s ex:name ?n` translates identically to writing the IRI in the pattern: the subject
+template is inverted into `EMPNO = '7369'`, a predicate the engine pushes into the table scan.
+Without the fold the subject was built in the forward direction instead — concatenating and
+URL-encoding the template's columns — and the one-row inline relation was joined onto that
+constructed string, which no engine can invert, so the pattern materialised in full before the join
+pruned it. The inline relation is still emitted and joined either way, which is what keeps the
+variable bound, projected and correctly tagged once the patterns stop binding it themselves.
+
+The fold reaches **subject, predicate and object** position. Predicate position is where it pays
+most, and not for the reason the others do: a bare variable predicate enumerates one candidate arm
+per `rr:predicateObjectMap` of every triples map that could match, so `?s ?p ?o` fans out into a
+`UNION` over the whole mapping. Pinning `?p` prunes that to the arms whose predicate map can
+produce the constant, which on a mapping with a catch-all `$(predicate)` term map is the dominant
+cost in the plan. Only an **IRI**-kind term folds into predicate position: every variable is a
+`VARCHAR` of the lexical form, so folding a literal that happened to spell a predicate IRI would
+make the two indistinguishable by construction. A graph variable (`GRAPH ?g`) is never folded — it
+interacts with `FROM NAMED` dataset restriction and has not been analysed.
+
+Only a column holding the *same* term in every row folds (at least one row, no `UNDEF` cell, every
+row identical) — a genuine multi-row alternatives list still translates to the union/join it always
+did. Four further cases deliberately do not fold, each because folding would change an answer
+rather than merely a plan: a variable a `FILTER`/`BIND` expression reads (it would go out of scope
+in the relation the expression is applied to); every variable in a group whose expressions contain
+`EXISTS` (an `EXISTS` body correlates on shared variables, and a variable folded out of one side
+drops the correlation); a `MINUS` body (SPARQL 1.1 §18.2 makes `MINUS` a no-op when the two sides
+share no variable); and a sub-select (evaluated independently, so a `LIMIT` or aggregate inside it
+makes restricting the body observably different from restricting the result).
+
 **Each distinct `rr:sqlQuery` view is hoisted into one shared `WITH` CTE** and referenced by name,
 rather than inlined as a derived table at every use site. One view commonly backs many sites — each
 predicate-object map of its triples map, both sides of a referencing object map, and every arm of a
@@ -941,6 +971,12 @@ and joins use the VARCHAR-cast fallback.
   nothing, consistent with a triple pattern that provably matches nothing. Listing the same graph
   twice is one graph. The dataset is fixed once for the whole query (the grammar only allows dataset
   clauses on the top-level query), so nested sub-selects and `EXISTS` bodies inherit it.
+- **`VALUES` / inline data**: supported in every position the grammar allows (a group element and
+  the query's trailing clause). A column pinned to one constant term is constant-folded into the
+  subject, predicate and object positions of the triple patterns reading it, so it generates the
+  same SQL as writing that term in the pattern — for a predicate that means pruning the candidate
+  arms the pattern enumerates, not just inverting a term map. Predicate position folds an IRI only;
+  a graph variable never folds. See the fold's rules and exclusions above.
 - **No `SERVICE`** (federated query): always throws, matching `sql2rdf_sparql`'s own "no
   federated-query execution semantics" stance.
 - **Every SPARQL variable is a plain SQL `VARCHAR`** holding the RDF term's lexical string form
@@ -1033,11 +1069,27 @@ and joins use the VARCHAR-cast fallback.
     still works. Every typed branch keeps `TRY_CAST`, so a value contradicting its declared datatype
     yields `NULL` (row dropped) rather than a runtime error.
   - An equi-**join** on a shared variable is RDF term equality, so where the two sides' dimensions
-    are statically known *and different*, the join additionally compares them — two rows with the
-    same lexical form but different datatypes do not join. Where they are statically equal the
-    conjunct is trivially true and is not emitted, so an ordinary single-mapping join is byte-for-byte
-    unchanged. Where either side's dimension is undeterminable there is nothing to compare and the
-    join stays lexical-only.
+    can differ, the join additionally compares them — two rows with the same lexical form but
+    different datatypes do not join. This holds however the join is rendered: a flattened
+    inner-join block folds the comparison into its `WHERE`, while a join that stays a real SQL
+    `JOIN` (and a `MINUS`'s anti-join, whose compatibility test is the same equality) puts it in the
+    `ON`/`NOT EXISTS` clause, over the two sides' `d_<var>` columns. Which of the two a query gets
+    is an optimizer detail and does not change the answer.
+
+    Three things keep this from costing anything it need not. Dimensions the mapping proves *equal*
+    emit no conjunct at all, so an ordinary single-mapping join is byte-for-byte unchanged. Where
+    either side's dimension is undeterminable — no tag at all — there is nothing to compare and the
+    join stays lexical-only; no default tag is ever synthesised. And an *undeclared* datatype (`L`)
+    is compatible with any declared one rather than distinct from it, because `L` says only that the
+    mapping does not determine which datatype the literal has — the same degradation the comparison
+    operators make for a `L` operand. (`L` does assert the absence of a *language* tag, so it
+    conflicts with `@en`.) A null-tolerant (`OPTIONAL`-lineage) key skips the check entirely: it is
+    vacuous when either side is unbound, and checking it would break `OPTIONAL`'s compatibility
+    semantics.
+
+    A `UNION` column exposes the tag its arms agree on, which is what lets a join against a variable
+    predicate — whose candidate arms all produce an IRI — see that a `VALUES` literal merely spelling
+    a predicate IRI is a different term.
   - Arithmetic over two statically integral operands (`xsd:integer` and its narrower aliases) stays
     integral via `TRY_CAST(... AS BIGINT)`, so `?a + 1` renders `"10"` rather than `"10.0"`. The same
     applies to `SUM()`, and to `ABS()`/`CEIL()`/`FLOOR()`/`ROUND()`. Division, and any operand of

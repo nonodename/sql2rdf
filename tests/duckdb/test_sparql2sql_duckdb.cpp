@@ -148,6 +148,19 @@ std::unique_ptr<DuckDBConnection> makeSeededDatabase() {
 	conn->execute("CREATE TABLE ITEMS (ITEM_PROD_CODE INTEGER, IDESC VARCHAR)");
 	conn->execute("INSERT INTO ITEMS VALUES (7, 'blue widget')");
 
+	// Backs sparql2sql_kind_prune.ttl. ex:val is ambiguous between TABLE_A's
+	// rr:IRI-typed template object and TABLE_B's plain (literal) VAL column.
+	// TABLE_B row 4's VAL is deliberately chosen to *spell* the same text as
+	// the IRI TABLE_A rows 1/2 produce (<http://ex.org/thing/5>), so a join on
+	// ?o across two ex:val occurrences must not treat that IRI and that
+	// same-spelled literal as equal.
+	conn->execute("CREATE TABLE TABLE_A (ID INTEGER, REF INTEGER)");
+	conn->execute("INSERT INTO TABLE_A VALUES (1, 5), (2, 5)");
+	conn->execute("CREATE TABLE TABLE_B (ID INTEGER, VAL VARCHAR)");
+	conn->execute("INSERT INTO TABLE_B VALUES (3, 'http://ex.org/thing/5'), (4, 'http://ex.org/thing/5')");
+	conn->execute("CREATE TABLE TABLE_C (ID INTEGER, TAG VARCHAR)");
+	conn->execute("INSERT INTO TABLE_C VALUES (5, 'tagged')");
+
 	return conn;
 }
 
@@ -448,6 +461,144 @@ TEST_CASE("emp_dept_values.rq: VALUES restricts to the given ?n bindings") {
 	REQUIRE(rows.size() == 2);
 	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_N", "SMITH"}}));
 	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7400"}, {"V_N", "JONES"}}));
+}
+
+// --- VALUES constant folding (ValuesFolder.h). The point of these is that the
+// folded query answers exactly what the unfolded one did; the SQL-shape side
+// (that the fold actually happened) is asserted in
+// tests/test_sparql2sql_values_folding.cpp.
+
+TEST_CASE("values_constant_subject.rq: a VALUES-pinned subject returns that employee's name only") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_subject.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_N", "SMITH"}}));
+}
+
+TEST_CASE("values_constant_subject_path.rq: the pinned subject still walks the sequence path") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_subject_path.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_DN", "APPSERVER"}}));
+}
+
+TEST_CASE("values_constant_object.rq: a VALUES-pinned object returns the same row as the two-row form") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_object.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_N", "SMITH"}}));
+}
+
+TEST_CASE("values_constant_trailing.rq: a trailing VALUES clause answers like the inline one") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_trailing.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_N", "SMITH"}}));
+}
+
+TEST_CASE("values_constant_optional.rq: the pinned subject keeps its OPTIONAL match") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_optional.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_N", "SMITH"}}));
+}
+
+TEST_CASE("values_constant_filtered.rq: a FILTER over the pinned variable still sees it bound") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_filtered.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(rows, {{"V_E", "http://data.example.com/employee/7369"}, {"V_N", "SMITH"}}));
+}
+
+TEST_CASE("values_constant_minus.rq: MINUS over the pinned subject still removes the matching solution") {
+	auto conn = makeSeededDatabase();
+	// 7369 IS named SMITH, so the anti-join must remove it and leave nothing.
+	// Folding the constant into the MINUS body would leave the two sides
+	// sharing no variable, which Section 18.2 makes a no-op - the row would
+	// wrongly survive.
+	auto rows = translateAndRun(*conn, "values_constant_minus.rq", "example_emp_dept.ttl");
+	CHECK(rows.empty());
+}
+
+TEST_CASE("values_constant_undef.rq: an UNDEF-only column binds nothing and matches every subject") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_undef.rq", "example_emp_dept.ttl");
+	// UNDEF constrains nothing, so every ex:name triple survives: two employees
+	// plus two departments.
+	CHECK(rows.size() == 4);
+}
+
+TEST_CASE("values_constant_predicate.rq: a pinned predicate answers exactly like the constant form") {
+	auto conn = makeSeededDatabase();
+	// Every ex:name triple: two employees plus two departments. The bare
+	// constant form is the oracle - pruning the other candidate arms must not
+	// change a single row.
+	auto folded = translateAndRun(*conn, "values_constant_predicate.rq", "example_emp_dept.ttl");
+	auto bare = translateAndRun(*conn, "values_constant_predicate_bare.rq", "example_emp_dept.ttl");
+	REQUIRE(folded.size() == 4);
+	REQUIRE(bare.size() == 4);
+	// The VALUES relation is still joined, so ?p stays bound and projected.
+	CHECK(containsRow(
+	    folded,
+	    {{"V_S", "http://data.example.com/employee/7369"}, {"V_P", "http://example.com/ns#name"}, {"V_O", "SMITH"}}));
+	CHECK(containsRow(folded, {{"V_S", "http://data.example.com/department/10"},
+	                           {"V_P", "http://example.com/ns#name"},
+	                           {"V_O", "APPSERVER"}}));
+}
+
+TEST_CASE("values_predicate_literal.rq: a literal spelling a predicate IRI is left on the unfolded path") {
+	auto conn = makeSeededDatabase();
+	// A VALUES cell holding the *literal* "http://example.com/ns#name" is not
+	// an IRI, so it must not be folded into predicate position: every variable
+	// is a VARCHAR of the lexical form, and constantPredicate() would make the
+	// two spellings indistinguishable by construction.
+	//
+	// The unfolded path does tell them apart: the candidate union's arms all
+	// agree the predicate is an IRI, so the join key carries a d_p tag column
+	// and the join compares it against the VALUES cell's xsd:string tag. No
+	// triple in the graph has a *literal* predicate, so the answer is empty.
+	auto rows = translateAndRun(*conn, "values_predicate_literal.rq", "example_emp_dept.ttl");
+	CHECK(rows.empty());
+}
+
+TEST_CASE("values_object_literal_spelling_iri.rq: a literal spelling an object IRI matches no triple") {
+	auto conn = makeSeededDatabase();
+	// ex:knows produces an IRI object; the VALUES cell is a plain literal that
+	// merely spells the same characters. An equi-join on a shared variable is
+	// RDF *term* equality, so the two must not join - and because both sides
+	// are unfolded relations (two VALUES rows keep ValuesFolder out of it),
+	// this is the un-merged join path, where only the ON clause's tag
+	// comparison can tell them apart.
+	auto rows = translateAndRun(*conn, "values_object_literal_spelling_iri.rq", "example_emp_dept.ttl");
+	CHECK(rows.empty());
+}
+
+TEST_CASE("values_object_iri.rq: the same join with real IRIs is unchanged") {
+	auto conn = makeSeededDatabase();
+	// The control for the two cases above: identical query shape, but now both
+	// sides agree the term is an IRI. Agreement must cost nothing - no tag is
+	// demanded, no comparison is added, and SMITH -> JONES still comes back.
+	auto rows = translateAndRun(*conn, "values_object_iri.rq", "example_emp_dept.ttl");
+	REQUIRE(rows.size() == 1);
+	CHECK(containsRow(
+	    rows, {{"V_S", "http://data.example.com/employee/7369"}, {"V_O", "http://data.example.com/employee/7400"}}));
+}
+
+TEST_CASE("values_predicate_multi.rq: a two-row VALUES predicate keeps both predicates' rows") {
+	auto conn = makeSeededDatabase();
+	// Four ex:name rows plus two ex:location rows - the control showing the
+	// fold is confined to the single-constant case.
+	auto rows = translateAndRun(*conn, "values_predicate_multi.rq", "example_emp_dept.ttl");
+	CHECK(rows.size() == 6);
+	CHECK(containsRow(rows, {{"V_S", "http://data.example.com/department/10"},
+	                         {"V_P", "http://example.com/ns#location"},
+	                         {"V_O", "NEW YORK"}}));
+}
+
+TEST_CASE("values_constant_predicate_filtered.rq: a FILTER over the pinned predicate still sees it bound") {
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "values_constant_predicate_filtered.rq", "example_emp_dept.ttl");
+	CHECK(rows.size() == 4);
 }
 
 TEST_CASE("sparql2sql_self_ref.rq: the self-join guard matches the single widget") {
@@ -1584,6 +1735,38 @@ TEST_CASE("dyn_group_types.rq: GROUP BY keeps two terms with one lexical form bu
 		auto c = row.find("V_C");
 		REQUIRE(c != row.end());
 		CHECK(c->second == "1");
+	}
+}
+
+TEST_CASE("kind_prune_val_self_join.rq: joining two heterogeneous-kind unions on ?o never crosses an IRI "
+          "with a same-spelled literal") {
+	// ex:val is ambiguous between TABLE_A's rr:IRI-typed template object and
+	// TABLE_B's plain literal VAL column, with nothing here to prune either
+	// arm away (unlike kind_prune_val_tag_join.rq's join against TABLE_C's
+	// always-IRI subject) - see test_sparql2sql_union_pruning.cpp's structural
+	// counterpart of this test.
+	//
+	// TABLE_A rows 1 and 2 both produce the IRI <http://ex.org/thing/5>;
+	// TABLE_B rows 3 and 4 both produce the literal "http://ex.org/thing/5" -
+	// the identical text, deliberately, as a literal rather than an IRI. Only
+	// same-kind pairs may satisfy the join: the two TABLE_A rows against each
+	// other (2x2=4 pairs) and the two TABLE_B rows against each other (4
+	// pairs), never an TABLE_A row against a TABLE_B row despite the matching
+	// lexical form.
+	auto conn = makeSeededDatabase();
+	auto rows = translateAndRun(*conn, "kind_prune_val_self_join.rq", "sparql2sql_kind_prune.ttl");
+	REQUIRE(rows.size() == 8);
+	for (const auto &row : rows) {
+		auto s1 = row.find("V_S1");
+		auto s2 = row.find("V_S2");
+		REQUIRE(s1 != row.end());
+		REQUIRE(s2 != row.end());
+		bool s1IsA = s1->second.find("/a/") != std::string::npos;
+		bool s2IsA = s2->second.find("/a/") != std::string::npos;
+		// Both sides must come from the same table (both TABLE_A-backed IRIs, or
+		// both TABLE_B-backed literals) - never one of each, which is exactly the
+		// false join the bug would have produced.
+		CHECK(s1IsA == s2IsA);
 	}
 }
 

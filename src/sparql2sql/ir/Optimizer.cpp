@@ -40,6 +40,12 @@ std::string termDimensionEquality(const ColumnInfo &lc, const ColumnInfo &rc) {
 	if (lc.tagExpr.empty() || rc.tagExpr.empty() || lc.tagExpr == rc.tagExpr) {
 		return std::string();
 	}
+	if (!dimensionsMayConflict(lc.term, rc.term)) {
+		// Two tags can differ textually and still describe compatible terms: an
+		// untyped literal ("L") against a datatyped one says only that this side's
+		// datatype is undeclared, which is no evidence of inequality.
+		return std::string();
+	}
 	return "(" + lc.tagExpr + ") = (" + rc.tagExpr + ")";
 }
 
@@ -112,11 +118,16 @@ RelNodePtr mergeInner(JoinNode &join, const TypeCatalog *catalog) {
 			// fast path returning early, and the dimension check applies to every
 			// form of the key equally.
 			const std::string dimension = termDimensionEquality(*lc, *rc);
-			if (!dimension.empty() && !k.nullSafe) {
-				// A null-tolerant key is vacuous when either side is unbound, so the
-				// dimension check would have to be guarded the same way; leaving it
-				// off keeps OPTIONAL's compatibility semantics exactly as they were.
-				out.whereConds.push_back(dimension);
+			if (!dimension.empty()) {
+				if (k.nullSafe) {
+					// A null-tolerant key is vacuous when either side is unbound, but
+					// still enforces RDF term equality once both sides are bound -
+					// the same guard keyTagComparison applies on the un-merged path.
+					out.whereConds.push_back("(" + lc->renderedExpr + " IS NULL OR " + rc->renderedExpr +
+					                         " IS NULL OR " + dimension + ")");
+				} else {
+					out.whereConds.push_back(dimension);
+				}
 			}
 		}
 		const ColumnInfo *jc = join.column(k.var);
@@ -333,7 +344,7 @@ RelNodePtr distributeJoinOverUnion(RelNodePtr node, bool unionOnLeft, const Opti
 				break;
 			}
 		}
-		col.term = meetAcrossArms(v, mergedArms);
+		annotateFromArms(col, mergedArms);
 		outU.schema().push_back(col);
 	}
 	outU.arms = std::move(mergedArms);
@@ -1276,7 +1287,7 @@ void refreshUnionSchema(UnionByNameNode &side) {
 	}
 	for (auto &col : side.schema()) {
 		col.nonNull = boundV.count(col.var) != 0;
-		col.term = meetAcrossArms(col.var, side.arms);
+		annotateFromArms(col, side.arms);
 	}
 }
 

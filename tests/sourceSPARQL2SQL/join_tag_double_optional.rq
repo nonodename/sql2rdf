@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?l ?a ?o WHERE {
+    ?l ex:hasA ?a .
+    OPTIONAL { ?a ex:iri ?o }
+    OPTIONAL { ?a ex:lit ?o }
+}

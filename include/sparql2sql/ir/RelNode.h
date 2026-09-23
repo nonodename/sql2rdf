@@ -88,11 +88,43 @@ struct ColumnInfo {
 	/// is honest, whereas degrading to "no tag" would throw away a fact the
 	/// mapping does supply.
 	///
-	/// Empty on any column a *node* combines from children (a union's arms, a
-	/// join's COALESCE): there the tag is projected from the child's own tag
-	/// column rather than recomputed, exactly as the value column is.
+	/// Empty on any column a *node* combines from children (a join's COALESCE):
+	/// there the tag is projected from the child's own tag column rather than
+	/// recomputed, exactly as the value column is. A union column is the one
+	/// exception, and only when every arm mints the very same constant - see
+	/// annotateFromArms, which is what lets a join against a union still see
+	/// that the union's arms all agree the term is (say) an IRI.
 	std::string tagExpr;
+
+	/// True when `tagExpr` above is empty *specifically* because a
+	/// UnionByNameNode's arms disagree on tag (or aren't all constants), yet
+	/// every arm still supplies some tag of its own - so a per-row `d_<var>`
+	/// column is projectable on demand (each arm renders its own tagExpr in its
+	/// own scope; combineByName assembles them), even though there is no single
+	/// constant to hoist to this column's own tagExpr.
+	///
+	/// Set only by annotateFromArms. Consulted by markJoinKeys/keyTagComparison
+	/// via hasRuntimeTag/tagsMayDiffer instead of testing `tagExpr.empty()`
+	/// directly - otherwise a heterogeneous union's join key reads as "the
+	/// mapping supplies no tag at all" and silently falls back to comparing
+	/// lexical text only, letting an IRI and a same-spelled literal from
+	/// different arms join.
+	bool tagProjectable = false;
 };
+
+/// True when a runtime tag can be requested for `col`: either it already
+/// carries a single hoisted constant (`tagExpr` non-empty), or it is a
+/// heterogeneous union column whose arms can each still supply their own tag
+/// (`tagProjectable`).
+bool hasRuntimeTag(const ColumnInfo &col);
+
+/// True when both sides of an equi-key have runtime tags (hasRuntimeTag) that
+/// are not provably identical - i.e. comparing them at run time could actually
+/// discriminate rows, rather than being a guaranteed-true no-op. Two hoisted
+/// constants that are textually equal are provably identical; anything
+/// involving a `tagProjectable` side is not, since its tag varies per row by
+/// construction.
+bool tagsMayDiffer(const ColumnInfo &a, const ColumnInfo &b);
 
 enum class RelKind {
 	Spj,              ///< fused Select-Project-Join block (base of flattening/self-join).
@@ -158,6 +190,56 @@ TermInfo meetColumns(const std::vector<const ColumnInfo *> &sources);
 /// Call this while the arms are still owned by the caller: after
 /// `node.arms = std::move(branches)` the moved-from pointers are null.
 TermInfo meetAcrossArms(const std::string &var, const std::vector<RelNodePtr> &arms);
+
+/// Annotate one column of a union node's schema from the arms feeding it: its
+/// term annotation is their meet (meetAcrossArms), and its tag is the constant
+/// they *all* mint for it - empty when they disagree, when any contributing arm
+/// supplies no tag, or when the agreed tag is not a scope-independent constant.
+/// In the disagreeing case, `tagProjectable` is set instead whenever every arm
+/// still supplies *some* tag of its own (see ColumnInfo::tagProjectable).
+///
+/// The tag half matters because an empty tagExpr reads as "the mapping does not
+/// determine the dimension here" to markJoinKeys, which then declines to demand
+/// a tag column and leaves an equi-join against the union comparing lexical text
+/// only - even when every arm agrees the term is an IRI and the other side is a
+/// literal that merely spells the same characters. Propagating the agreed tag is
+/// not a new claim: it is the one `term` already makes, spelled as SQL. The same
+/// applies when arms disagree: `tagProjectable` lets markJoinKeys/
+/// keyTagComparison still demand and compare a per-row tag instead of reading
+/// the disagreement as "no information at all."
+///
+/// Call this while the arms are still owned by the caller (see meetAcrossArms).
+void annotateFromArms(ColumnInfo &col, const std::vector<RelNodePtr> &arms);
+
+/// Annotate one column of a binary Join/LeftOuterJoin node's schema with the
+/// runtime tag it can supply, mirroring the value renderJoin actually projects
+/// for that column so a *later* join folded on top of this one (buildKeys's
+/// `left->column(v)`/`right->column(v)`) sees the same runtime-tag picture
+/// markJoinKeys would see if it could look straight through to the base
+/// producers instead of stopping at this node's own schema.
+///
+///  - `leftCol`/`rightCol` are nullptr when that side does not bind the
+///    variable at all (matching meetColumns's convention).
+///  - Not shared (only one side non-null): passed straight through - renderJoin
+///    projects that side's own value and tag column unchanged, so the
+///    annotation must too.
+///  - Shared, not null-safe (an inner-join key, or an OPTIONAL key guaranteed
+///    bound on both sides): renderJoin projects `lcol`/`ltag` only, so the
+///    annotation comes from `leftCol` alone.
+///  - Shared and null-safe: renderJoin projects `COALESCE(ltag, rtag)`. That is
+///    a known constant only when both sides already hoist the identical
+///    constant; otherwise it is still a valid per-row tag whenever both sides
+///    can supply one (hasRuntimeTag), so `tagProjectable` is set instead - the
+///    same "disagree but still projectable" outcome annotateFromArms reaches
+///    for a heterogeneous union arm.
+///
+/// Without this, a variable made optional by one OPTIONAL and then folded into
+/// a second join loses its runtime tag entirely at that second join: the first
+/// join's own schema column reports `hasRuntimeTag() == false` to markJoinKeys
+/// even though a `d_<var>` column is available (and would be projected) at
+/// render time, so the second join's equi-key silently falls back to comparing
+/// lexical text only.
+void annotateJoinColumnTag(ColumnInfo &col, const ColumnInfo *leftCol, const ColumnInfo *rightCol, bool nullSafe);
 
 /// One FROM source of an SpjRelation: a table/view/inline-join SQL fragment
 /// already suffixed with its alias ("TABLE" AS t1 / (view) AS t1 / child JOIN

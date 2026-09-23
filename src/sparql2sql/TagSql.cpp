@@ -49,6 +49,15 @@ std::string coalescedTag(const std::string &leftValueSql, const std::string &lef
 	       " IS NOT NULL THEN " + rightTagSql + " ELSE NULL END)";
 }
 
+std::string tagDimensionsCompatible(const std::string &leftTag, const std::string &rightTag,
+                                    const SqlDialect &dialect) {
+	const std::string untyped = dialect.stringLiteral(kTagLiteralUntyped);
+	return "(" + leftTag + " = " + rightTag + //
+	       " OR (" + leftTag + " = " + untyped + " AND " + tagStartsWith(rightTag, kTagDatatypePrefix, dialect) +
+	       ")" + //
+	       " OR (" + rightTag + " = " + untyped + " AND " + tagStartsWith(leftTag, kTagDatatypePrefix, dialect) + "))";
+}
+
 std::string tagValueSpace(const std::string &tagSql, const SqlDialect &dialect) {
 	const std::vector<const char *> numeric = {xsd::kInteger, xsd::kLong,    xsd::kInt,    xsd::kShort,
 	                                           xsd::kByte,    xsd::kDecimal, xsd::kDouble, xsd::kFloat};

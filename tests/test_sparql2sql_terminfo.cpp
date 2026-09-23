@@ -28,6 +28,7 @@
 #include "sparql2sql/TranslatedPattern.h"
 #include "sparql2sql/TypeCatalog.h"
 
+using sparql2sql::dimensionsMayConflict;
 using sparql2sql::inferExprTermInfo;
 using sparql2sql::isXsdCastIri;
 using sparql2sql::isXsdIntegralIri;
@@ -417,4 +418,36 @@ TEST_CASE("inferExprTermInfo: the deferred timezone builtins stay Unknown", "[sp
 	const TranslatedPattern scope = typedScope();
 	CHECK(inferExprTermInfo(parseExpr("TIMEZONE(?t)", keep), scope).kind == RdfTermKind::Unknown);
 	CHECK(inferExprTermInfo(parseExpr("TZ(?t)", keep), scope).kind == RdfTermKind::Unknown);
+}
+
+TEST_CASE("dimensionsMayConflict: an undeclared datatype is compatible with a declared one", "[sparql2sql][ir]") {
+	TermInfo iri;
+	iri.kind = RdfTermKind::Iri;
+	TermInfo untyped;
+	untyped.kind = RdfTermKind::Literal;
+	TermInfo str;
+	str.kind = RdfTermKind::Literal;
+	str.datatypeIri = xsd::kString;
+	TermInfo english;
+	english.kind = RdfTermKind::Literal;
+	english.datatypeIri = kRdfLangString;
+	english.lang = "en";
+
+	// The same dimension twice: nothing to check, which is what keeps a
+	// well-typed mapping generating the SQL it always did.
+	CHECK_FALSE(dimensionsMayConflict(iri, iri));
+	CHECK_FALSE(dimensionsMayConflict(str, str));
+	// "L" means "the mapping does not determine WHICH datatype", so it must not
+	// be read as "a different datatype" - only as an unanswered question.
+	CHECK_FALSE(dimensionsMayConflict(untyped, str));
+	CHECK_FALSE(dimensionsMayConflict(str, untyped));
+	// It does, though, assert the absence of a language tag.
+	CHECK(dimensionsMayConflict(untyped, english));
+	// Genuine conflicts.
+	CHECK(dimensionsMayConflict(iri, str));
+	CHECK(dimensionsMayConflict(iri, untyped));
+	CHECK(dimensionsMayConflict(str, english));
+	// An annotation that is not fully determined varies per row, so only the
+	// runtime tags can answer.
+	CHECK(dimensionsMayConflict(meet(iri, str), str));
 }

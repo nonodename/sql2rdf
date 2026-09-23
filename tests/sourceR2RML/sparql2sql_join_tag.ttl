@@ -1,0 +1,28 @@
+@prefix rr:  <http://www.w3.org/ns/r2rml#>.
+@prefix ex:  <http://example.com/ns#>.
+
+# Toy mapping for the JoinNode-schema tag-propagation regression: ?a is linked
+# from TABLE_LINK, then two independent OPTIONALs each bind ?o from a
+# different, individually deterministic dimension - ex:iri always mints an
+# IRI, ex:lit always a plain literal. Folding two sequential OPTIONALs onto the
+# same variable is exactly the shape that silently loses its runtime tag at
+# the second join if JoinNode's own schema-building doesn't propagate
+# tagExpr/tagProjectable from its children.
+
+<#Link>
+    rr:logicalTable [ rr:tableName "TABLE_LINK" ];
+    rr:subjectMap [ rr:template "http://ex.org/link/{ID}" ];
+    rr:predicateObjectMap [ rr:predicate ex:hasA;
+        rr:objectMap [ rr:template "http://ex.org/a/{AID}"; rr:termType rr:IRI ] ].
+
+<#IriSide>
+    rr:logicalTable [ rr:tableName "TABLE_IRI" ];
+    rr:subjectMap [ rr:template "http://ex.org/a/{AID}" ];
+    rr:predicateObjectMap [ rr:predicate ex:iri;
+        rr:objectMap [ rr:template "http://ex.org/thing/{REF}"; rr:termType rr:IRI ] ].
+
+<#LitSide>
+    rr:logicalTable [ rr:tableName "TABLE_LIT" ];
+    rr:subjectMap [ rr:template "http://ex.org/a/{AID}" ];
+    rr:predicateObjectMap [ rr:predicate ex:lit;
+        rr:objectMap [ rr:column "VAL" ] ].

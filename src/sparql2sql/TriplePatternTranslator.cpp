@@ -741,8 +741,20 @@ TermSpec termSpecFor(const sparql::ast::Term &term, TranslationContext &ctx) {
 	using sparql::ast::Var;
 	TermSpec spec;
 	if (term.kind() == TermKind::Var) {
+		// A variable an enclosing VALUES block pins to a single constant term is
+		// translated as though that constant had been written here, so the term
+		// map gets inverted (a raw column equality the engine can push into the
+		// scan) instead of built forwards and joined on. See ValuesFolder.h for
+		// when a binding qualifies; the VALUES relation is still emitted and
+		// joined, so the variable itself stays bound and projected.
+		const std::string &name = static_cast<const Var &>(term).name;
+		if (const sparql::ast::Term *pinned = ctx.constantBinding(name)) {
+			spec.isVar = false;
+			spec.boundTerm = pinned;
+			return spec;
+		}
 		spec.isVar = true;
-		spec.varName = static_cast<const Var &>(term).name;
+		spec.varName = name;
 	} else if (term.kind() == TermKind::BlankNode) {
 		spec.isVar = true;
 		spec.varName = "_bnode_" + static_cast<const BlankNode &>(term).label;
@@ -984,7 +996,7 @@ RelNodePtr translateAtomicPattern(const TermSpec &subjectSpec, const PredicateCo
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = true;
-		col.term = meetAcrossArms(v, branches);
+		annotateFromArms(col, branches);
 		un.schema().push_back(col);
 	}
 	un.arms = std::move(branches);
@@ -1089,14 +1101,14 @@ RelNodePtr graphAwareTermUniverse(const std::vector<std::string> &varNames, Tran
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = true;
-		col.term = meetAcrossArms(v, arms);
+		annotateFromArms(col, arms);
 		un.schema().push_back(col);
 	}
 	if (!graphVar.empty()) {
 		ColumnInfo col;
 		col.var = graphVar;
 		col.nonNull = true;
-		col.term = meetAcrossArms(graphVar, arms);
+		annotateFromArms(col, arms);
 		un.schema().push_back(col);
 	}
 	un.arms = std::move(arms);
@@ -1179,7 +1191,7 @@ RelNodePtr allTermsRelation(const std::vector<std::string> &varNames, Translatio
 		ColumnInfo col;
 		col.var = v;
 		col.nonNull = true;
-		col.term = meetAcrossArms(v, arms);
+		annotateFromArms(col, arms);
 		un.schema().push_back(col);
 	}
 	un.arms = std::move(arms);
@@ -1282,7 +1294,7 @@ RelNodePtr allNamedGraphsRelation(const std::string &varName, TranslationContext
 	ColumnInfo col;
 	col.var = varName;
 	col.nonNull = true;
-	col.term = meetAcrossArms(varName, arms);
+	annotateFromArms(col, arms);
 	un.schema().push_back(col);
 	un.arms = std::move(arms);
 	return node;

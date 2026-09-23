@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?s ?p ?o
+WHERE {
+  VALUES ?p { ex:name }
+  ?s ?p ?o .
+  FILTER(STR(?p) != "zzz")
+}

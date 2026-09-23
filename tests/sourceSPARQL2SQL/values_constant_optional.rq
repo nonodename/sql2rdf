@@ -1,0 +1,6 @@
+PREFIX ex: <http://example.com/ns#>
+SELECT ?e ?n
+WHERE {
+  VALUES ?e { <http://data.example.com/employee/7369> }
+  OPTIONAL { ?e ex:name ?n }
+}

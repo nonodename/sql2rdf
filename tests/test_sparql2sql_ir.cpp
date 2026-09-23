@@ -6,6 +6,8 @@
 
 #include "r2rml/R2RMLMapping.h"
 #include "sparql2sql/DuckDbDialect.h"
+#include "sparql2sql/TagSql.h"
+#include "sparql2sql/TermInfo.h"
 #include "sparql2sql/TranslatedPattern.h"
 #include "sparql2sql/TypeCatalog.h"
 #include "sparql2sql/ir/Optimizer.h"
@@ -21,11 +23,14 @@ using sparql2sql::JoinNode;
 using sparql2sql::optimize;
 using sparql2sql::OptimizerOptions;
 using sparql2sql::Provenance;
+using sparql2sql::RdfTermKind;
 using sparql2sql::RelKind;
 using sparql2sql::RelNodePtr;
 using sparql2sql::renderRelation;
 using sparql2sql::SpjRelation;
 using sparql2sql::SpjSource;
+using sparql2sql::SqlDialect;
+using sparql2sql::tagLiteral;
 using sparql2sql::TranslatedPattern;
 using sparql2sql::TranslationContext;
 using sparql2sql::TypeCatalog;
@@ -43,6 +48,25 @@ ColumnInfo pureCol(const std::string &var, const std::string &alias, const std::
 	c.nativeColumnRef = alias + ".\"" + col + "\"";
 	c.tableIdentity = table;
 	c.nonNull = nonNull;
+	return c;
+}
+
+bool contains(const std::string &haystack, const std::string &needle) {
+	return haystack.find(needle) != std::string::npos;
+}
+
+// A pureCol whose RDF term dimension is fully determined, with a hoisted
+// constant tag (`tagLiteral`) - what a real term map with a known kind/lang
+// annotates, and the only shape tagsMayDiffer/keyTagComparison ever compare.
+ColumnInfo tagCol(const std::string &var, const std::string &alias, const std::string &col, const std::string &table,
+                  RdfTermKind kind, const std::string &lang, const SqlDialect &dialect) {
+	ColumnInfo c = pureCol(var, alias, col, table, /*nonNull=*/true);
+	c.term.kind = kind;
+	if (!lang.empty()) {
+		c.term.datatypeIri = sparql2sql::kRdfLangString;
+		c.term.lang = lang;
+	}
+	c.tagExpr = tagLiteral(c.term, dialect);
 	return c;
 }
 
@@ -924,4 +948,60 @@ TEST_CASE("optimize: a comparison against a non-constant value doesn't match the
 	const SpjRelation &out = static_cast<const SpjRelation &>(*result);
 	REQUIRE(out.whereConds.size() == 1);
 	CHECK(out.whereConds[0] == "CAST(t1.\"FLAG\" AS VARCHAR) = 'false'");
+}
+
+// --- SqlRenderer/Optimizer: a null-safe key's dimension check must still
+// fire once both sides are bound ---
+//
+// A null-safe key is vacuous when either side is unbound (OPTIONAL's
+// compatibility semantics), but rows where both sides ARE bound are still RDF
+// term equality: an IRI and a language-tagged literal that happen to spell the
+// same lexical text must not join. Regression test for a bug where the
+// dimension check was skipped outright for any null-safe key, regardless of
+// whether the row it would have rejected actually had both values bound.
+
+TEST_CASE("renderJoin: a null-safe key still compares the tag, guarded by the same IS NULL disjunct",
+          "[sparql2sql][ir]") {
+	DuckDbDialect dialect;
+	RelNodePtr left = makeSpj("t1", "T1", {tagCol("h", "t1", "H", "T1", RdfTermKind::Iri, "", dialect)}, false);
+	RelNodePtr right = makeSpj("t2", "T2", {tagCol("h", "t2", "H", "T2", RdfTermKind::Literal, "en", dialect)}, false);
+	// LeftOuter never flattens (see the native-key tests above), so this drives
+	// keyTagComparison's un-merged path end to end.
+	RelNodePtr join = makeJoin(JoinKind::LeftOuter, std::move(left), std::move(right), "h", /*nullSafe=*/true);
+
+	R2RMLMapping mapping;
+	TranslationContext ctx(mapping, dialect);
+	ctx.markNeedsTag("h");
+
+	TranslatedPattern result = renderRelation(*join, ctx);
+
+	// The lexical comparison keeps its own null-tolerant OR, and the dimension
+	// check is a separate AND'd conjunct guarded by IS NULL on both value
+	// columns - never a bare, unguarded tag comparison.
+	CHECK(contains(result.sql, "\"v_h\" IS NULL OR t2.\"v_h\" IS NULL"));
+	CHECK(contains(result.sql, "\"d_h\" = t2.\"d_h\""));
+	CHECK_FALSE(contains(result.sql, "ON t1.\"v_h\" = t2.\"v_h\" AND (t1.\"d_h\""));
+}
+
+TEST_CASE("mergeInner: a null-safe key still compares the tag, guarded by the same IS NULL disjunct",
+          "[sparql2sql][ir]") {
+	DuckDbDialect dialect;
+	RelNodePtr left = makeSpj("t1", "T1", {tagCol("h", "t1", "H", "T1", RdfTermKind::Iri, "", dialect)}, false);
+	RelNodePtr right = makeSpj("t2", "T2", {tagCol("h", "t2", "H", "T2", RdfTermKind::Literal, "en", dialect)}, false);
+	// Inner + both sides already Spj is exactly mergeInner's flattening shape.
+	RelNodePtr join = makeJoin(JoinKind::Inner, std::move(left), std::move(right), "h", /*nullSafe=*/true);
+
+	OptimizerOptions opts;
+	RelNodePtr optimized = optimize(std::move(join), opts);
+	REQUIRE(optimized->kind() == RelKind::Spj);
+
+	R2RMLMapping mapping;
+	TranslationContext ctx(mapping, dialect);
+	ctx.markNeedsTag("h");
+
+	TranslatedPattern result = renderRelation(*optimized, ctx);
+
+	// Same guard as the un-merged path, folded into the WHERE clause instead of
+	// an ON clause.
+	CHECK(contains(result.sql, "IS NULL OR CAST(t2.\"H\" AS VARCHAR) IS NULL OR ('I') = ('@en')"));
 }

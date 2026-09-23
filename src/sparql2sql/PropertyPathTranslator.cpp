@@ -293,9 +293,23 @@ RelNodePtr translatePath(const sparql::ast::PropertyPathExpr &path, const TermSp
 		return translateAtomicPattern(subject, constantPredicate(static_cast<const PredicatePath &>(path).iri->value),
 		                              object, ctx);
 
-	case PathKind::Variable:
-		return translateAtomicPattern(subject, variablePredicate(static_cast<const VariablePath &>(path).var->name),
-		                              object, ctx);
+	case PathKind::Variable: {
+		// A bare variable predicate fans the pattern out into one candidate arm
+		// per predicate-object map in the whole mapping, so pinning it matters
+		// more here than in subject/object position: the constant prunes every
+		// arm whose predicate map cannot produce it. Fold only an IRI - every
+		// variable is a VARCHAR of the lexical form, so a literal whose lexical
+		// form happens to spell the IRI would be matched by `constantPredicate`
+		// too, and it is the term-kind tag on the join key that keeps the two
+		// apart today. See ValuesFolder.h for when a binding qualifies.
+		const std::string &predVar = static_cast<const VariablePath &>(path).var->name;
+		const sparql::ast::Term *pinned = ctx.constantBinding(predVar);
+		if (pinned != nullptr && pinned->kind() == sparql::ast::TermKind::Iri) {
+			return translateAtomicPattern(
+			    subject, constantPredicate(static_cast<const sparql::ast::Iri &>(*pinned).value), object, ctx);
+		}
+		return translateAtomicPattern(subject, variablePredicate(predVar), object, ctx);
+	}
 
 	case PathKind::Inverse:
 		// ^E: the same path with its endpoints exchanged. Nested inverses fold

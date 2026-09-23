@@ -82,6 +82,48 @@ TEST_CASE("translateQuery: an object position ambiguous between IRI and literal 
 	CHECK(sql.find("\"TABLE_B\"") != std::string::npos);
 }
 
+TEST_CASE("translateQuery: joining two heterogeneous-kind unions on their shared object compares tags, not "
+          "just lexical text") {
+	// ex:val is ambiguous between TableA's IRI-typed template and TableB's plain
+	// literal column, with nothing to disambiguate it here: both occurrences of
+	// ex:val are equally ambiguous, so pruneUnionSide has no subject/template
+	// asymmetry to exploit and the union on each side survives intact - unlike
+	// kind_prune_val_tag_join.rq, where TableC's always-IRI subject prunes
+	// TableB away before this join is ever rendered.
+	//
+	// Regression test: annotateFromArms used to clear the union's tagExpr on
+	// disagreement with nothing recording that each arm still mints its own
+	// constant tag, so markJoinKeys never demanded a d_o column and this join
+	// compared only the lexical v_o text - meaning TableA's IRI
+	// <http://ex.org/thing/5> would spuriously equal a TableB row whose VAL
+	// literal happens to spell the same characters. The fix (tagProjectable)
+	// keeps both unions intact but ensures the join also compares d_o.
+	std::string sql = translateFixture("kind_prune_val_self_join.rq", "sparql2sql_kind_prune.ttl");
+	CHECK(sql.find("UNION") != std::string::npos);
+	CHECK(sql.find("\"TABLE_A\"") != std::string::npos);
+	CHECK(sql.find("\"TABLE_B\"") != std::string::npos);
+	CHECK(sql.find("\"d_o\"") != std::string::npos);
+	// The join predicate must compare the tag columns, not just the lexical v_o
+	// columns, or an IRI and a same-spelled literal from opposite arms would
+	// wrongly satisfy the join.
+	CHECK(sql.find("\"d_o\" = t") != std::string::npos);
+}
+
+TEST_CASE("translateQuery: a var made optional by one OPTIONAL keeps its runtime tag through a second OPTIONAL "
+          "join") {
+	// Regression test: innerJoin/leftOuterJoin's own schema-building never set
+	// tagExpr/tagProjectable on a Join node's output columns, so a variable
+	// already made optional by the first OPTIONAL (ex:iri, always an IRI) lost
+	// its runtime tag entirely once folded into the second OPTIONAL (ex:lit,
+	// always a literal) on top of it - markJoinKeys read the first join's own
+	// schema column as having no runtime tag at all and silently fell back to
+	// comparing ?o's lexical text only, even though an IRI and a same-spelled
+	// literal must never satisfy that COALESCE-driven equi-key.
+	std::string sql = translateFixture("join_tag_double_optional.rq", "sparql2sql_join_tag.ttl");
+	CHECK(sql.find("\"d_o\"") != std::string::npos);
+	CHECK(sql.find("\"d_o\" = t") != std::string::npos);
+}
+
 TEST_CASE("translateQuery: joining an ambiguous object against a subject prunes the literal-kind arm") {
 	// ex:tag's subject (TableC) is - like every R2RML subject map - never a
 	// literal, so once ?o is also constrained to be ex:tag's subject,

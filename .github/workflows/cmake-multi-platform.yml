@@ -12,7 +12,12 @@ on:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    
+    env:
+      CC: gcc-10
+      CXX: g++-10
+      GEN: ninja
 
     steps:
     - uses: actions/checkout@v7
@@ -33,12 +38,12 @@ jobs:
           exit 1
         fi
         echo "Serd submodule verified (commit: $ACTUAL_COMMIT)"
-
+# stick with clang-format 11 as that's what DuckDB uses
     - name: Install tools
       run: |
         sudo apt-get update -qq
-        sudo apt-get install -y ninja-build clang clang-format-18 clang-tidy
-        sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-18 100
+        sudo apt-get install -y ninja-build clang clang-format-11 clang-tidy
+        sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-11 100
 
     - name: Install DuckDB
       run: |

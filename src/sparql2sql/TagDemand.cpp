@@ -192,16 +192,15 @@ void walkExpr(const Expression &expr, const TranslatedPattern &scope, Translatio
 // compares the two in-scope tag expressions directly (Optimizer's
 // termDimensionEquality).
 //
-// Marked only when both sides supply a tag and those tags are textually
-// different constants. Where either side's dimension is undetermined there is no
-// tag to compare and nothing better than today's lexical-only comparison, and
-// marking would only produce a column no producer can fill.
+// Marked when both sides can supply a runtime tag (hasRuntimeTag - either a
+// hoisted constant, or a heterogeneous union's tagProjectable) and those tags
+// are not provably identical (tagsMayDiffer). Where either side's dimension is
+// undetermined *and* cannot even supply a per-row tag, there is nothing better
+// than today's lexical-only comparison, and marking would only produce a
+// column no producer can fill.
 void markJoinKeys(const std::vector<EquiKey> &keys, TranslationContext &ctx) {
 	for (const auto &k : keys) {
-		if (k.leftCol.tagExpr.empty() || k.rightCol.tagExpr.empty()) {
-			continue;
-		}
-		if (k.leftCol.tagExpr != k.rightCol.tagExpr) {
+		if (tagsMayDiffer(k.leftCol, k.rightCol) && dimensionsMayConflict(k.leftCol.term, k.rightCol.term)) {
 			ctx.markNeedsTag(k.var);
 		}
 	}

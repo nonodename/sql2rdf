@@ -265,6 +265,7 @@ set(SPARQL2SQL_SOURCES
   src/sparql2sql/TriplePatternTranslator.cpp
   src/sparql2sql/PropertyPathTranslator.cpp
   src/sparql2sql/ExpressionTranslator.cpp
+  src/sparql2sql/ValuesFolder.cpp
   src/sparql2sql/PatternFolder.cpp
   src/sparql2sql/Translator.cpp
   src/sparql2sql/TypeCatalog.cpp

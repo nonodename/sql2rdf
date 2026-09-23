@@ -130,6 +130,28 @@ std::string encodeTag(const TermInfo &info);
 /// (Unknown) TermInfo. Round-trips every fully-determined annotation.
 TermInfo decodeTag(const std::string &tag);
 
+/// Whether two terms these annotations describe can still turn out to have
+/// *different* RDF dimensions - the question an equi-join asks before deciding
+/// whether comparing lexical forms alone is enough (an equi-join on a shared
+/// variable is RDF term equality, so `"7"^^xsd:integer` must not join
+/// `<...7>`).
+///
+/// False means the join needs no dimension check at all, which is what keeps a
+/// well-typed mapping generating exactly the SQL it generated before tags
+/// existed. Three ways to reach it:
+///
+///  - the two annotations lower to the same tag, so the check is vacuous;
+///  - one side is an untyped literal ("L") and the other a datatyped one. "L"
+///    says the mapping does not determine *which* datatype, not that the term
+///    has none, so it is compatible with any D<iri> - the static counterpart of
+///    the kValueSpaceUnknown fallback dynamicEquality already takes. (A
+///    language tag is a different matter: "L" does assert the absence of one,
+///    which tagLang relies on, so "L" against "@en" genuinely conflicts.)
+///
+/// An annotation that is not fully determined always may conflict: the
+/// dimension varies per row, so only the runtime tags can answer.
+bool dimensionsMayConflict(const TermInfo &a, const TermInfo &b);
+
 /// The three single-character tags, named so no consumer spells them inline.
 extern const char *const kTagIri;
 extern const char *const kTagBlankNode;

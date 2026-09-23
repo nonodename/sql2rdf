@@ -73,4 +73,98 @@ TermInfo meetAcrossArms(const std::string &var, const std::vector<RelNodePtr> &a
 	return meetColumns(sources);
 }
 
+namespace {
+
+// A tag minted by tagLiteral is a plain single-quoted SQL string literal, so it
+// means the same thing in any scope. Every other tag expression (mergeInner's
+// CASE, a folded BIND's rewritten expression) references its own block's
+// aliases and must never escape the arm that produced it - hence this guard
+// rather than a bare textual-agreement test.
+bool isConstantTag(const std::string &tag) {
+	return tag.size() >= 2 && tag[0] == '\'' && tag[tag.size() - 1] == '\'' && tag.find('\'', 1) == tag.size() - 1;
+}
+
+} // namespace
+
+void annotateFromArms(ColumnInfo &col, const std::vector<RelNodePtr> &arms) {
+	col.term = meetAcrossArms(col.var, arms);
+	col.tagExpr.clear();
+	col.tagProjectable = false;
+
+	bool everyArmHasTag = true;
+	bool allAgreeOnConstant = true;
+	std::string agreed;
+	for (const auto &arm : arms) {
+		// A null column is an arm that doesn't bind the variable at all: NULL
+		// denotes no term, so like meetColumns it contributes nothing.
+		const ColumnInfo *c = arm ? arm->column(col.var) : nullptr;
+		if (c == nullptr) {
+			continue;
+		}
+		if (c->tagExpr.empty()) {
+			everyArmHasTag = false;
+			allAgreeOnConstant = false;
+			continue;
+		}
+		if (!isConstantTag(c->tagExpr) || (!agreed.empty() && agreed != c->tagExpr)) {
+			allAgreeOnConstant = false;
+		} else {
+			agreed = c->tagExpr;
+		}
+	}
+	if (allAgreeOnConstant) {
+		col.tagExpr = agreed;
+		return;
+	}
+	// Arms disagree (or aren't all constants): no single constant to hoist, but
+	// if every arm still mints its own tag, renderUnion can still project a
+	// correct per-row d_<var> from each arm's own scope on demand.
+	col.tagProjectable = everyArmHasTag;
+}
+
+void annotateJoinColumnTag(ColumnInfo &col, const ColumnInfo *leftCol, const ColumnInfo *rightCol, bool nullSafe) {
+	col.tagExpr.clear();
+	col.tagProjectable = false;
+	if (leftCol == nullptr) {
+		if (rightCol == nullptr) {
+			return; // Bound on neither side - nothing to annotate.
+		}
+		col.tagExpr = rightCol->tagExpr;
+		col.tagProjectable = rightCol->tagProjectable;
+		return;
+	}
+	if (rightCol == nullptr || !nullSafe) {
+		// Non-shared (right absent), or a shared key whose merged value
+		// renderJoin always takes from the left side - see this function's doc
+		// comment.
+		col.tagExpr = leftCol->tagExpr;
+		col.tagProjectable = leftCol->tagProjectable;
+		return;
+	}
+	// Shared and null-safe: renderJoin projects COALESCE(ltag, rtag). tagExpr
+	// stays the invariant-preserving hoisted constant only when both sides
+	// already agree on one; leftCol/rightCol's own tagExpr is never anything
+	// but empty or such a constant, so no isConstantTag re-check is needed
+	// here (unlike annotateFromArms, which hoists from arbitrary expressions).
+	if (!leftCol->tagExpr.empty() && leftCol->tagExpr == rightCol->tagExpr) {
+		col.tagExpr = leftCol->tagExpr;
+		return;
+	}
+	col.tagProjectable = hasRuntimeTag(*leftCol) && hasRuntimeTag(*rightCol);
+}
+
+bool hasRuntimeTag(const ColumnInfo &col) {
+	return !col.tagExpr.empty() || col.tagProjectable;
+}
+
+bool tagsMayDiffer(const ColumnInfo &a, const ColumnInfo &b) {
+	if (!hasRuntimeTag(a) || !hasRuntimeTag(b)) {
+		return false;
+	}
+	if (!a.tagExpr.empty() && !b.tagExpr.empty() && a.tagExpr == b.tagExpr) {
+		return false; // Both hoisted to the identical constant: provably equal.
+	}
+	return true;
+}
+
 } // namespace sparql2sql
