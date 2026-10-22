@@ -46,7 +46,6 @@ jobs:
         tar -xzf duckdb-shared-libs-linux-amd64.tar.gz
         sudo mv libduckdb.so /usr/local/lib/libduckdb.so
         sudo mv duckdb.h /usr/local/include/duckdb.h
-        sudo mv duckdb_v2.h /usr/local/include/duckdb_v2.h
         sudo ldconfig /usr/local/lib
 
     - name: Configure CMake
@@ -154,7 +153,6 @@ jobs:
           tar -xzf duckdb-shared-libs-linux-amd64.tar.gz
           sudo mv libduckdb.so /usr/local/lib/libduckdb.so
           sudo mv duckdb.h /usr/local/include/duckdb.h
-          sudo mv duckdb_v2.h /usr/local/include/duckdb_v2.h
           sudo ldconfig /usr/local/lib
         elif [ "$RUNNER_OS" == "macOS" ]; then
           brew install duckdb
@@ -163,9 +161,9 @@ jobs:
           tar -xzf duckdb-shared-libs-windows-amd64.tar.gz
           mkdir -p "C:/duckdb/include"
           mkdir -p "C:/duckdb/lib"
-          mv duckdb/*.h* "C:/duckdb/include/"
-          mv duckdb/*.lib "C:/duckdb/lib/"
-          mv duckdb/*.dll "C:/duckdb/lib/"
+          mv *.h* "C:/duckdb/include/"
+          mv *.lib "C:/duckdb/lib/"
+          mv *.dll "C:/duckdb/lib/"
           
           # Add the DLL to PATH so tests can run later
           echo "C:\duckdb\lib" >> $GITHUB_PATH

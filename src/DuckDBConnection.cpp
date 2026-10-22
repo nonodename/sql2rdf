@@ -4,7 +4,7 @@
 #include "r2rml/SQLRow.h"
 #include "r2rml/SQLValue.h"
 
-#include "duckdb.hpp"
+#include <duckdb.h>
 
 #include <algorithm>
 #include <cctype>
@@ -15,101 +15,128 @@
 
 namespace r2rml {
 
+namespace {
+
 // ---------------------------------------------------------------------------
 // DuckDBSQLValue
 //
-// Lazily wraps a duckdb::Value, computing type and string representation on
-// first access.  This is the DuckDB-specific concrete SQLValue implementation.
+// A single cell's type and lexical form, converted eagerly while the owning
+// duckdb_result is still live: the C API's typed getters (duckdb_value_*)
+// only operate against a live duckdb_result/row index, unlike the C++
+// duckdb::Value this replaced, which owned a copy of its data and could
+// convert lazily on first access.
 // ---------------------------------------------------------------------------
 class DuckDBSQLValue : public SQLValue {
 public:
-	explicit DuckDBSQLValue(duckdb::Value val) // NOLINT(performance-unnecessary-value-param)
-	    : val_(std::move(val)) {
+	DuckDBSQLValue(bool isNull, Type type, std::string lexical)
+	    : isNull_(isNull), type_(type), string_(std::move(lexical)) {
 	}
 
 	bool isNull() const override {
-		return val_.IsNull();
+		return isNull_;
 	}
 
 	Type type() const override {
-		ensureConverted();
 		return type_;
 	}
 
 	const std::string &asString() const override {
-		ensureConverted();
 		return string_;
 	}
 
 	std::unique_ptr<SQLValue> clone() const override {
-		return std::unique_ptr<SQLValue>(new DuckDBSQLValue(val_));
+		return std::unique_ptr<SQLValue>(new DuckDBSQLValue(isNull_, type_, string_));
 	}
 
 private:
-	duckdb::Value val_;
-	mutable Type type_ {Type::Null};
-	mutable std::string string_;
-	mutable bool converted_ {false};
+	bool isNull_;
+	Type type_;
+	std::string string_;
+};
 
-	void ensureConverted() const {
-		if (converted_) {
-			return;
-		}
-		converted_ = true;
+// Owns a char* returned by duckdb_value_varchar(), freeing it via duckdb_free().
+class DuckDBOwnedString {
+public:
+	explicit DuckDBOwnedString(char *ptr) : ptr_(ptr) {
+	}
+	~DuckDBOwnedString() {
+		duckdb_free(ptr_);
+	}
+	DuckDBOwnedString(const DuckDBOwnedString &) = delete;
+	DuckDBOwnedString &operator=(const DuckDBOwnedString &) = delete;
 
-		if (val_.IsNull()) {
-			type_ = Type::Null;
-			return;
-		}
+	std::string str() const {
+		return ptr_ ? std::string(ptr_) : std::string();
+	}
 
-		switch (val_.type().id()) {
-		case duckdb::LogicalTypeId::BOOLEAN:
-			type_ = Type::Boolean;
-			string_ = val_.GetValue<bool>() ? "true" : "false";
-			break;
+private:
+	char *ptr_;
+};
 
-		case duckdb::LogicalTypeId::TINYINT:
-		case duckdb::LogicalTypeId::SMALLINT:
-		case duckdb::LogicalTypeId::INTEGER:
-		case duckdb::LogicalTypeId::UTINYINT:
-		case duckdb::LogicalTypeId::USMALLINT:
-		case duckdb::LogicalTypeId::UINTEGER:
-			type_ = Type::Integer;
-			string_ = std::to_string(val_.GetValue<int32_t>());
-			break;
+std::unique_ptr<SQLValue> convertCell(duckdb_result *result, idx_t col, idx_t row) {
+	if (duckdb_value_is_null(result, col, row)) {
+		return std::unique_ptr<SQLValue>(new DuckDBSQLValue(true, SQLValue::Type::Null, ""));
+	}
 
-		// BIGINT and larger: store as string to avoid precision loss
-		case duckdb::LogicalTypeId::BIGINT:
-		case duckdb::LogicalTypeId::UBIGINT:
-		case duckdb::LogicalTypeId::HUGEINT:
-			type_ = Type::String;
-			string_ = val_.ToString();
-			break;
+	switch (duckdb_column_type(result, col)) {
+	case DUCKDB_TYPE_BOOLEAN:
+		return std::unique_ptr<SQLValue>(new DuckDBSQLValue(false, SQLValue::Type::Boolean,
+		                                                    duckdb_value_boolean(result, col, row) ? "true" : "false"));
 
-		case duckdb::LogicalTypeId::FLOAT:
-			type_ = Type::Double;
-			string_ = std::to_string(static_cast<double>(val_.GetValue<float>()));
-			break;
+	case DUCKDB_TYPE_TINYINT:
+	case DUCKDB_TYPE_SMALLINT:
+	case DUCKDB_TYPE_INTEGER:
+	case DUCKDB_TYPE_UTINYINT:
+	case DUCKDB_TYPE_USMALLINT:
+	case DUCKDB_TYPE_UINTEGER:
+		return std::unique_ptr<SQLValue>(
+		    new DuckDBSQLValue(false, SQLValue::Type::Integer, std::to_string(duckdb_value_int32(result, col, row))));
 
-		case duckdb::LogicalTypeId::DOUBLE:
-			type_ = Type::Double;
-			string_ = std::to_string(val_.GetValue<double>());
-			break;
+	// BIGINT and larger: use the VARCHAR conversion to avoid precision loss
+	case DUCKDB_TYPE_BIGINT:
+	case DUCKDB_TYPE_UBIGINT:
+	case DUCKDB_TYPE_HUGEINT: {
+		DuckDBOwnedString text(duckdb_value_varchar(result, col, row));
+		return std::unique_ptr<SQLValue>(new DuckDBSQLValue(false, SQLValue::Type::String, text.str()));
+	}
 
-		case duckdb::LogicalTypeId::VARCHAR:
-		case duckdb::LogicalTypeId::BLOB:
-			type_ = Type::String;
-			string_ = val_.GetValue<std::string>();
-			break;
+	case DUCKDB_TYPE_FLOAT:
+		return std::unique_ptr<SQLValue>(new DuckDBSQLValue(
+		    false, SQLValue::Type::Double, std::to_string(static_cast<double>(duckdb_value_float(result, col, row)))));
 
-		default:
-			// Dates, timestamps, decimals, etc.: use string representation
-			type_ = Type::String;
-			string_ = val_.ToString();
-			break;
-		}
+	case DUCKDB_TYPE_DOUBLE:
+		return std::unique_ptr<SQLValue>(
+		    new DuckDBSQLValue(false, SQLValue::Type::Double, std::to_string(duckdb_value_double(result, col, row))));
+
+	case DUCKDB_TYPE_VARCHAR: {
+		DuckDBOwnedString text(duckdb_value_varchar(result, col, row));
+		return std::unique_ptr<SQLValue>(new DuckDBSQLValue(false, SQLValue::Type::String, text.str()));
+	}
+
+	case DUCKDB_TYPE_BLOB: {
+		duckdb_blob blob = duckdb_value_blob(result, col, row);
+		std::string text(static_cast<const char *>(blob.data), blob.size);
+		duckdb_free(blob.data);
+		return std::unique_ptr<SQLValue>(new DuckDBSQLValue(false, SQLValue::Type::String, std::move(text)));
+	}
+
+	default: {
+		// Dates, timestamps, decimals, etc.: use the VARCHAR conversion
+		DuckDBOwnedString text(duckdb_value_varchar(result, col, row));
+		return std::unique_ptr<SQLValue>(new DuckDBSQLValue(false, SQLValue::Type::String, text.str()));
+	}
+	}
+}
+
+// RAII guard ensuring duckdb_destroy_result() runs even if conversion throws.
+struct DuckDBResultGuard {
+	duckdb_result result {};
+	~DuckDBResultGuard() {
+		duckdb_destroy_result(&result);
 	}
 };
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // DuckDBResultSet
@@ -140,10 +167,25 @@ private:
 // DuckDBConnection::Impl
 // ---------------------------------------------------------------------------
 struct DuckDBConnection::Impl {
-	duckdb::DuckDB db;
-	duckdb::Connection con;
+	duckdb_database db {nullptr};
+	duckdb_connection con {nullptr};
 
-	explicit Impl(const std::string &path) : db(path), con(db) {
+	explicit Impl(const std::string &path) {
+		char *error = nullptr;
+		if (duckdb_open_ext(path.c_str(), &db, nullptr, &error) == DuckDBError) {
+			std::string message = error ? error : "unknown error";
+			duckdb_free(error);
+			throw std::runtime_error("Failed to open DuckDB database '" + path + "': " + message);
+		}
+		if (duckdb_connect(db, &con) == DuckDBError) {
+			duckdb_close(&db);
+			throw std::runtime_error("Failed to connect to DuckDB database '" + path + "'");
+		}
+	}
+
+	~Impl() {
+		duckdb_disconnect(&con);
+		duckdb_close(&db);
 	}
 };
 
@@ -160,30 +202,29 @@ std::string DuckDBConnection::getDefaultSchema() {
 }
 
 std::unique_ptr<SQLResultSet> DuckDBConnection::execute(const std::string &sqlQuery) {
-	auto result = impl_->con.Query(sqlQuery);
+	DuckDBResultGuard guard;
+	if (duckdb_query(impl_->con, sqlQuery.c_str(), &guard.result) == DuckDBError) {
+		throw std::runtime_error("DuckDB query error: " + std::string(duckdb_result_error(&guard.result)));
+	}
 
-	if (result->HasError()) {
-		throw std::runtime_error("DuckDB query error: " + result->GetError());
+	idx_t columnCount = duckdb_column_count(&guard.result);
+	idx_t rowCount = duckdb_row_count(&guard.result);
+
+	std::vector<std::string> columnNames(columnCount);
+	for (idx_t col = 0; col < columnCount; ++col) {
+		std::string name = duckdb_column_name(&guard.result, col);
+		std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::toupper(c); });
+		columnNames[col] = std::move(name);
 	}
 
 	std::vector<MapSQLRow> rows;
-
-	while (true) {
-		auto chunk = result->Fetch();
-		if (!chunk || chunk->size() == 0) {
-			break;
+	rows.reserve(rowCount);
+	for (idx_t row = 0; row < rowCount; ++row) {
+		std::map<std::string, std::unique_ptr<SQLValue>> columns;
+		for (idx_t col = 0; col < columnCount; ++col) {
+			columns[columnNames[col]] = convertCell(&guard.result, col, row);
 		}
-
-		for (duckdb::idx_t row = 0; row < chunk->size(); ++row) {
-			std::map<std::string, std::unique_ptr<SQLValue>> columns;
-			for (duckdb::idx_t col = 0; col < chunk->ColumnCount(); ++col) {
-				std::string colName = result->ColumnName(col).GetIdentifierName();
-				std::transform(colName.begin(), colName.end(), colName.begin(),
-				               [](unsigned char c) { return std::toupper(c); });
-				columns[colName] = std::unique_ptr<SQLValue>(new DuckDBSQLValue(chunk->GetValue(col, row)));
-			}
-			rows.emplace_back(std::move(columns));
-		}
+		rows.emplace_back(std::move(columns));
 	}
 
 	return std::unique_ptr<SQLResultSet>(new DuckDBResultSet(std::move(rows)));
