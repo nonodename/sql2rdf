@@ -4,8 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace sparql {
-namespace ast {
+namespace sparql::ast {
 
 enum class TermKind { Iri, Var, BlankNode, Literal };
 
@@ -77,5 +76,4 @@ public:
 	std::unique_ptr<Iri> datatype; // null if simple literal (no datatype, no language tag)
 };
 
-} // namespace ast
-} // namespace sparql
+} // namespace sparql::ast

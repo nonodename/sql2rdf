@@ -6,8 +6,7 @@
 #include "sparql-parser/ast/Path.h"
 #include "sparql-parser/ast/Term.h"
 
-namespace sparql {
-namespace ast {
+namespace sparql::ast {
 
 // Forward declarations to break the GraphPattern <-> Expression <-> Query
 // include cycle (ExistsExpr needs GroupGraphPattern; Filter/Bind need
@@ -172,5 +171,4 @@ public:
 	std::unique_ptr<Query> query;
 };
 
-} // namespace ast
-} // namespace sparql
+} // namespace sparql::ast

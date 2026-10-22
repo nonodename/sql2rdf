@@ -2,27 +2,6 @@
 
 namespace sparql2sql {
 
-namespace xsd {
-
-const char *const kInteger = "http://www.w3.org/2001/XMLSchema#integer";
-const char *const kDecimal = "http://www.w3.org/2001/XMLSchema#decimal";
-const char *const kDouble = "http://www.w3.org/2001/XMLSchema#double";
-const char *const kFloat = "http://www.w3.org/2001/XMLSchema#float";
-const char *const kString = "http://www.w3.org/2001/XMLSchema#string";
-const char *const kBoolean = "http://www.w3.org/2001/XMLSchema#boolean";
-const char *const kDateTime = "http://www.w3.org/2001/XMLSchema#dateTime";
-const char *const kDate = "http://www.w3.org/2001/XMLSchema#date";
-const char *const kTime = "http://www.w3.org/2001/XMLSchema#time";
-const char *const kLong = "http://www.w3.org/2001/XMLSchema#long";
-const char *const kInt = "http://www.w3.org/2001/XMLSchema#int";
-const char *const kShort = "http://www.w3.org/2001/XMLSchema#short";
-const char *const kByte = "http://www.w3.org/2001/XMLSchema#byte";
-const char *const kHexBinary = "http://www.w3.org/2001/XMLSchema#hexBinary";
-
-} // namespace xsd
-
-const char *const kRdfLangString = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-
 bool isXsdIntegralIri(const std::string &iri) {
 	// The narrower subtypes are pure aliases of xsd:integer throughout this
 	// translator (no range clamping), matching translateXsdCast's stance.

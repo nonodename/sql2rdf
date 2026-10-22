@@ -9,8 +9,7 @@
 #include "sparql-parser/ast/GraphPattern.h"
 #include "sparql-parser/ast/Term.h"
 
-namespace sparql {
-namespace ast {
+namespace sparql::ast {
 
 enum class QueryForm { Select, Construct, Describe, Ask };
 enum class OrderDirection { Asc, Desc };
@@ -90,5 +89,4 @@ public:
 	std::unique_ptr<InlineData> valuesClause; // trailing VALUES; may be null
 };
 
-} // namespace ast
-} // namespace sparql
+} // namespace sparql::ast

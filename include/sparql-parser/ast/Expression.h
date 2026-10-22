@@ -7,8 +7,7 @@
 #include "sparql-parser/ast/GraphPattern.h"
 #include "sparql-parser/ast/Term.h"
 
-namespace sparql {
-namespace ast {
+namespace sparql::ast {
 
 enum class ExprKind { Binary, Unary, In, FunctionCall, BuiltInCall, Aggregate, Exists, Literal, VarRef, IriRef };
 
@@ -198,5 +197,4 @@ public:
 	std::unique_ptr<GroupGraphPattern> pattern;
 };
 
-} // namespace ast
-} // namespace sparql
+} // namespace sparql::ast

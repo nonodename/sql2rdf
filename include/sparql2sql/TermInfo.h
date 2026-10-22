@@ -161,25 +161,25 @@ TermInfo meet(const TermInfo &a, const TermInfo &b);
 /// mapping inference, the expression translator and the typed consumers.
 namespace xsd {
 
-extern const char *const kInteger;
-extern const char *const kDecimal;
-extern const char *const kDouble;
-extern const char *const kFloat;
-extern const char *const kString;
-extern const char *const kBoolean;
-extern const char *const kDateTime;
-extern const char *const kDate;
-extern const char *const kTime;
-extern const char *const kLong;
-extern const char *const kInt;
-extern const char *const kShort;
-extern const char *const kByte;
-extern const char *const kHexBinary;
+inline constexpr const char *kInteger = "http://www.w3.org/2001/XMLSchema#integer";
+inline constexpr const char *kDecimal = "http://www.w3.org/2001/XMLSchema#decimal";
+inline constexpr const char *kDouble = "http://www.w3.org/2001/XMLSchema#double";
+inline constexpr const char *kFloat = "http://www.w3.org/2001/XMLSchema#float";
+inline constexpr const char *kString = "http://www.w3.org/2001/XMLSchema#string";
+inline constexpr const char *kBoolean = "http://www.w3.org/2001/XMLSchema#boolean";
+inline constexpr const char *kDateTime = "http://www.w3.org/2001/XMLSchema#dateTime";
+inline constexpr const char *kDate = "http://www.w3.org/2001/XMLSchema#date";
+inline constexpr const char *kTime = "http://www.w3.org/2001/XMLSchema#time";
+inline constexpr const char *kLong = "http://www.w3.org/2001/XMLSchema#long";
+inline constexpr const char *kInt = "http://www.w3.org/2001/XMLSchema#int";
+inline constexpr const char *kShort = "http://www.w3.org/2001/XMLSchema#short";
+inline constexpr const char *kByte = "http://www.w3.org/2001/XMLSchema#byte";
+inline constexpr const char *kHexBinary = "http://www.w3.org/2001/XMLSchema#hexBinary";
 
 } // namespace xsd
 
 /// rdf:langString - the datatype of every language-tagged literal (RDF 1.1).
-extern const char *const kRdfLangString;
+inline constexpr const char *kRdfLangString = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
 bool isXsdNumericIri(const std::string &iri);
 bool isXsdIntegralIri(const std::string &iri);
