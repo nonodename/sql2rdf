@@ -177,7 +177,7 @@ std::unique_ptr<SQLResultSet> DuckDBConnection::execute(const std::string &sqlQu
 		for (duckdb::idx_t row = 0; row < chunk->size(); ++row) {
 			std::map<std::string, std::unique_ptr<SQLValue>> columns;
 			for (duckdb::idx_t col = 0; col < chunk->ColumnCount(); ++col) {
-				std::string colName = result->ColumnName(col);
+				std::string colName = result->ColumnName(col).GetIdentifierName();
 				std::transform(colName.begin(), colName.end(), colName.begin(),
 				               [](unsigned char c) { return std::toupper(c); });
 				columns[colName] = std::unique_ptr<SQLValue>(new DuckDBSQLValue(chunk->GetValue(col, row)));

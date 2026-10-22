@@ -15,7 +15,7 @@ endif()
 option(SQL2RDF_BUILD_TESTS "Build sql2rdf's own test_runner and fetch Catch2" ${SQL2RDF_IS_TOP_LEVEL})
 option(SQL2RDF_BUILD_CLI "Build the SQL2RDF++ CLI executable (requires DuckDB)" ${SQL2RDF_IS_TOP_LEVEL})
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(FetchContent)
@@ -80,7 +80,7 @@ if(SQL2RDF_BUILD_CLI)
     FetchContent_Declare(
       duckdb
       GIT_REPOSITORY https://github.com/duckdb/duckdb.git
-      GIT_TAG        v1.4.4 # Use the latest stable tag
+      GIT_TAG        v2.0.0 # Use the latest stable tag
       URL_HASH SHA256=${DUCKDB_SHA256}
     )
     FetchContent_GetProperties(duckdb)
