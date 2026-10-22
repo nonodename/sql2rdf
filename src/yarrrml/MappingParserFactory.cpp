@@ -8,7 +8,7 @@
 namespace r2rml {
 
 namespace {
-bool hasTtlExtension(const std::string &mappingFilePath) {
+[[nodiscard]] bool hasTtlExtension(const std::string &mappingFilePath) {
 	static const std::string ttlExt = ".ttl";
 	return mappingFilePath.size() >= ttlExt.size() &&
 	       mappingFilePath.compare(mappingFilePath.size() - ttlExt.size(), ttlExt.size(), ttlExt) == 0;

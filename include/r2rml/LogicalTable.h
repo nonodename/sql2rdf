@@ -33,7 +33,7 @@ public:
 	/**
 	 * Return true if this logical table has all required properties set.
 	 */
-	virtual bool isValid() const = 0;
+	[[nodiscard]] virtual bool isValid() const = 0;
 
 	/**
 	 * Write a human-readable representation to the given stream.

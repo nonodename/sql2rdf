@@ -45,7 +45,7 @@ public:
 	/**
 	 * Return true if all contained triples maps are valid.
 	 */
-	bool isValid() const;
+	[[nodiscard]] bool isValid() const;
 
 	/**
 	 * Return true if the mapping is valid for "inside-out" execution – i.e.
@@ -59,7 +59,7 @@ public:
 	 *   - rr:refObjectMap  (ReferencingObjectMap)
 	 *   - rr:JoinCondition (implicit when refObjectMaps are absent)
 	 */
-	bool isValidInsideOut() const;
+	[[nodiscard]] bool isValidInsideOut() const;
 
 	friend std::ostream &operator<<(std::ostream &os, const R2RMLMapping &m);
 

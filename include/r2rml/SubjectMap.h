@@ -19,7 +19,7 @@ public:
 	SubjectMap() = default;
 	~SubjectMap() override;
 
-	bool isValid() const override;
+	[[nodiscard]] bool isValid() const override;
 
 	std::ostream &print(std::ostream &os) const override;
 

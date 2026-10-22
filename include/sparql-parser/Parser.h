@@ -64,7 +64,7 @@ private:
 	void parsePrefixDecl(ast::Prologue &prologue);
 
 	// ---- top-level query forms -----------------------------------------
-	std::unique_ptr<ast::Query> parseQuery();
+	[[nodiscard]] std::unique_ptr<ast::Query> parseQuery();
 	void parseSelectClause(ast::Query &query);
 	void parseConstructQuery(ast::Query &query);
 	void parseDescribeQuery(ast::Query &query);

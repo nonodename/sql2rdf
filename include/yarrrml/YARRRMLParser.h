@@ -27,7 +27,7 @@ public:
 	~YARRRMLParser() override = default;
 
 	/// Return true if `path`'s extension indicates a YARRRML (YAML) mapping file.
-	static bool hasYarrrmlExtension(const std::string &path);
+	[[nodiscard]] static bool hasYarrrmlExtension(const std::string &path);
 
 	/**
 	 * Read `yarrrmlFilePath` and translate it into the R2RML object model.

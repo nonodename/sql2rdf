@@ -51,7 +51,7 @@ public:
 	 * Validate that the term map instance has required properties and correct cardinality.
 	 * To be overridden by subclasses for specific validation logic.
 	 */
-	virtual bool isValid() const {
+	[[nodiscard]] virtual bool isValid() const {
 		return true;
 	}
 

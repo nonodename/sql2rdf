@@ -170,7 +170,7 @@ public:
 	 *
 	 * @throws std::runtime_error if no known format matches the extension.
 	 */
-	static std::unique_ptr<MappingParser> create(const std::string &mappingFilePath);
+	[[nodiscard]] static std::unique_ptr<MappingParser> create(const std::string &mappingFilePath);
 
 	/**
 	 * Load and merge several mapping files (each independently R2RML Turtle
@@ -197,8 +197,8 @@ public:
 	 * @throws std::runtime_error if any file's format can't be determined, or
 	 *         for any fatal problem while reading/parsing an individual file.
 	 */
-	static R2RMLMapping parseMultiple(const std::vector<std::string> &mappingFilePaths,
-	                                  bool ignoreNonFatalErrors = true, bool forceYarrrml = false);
+	[[nodiscard]] static R2RMLMapping parseMultiple(const std::vector<std::string> &mappingFilePaths,
+	                                                bool ignoreNonFatalErrors = true, bool forceYarrrml = false);
 };
 
 } // namespace r2rml

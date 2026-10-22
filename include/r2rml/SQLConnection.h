@@ -22,12 +22,12 @@ public:
 	virtual std::unique_ptr<SQLResultSet> execute(const std::string &sqlQuery) = 0;
 
 	/** Returns the default catalog name, or empty string if not applicable. */
-	virtual std::string getDefaultCatalog() {
+	[[nodiscard]] virtual std::string getDefaultCatalog() {
 		return {};
 	}
 
 	/** Returns the default schema name, or empty string if not applicable. */
-	virtual std::string getDefaultSchema() {
+	[[nodiscard]] virtual std::string getDefaultSchema() {
 		return {};
 	}
 };

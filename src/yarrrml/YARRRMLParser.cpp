@@ -257,8 +257,8 @@ struct VSpec {
 /// only).  `literalsAllowed` controls whether a plain non-IRI-looking string
 /// becomes a literal constant (objects) or is always treated as an IRI
 /// (subjects/predicates, which cannot be literals).
-VSpec classifyValue(const std::string &rawIn, bool allowIriSuffix, bool literalsAllowed,
-                    const std::map<std::string, std::string> &prefixes) {
+[[nodiscard]] VSpec classifyValue(const std::string &rawIn, bool allowIriSuffix, bool literalsAllowed,
+                                  const std::map<std::string, std::string> &prefixes) {
 	std::string raw = rawIn;
 	bool forceIri = false;
 	if (allowIriSuffix) {

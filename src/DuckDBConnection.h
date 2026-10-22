@@ -29,7 +29,7 @@ public:
 	std::unique_ptr<SQLResultSet> execute(const std::string &sqlQuery) override;
 
 	/** Returns "main", DuckDB's default schema name. */
-	std::string getDefaultSchema() override;
+	[[nodiscard]] std::string getDefaultSchema() override;
 
 private:
 	struct Impl;

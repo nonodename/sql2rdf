@@ -28,7 +28,7 @@ public:
 	void insert(const std::string &subj, const std::string &pred, rdf::Term obj);
 
 	/// All objects recorded under (subj, pred), or nullptr if none exist.
-	const std::vector<rdf::Term> *getObjects(const std::string &subj, const std::string &pred) const;
+	[[nodiscard]] const std::vector<rdf::Term> *getObjects(const std::string &subj, const std::string &pred) const;
 
 	/// Lexical form of the first object under (subj, pred) that is a literal,
 	/// or "" if none.
@@ -37,21 +37,22 @@ public:
 	/// is fine for the single-valued R2RML properties it serves (rr:template,
 	/// rr:column, rr:tableName, ...) but is a real loss elsewhere. Callers that
 	/// need the whole term should use getFirstOfKind().
-	std::string getFirstLiteral(const std::string &subj, const std::string &pred) const;
+	[[nodiscard]] std::string getFirstLiteral(const std::string &subj, const std::string &pred) const;
 
 	/// Lexical form of the first object under (subj, pred) that is an IRI, or
 	/// "" if none.
-	std::string getFirstUri(const std::string &subj, const std::string &pred) const;
+	[[nodiscard]] std::string getFirstUri(const std::string &subj, const std::string &pred) const;
 
 	/// First object under (subj, pred) of the given kind, or nullptr if none.
 	///
 	/// Unlike getFirstLiteral()/getFirstUri() this returns the whole term, so
 	/// the caller keeps the datatype and language tag. The pointer is owned by
 	/// the store and is invalidated by a later insert().
-	const rdf::Term *getFirstOfKind(const std::string &subj, const std::string &pred, rdf::TermKind kind) const;
+	[[nodiscard]] const rdf::Term *getFirstOfKind(const std::string &subj, const std::string &pred,
+	                                              rdf::TermKind kind) const;
 
 	/// First object under (subj, pred), as a subject-lookup key (see objKey()), or "" if none.
-	std::string getFirstObjKey(const std::string &subj, const std::string &pred) const;
+	[[nodiscard]] std::string getFirstObjKey(const std::string &subj, const std::string &pred) const;
 
 	/// Canonical lookup key for a collected object: "_:<id>" for blank nodes,
 	/// the IRI for named nodes, empty string for literals (which cannot be used
