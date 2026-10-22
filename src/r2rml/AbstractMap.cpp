@@ -8,7 +8,7 @@ namespace r2rml {
 
 AbstractMap::~AbstractMap() = default;
 
-std::string AbstractMap::percentEncode(const std::string &value) {
+std::string AbstractMap::percentEncode(std::string_view value) {
 	// 1. Fast hex lookup table to replace snprintf
 	static const char hexDigits[] = "0123456789ABCDEF";
 
@@ -46,7 +46,7 @@ std::string AbstractMap::percentEncode(const std::string &value) {
 
 	// If no encoding is needed, return early via copy to trigger NRVO
 	if (requiredSize == value.size()) {
-		return value;
+		return std::string(value);
 	}
 
 	std::string out;

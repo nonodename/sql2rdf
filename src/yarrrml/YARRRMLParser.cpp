@@ -26,6 +26,7 @@
 #include <serd/serd.h>
 #include <yaml-cpp/yaml.h>
 
+#include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <map>
@@ -133,23 +134,23 @@ std::vector<std::string> flattenScalarList(const YAML::Node &node) {
 // IRI / CURIE recognition
 // ---------------------------------------------------------------------------
 
-bool looksAbsoluteIri(const std::string &v) {
+bool looksAbsoluteIri(std::string_view v) {
 	if (v.compare(0, 4, "urn:") == 0) {
 		return true;
 	}
 	std::size_t p = v.find("://");
-	return p != std::string::npos && p > 0;
+	return p != std::string_view::npos && p > 0;
 }
 
-bool looksCurie(const std::string &v, const std::map<std::string, std::string> &prefixes) {
+bool looksCurie(std::string_view v, const std::map<std::string, std::string> &prefixes) {
 	std::size_t colon = v.find(':');
-	if (colon == std::string::npos) {
+	if (colon == std::string_view::npos) {
 		return false;
 	}
-	if (v.find("://") != std::string::npos) {
+	if (v.find("://") != std::string_view::npos) {
 		return false;
 	}
-	return prefixes.count(v.substr(0, colon)) > 0;
+	return prefixes.count(std::string(v.substr(0, colon))) > 0;
 }
 
 /// Resolve `v` to the IRI text a SerdNode should carry: a recognised CURIE is
@@ -157,15 +158,15 @@ bool looksCurie(const std::string &v, const std::map<std::string, std::string> &
 /// relative reference such as "#TriplesMap1") is returned unchanged and left
 /// for TripleCollector to resolve against the document base, exactly as an
 /// angle-bracketed Turtle IRI would have been.
-std::string resolveIri(const std::string &v, const std::map<std::string, std::string> &prefixes) {
+std::string resolveIri(std::string_view v, const std::map<std::string, std::string> &prefixes) {
 	if (looksAbsoluteIri(v)) {
-		return v;
+		return std::string(v);
 	}
 	if (looksCurie(v, prefixes)) {
 		std::size_t colon = v.find(':');
-		return prefixes.at(v.substr(0, colon)) + v.substr(colon + 1);
+		return prefixes.at(std::string(v.substr(0, colon))) + std::string(v.substr(colon + 1));
 	}
-	return v;
+	return std::string(v);
 }
 
 /// If `text` begins with "prefix:" for a known prefix (and isn't already an
@@ -173,19 +174,19 @@ std::string resolveIri(const std::string &v, const std::map<std::string, std::st
 /// IRI. Needed for rr:template literal text: unlike a bare CURIE term, text
 /// embedded in an rr:template value is never resolved by anything downstream,
 /// so it must be expanded here.
-std::string expandLeadingCurie(const std::string &text, const std::map<std::string, std::string> &prefixes) {
+std::string expandLeadingCurie(std::string_view text, const std::map<std::string, std::string> &prefixes) {
 	std::size_t colon = text.find(':');
-	if (colon == std::string::npos) {
-		return text;
+	if (colon == std::string_view::npos) {
+		return std::string(text);
 	}
 	if (text.compare(colon + 1, 2, "//") == 0) {
-		return text; // absolute IRI (scheme://...), not a CURIE
+		return std::string(text); // absolute IRI (scheme://...), not a CURIE
 	}
-	auto it = prefixes.find(text.substr(0, colon));
+	auto it = prefixes.find(std::string(text.substr(0, colon)));
 	if (it == prefixes.end()) {
-		return text;
+		return std::string(text);
 	}
-	return it->second + text.substr(colon + 1);
+	return it->second + std::string(text.substr(colon + 1));
 }
 
 // ---------------------------------------------------------------------------
@@ -198,7 +199,7 @@ struct Token {
 	std::string text;
 };
 
-std::vector<Token> tokenizeValue(const std::string &raw) {
+std::vector<Token> tokenizeValue(std::string_view raw) {
 	std::vector<Token> toks;
 	std::string lit;
 	std::size_t i = 0;
@@ -211,12 +212,12 @@ std::vector<Token> tokenizeValue(const std::string &raw) {
 		}
 		if (raw[i] == '$' && i + 1 < n && raw[i + 1] == '(') {
 			std::size_t end = raw.find(')', i + 2);
-			if (end != std::string::npos) {
+			if (end != std::string_view::npos) {
 				if (!lit.empty()) {
 					toks.push_back(Token {false, lit});
 					lit.clear();
 				}
-				toks.push_back(Token {true, raw.substr(i + 2, end - (i + 2))});
+				toks.push_back(Token {true, std::string(raw.substr(i + 2, end - (i + 2)))});
 				i = end + 1;
 				continue;
 			}
@@ -972,10 +973,10 @@ std::string computeFileBaseUri(const std::string &path) {
 // ---------------------------------------------------------------------------
 
 bool YARRRMLParser::hasYarrrmlExtension(const std::string &path) {
-	static const char *const yarrrmlExtensions[] = {".yml", ".yaml", ".yarrrml"};
-	for (const char *ext : yarrrmlExtensions) {
-		std::size_t extLen = std::strlen(ext);
-		if (path.size() >= extLen && path.compare(path.size() - extLen, extLen, ext) == 0) {
+	static const std::filesystem::path yarrrmlExtensions[] = {".yml", ".yaml", ".yarrrml"};
+	std::filesystem::path ext = std::filesystem::path(path).extension();
+	for (const auto &yarrrmlExt : yarrrmlExtensions) {
+		if (ext == yarrrmlExt) {
 			return true;
 		}
 	}

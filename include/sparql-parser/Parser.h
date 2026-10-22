@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "sparql-parser/Lexer.h"
@@ -47,11 +48,11 @@ private:
 	bool matchKeyword(const char *kw);
 	Token expectType(TokenType type, const char *what);
 	void expectKeyword(const char *kw);
-	[[noreturn]] void error(const std::string &message) const;
+	[[noreturn]] void error(std::string_view message) const;
 
 	// ---- IRIs / prologue -----------------------------------------------
-	std::string lookupPrefix(const std::string &prefix) const;
-	std::string resolveIriValue(TokenType type, const std::string &lexicalForm) const;
+	std::string lookupPrefix(std::string_view prefix) const;
+	std::string resolveIriValue(TokenType type, std::string_view lexicalForm) const;
 	std::unique_ptr<ast::Iri> parseIri();
 	std::unique_ptr<ast::Var> parseVar();
 	std::unique_ptr<ast::Iri> makeIri(const std::string &absoluteValue, const std::string &lexicalForm);

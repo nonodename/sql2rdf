@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <string_view>
 
 #include "sparql2sql/TermInfo.h"
 
@@ -51,7 +52,7 @@ TypeCategory categoryOf(const std::string &normalized) {
 	return TypeCategory::Other;
 }
 
-bool iequals(const std::string &a, const std::string &b) {
+bool iequals(std::string_view a, std::string_view b) {
 	if (a.size() != b.size()) {
 		return false;
 	}
