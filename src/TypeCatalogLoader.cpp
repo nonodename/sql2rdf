@@ -145,8 +145,8 @@ void loadUniqueKeys(r2rml::SQLConnection &conn, sparql2sql::TypeCatalog &catalog
 		}
 		keys[std::make_pair(table, constraint)].insert(column);
 	}
-	for (const auto &entry : keys) {
-		catalog.uniqueKeys[entry.first.first].push_back(entry.second);
+	for (const auto &[tableConstraint, cols] : keys) {
+		catalog.uniqueKeys[tableConstraint.first].push_back(cols);
 	}
 }
 
@@ -170,8 +170,8 @@ void loadViewTypes(r2rml::SQLConnection &conn, const sparql2sql::ViewSource &vie
 	}
 	// Merge rather than assign: a description that came back partial must not
 	// wipe types an earlier pass already established for the same identity.
-	for (const auto &entry : columnTypes) {
-		catalog.columnTypes[view.identity][entry.first] = entry.second;
+	for (const auto &[column, type] : columnTypes) {
+		catalog.columnTypes[view.identity][column] = type;
 	}
 }
 

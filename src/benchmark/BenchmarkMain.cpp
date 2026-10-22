@@ -251,9 +251,9 @@ int main(int argc, char *argv[]) {
 	}
 	if (queryName) {
 		std::vector<std::pair<std::string, std::string>> filtered;
-		for (std::size_t i = 0; i < queries.size(); ++i) {
-			if (queries[i].first == queryName) {
-				filtered.push_back(queries[i]);
+		for (const auto &[name, text] : queries) {
+			if (name == queryName) {
+				filtered.emplace_back(name, text);
 				break;
 			}
 		}

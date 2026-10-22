@@ -599,22 +599,24 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 	Resolved subjectR = resolveSource(subjectSrc, dialect, ctx.catalog());
 	addUnique(requiredNonNull, subjectR.requiredNonNull);
 	if (!subjectSpec.isVar) {
-		InversionResult inv = resolveInversion(subjectSrc, *subjectSpec.boundTerm, dialect, ctx.catalog());
-		if (!inv.possible) {
+		if (InversionResult inv = resolveInversion(subjectSrc, *subjectSpec.boundTerm, dialect, ctx.catalog());
+		    !inv.possible) {
 			return;
+		} else {
+			addUnique(whereConditions, inv.whereConditions);
 		}
-		addUnique(whereConditions, inv.whereConditions);
 	}
 
 	Resolved predicateR = resolveSource(predicateSrc, dialect, ctx.catalog());
 	addUnique(requiredNonNull, predicateR.requiredNonNull);
 	if (predicateSpec.kind == PredicateConstraint::ConstantIri) {
 		sparql::ast::Iri predicateBoundTerm(predicateSpec.iri, predicateSpec.iri);
-		InversionResult inv = resolveInversion(predicateSrc, predicateBoundTerm, dialect, ctx.catalog());
-		if (!inv.possible) {
+		if (InversionResult inv = resolveInversion(predicateSrc, predicateBoundTerm, dialect, ctx.catalog());
+		    !inv.possible) {
 			return;
+		} else {
+			addUnique(whereConditions, inv.whereConditions);
 		}
-		addUnique(whereConditions, inv.whereConditions);
 	} else if (predicateSpec.kind == PredicateConstraint::NotIn) {
 		if (!applyPredicateExclusions(predicateSrc, predicateSpec.excludedIris, dialect, ctx.catalog(),
 		                              whereConditions)) {
@@ -625,11 +627,12 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 	Resolved objectR = resolveSource(objectSrc, dialect, ctx.catalog());
 	addUnique(requiredNonNull, objectR.requiredNonNull);
 	if (!objectSpec.isVar) {
-		InversionResult inv = resolveInversion(objectSrc, *objectSpec.boundTerm, dialect, ctx.catalog());
-		if (!inv.possible) {
+		if (InversionResult inv = resolveInversion(objectSrc, *objectSpec.boundTerm, dialect, ctx.catalog());
+		    !inv.possible) {
 			return;
+		} else {
+			addUnique(whereConditions, inv.whereConditions);
 		}
-		addUnique(whereConditions, inv.whereConditions);
 	}
 
 	// A named-graph branch resolves its graph term like any other position. Its
