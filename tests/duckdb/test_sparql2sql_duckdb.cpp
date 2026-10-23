@@ -1739,3 +1739,21 @@ TEST_CASE("constraints: a NOT NULL column's guard is dropped without changing re
 	auto rows = collectRows(*rs);
 	CHECK(rows.size() == 3);
 }
+
+TEST_CASE("DuckDBConnection::execute: a VARCHAR with an embedded NUL byte round-trips intact") {
+	// Exercises the adapter directly (no R2RML/SPARQL involved): DuckDB's
+	// legacy row-wise accessors materialize VARCHAR cells as NUL-terminated
+	// char*, which would silently truncate this value at the embedded NUL.
+	DuckDBConnection conn(":memory:");
+	conn.execute("CREATE TABLE T (V VARCHAR)");
+	const std::string expected("hi\0bye", 6);
+	conn.execute("INSERT INTO T VALUES (CHR(104) || CHR(105) || CHR(0) || CHR(98) || CHR(121) || CHR(101))");
+
+	std::unique_ptr<r2rml::SQLResultSet> rs = conn.execute("SELECT V FROM T");
+	REQUIRE(rs->next());
+	auto value = rs->getCurrentRow().getValue("V");
+	REQUIRE_FALSE(value->isNull());
+	CHECK(value->asString() == expected);
+	CHECK(value->asString().size() == 6);
+	CHECK_FALSE(rs->next());
+}
