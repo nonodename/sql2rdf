@@ -296,8 +296,7 @@ void TripleCollector::insertResolved(bool subject_is_blank, const std::string &s
 	// beginSource()): blank subjects are always scope-tagged uniquely by the
 	// caller, so they never reach this check.
 	if (!subject_is_blank) {
-		auto ownerIt = impl_->subjectOwner.find(subject_key);
-		if (ownerIt == impl_->subjectOwner.end()) {
+		if (auto ownerIt = impl_->subjectOwner.find(subject_key); ownerIt == impl_->subjectOwner.end()) {
 			impl_->subjectOwner.emplace(subject_key, impl_->currentScope);
 		} else if (ownerIt->second != impl_->currentScope) {
 			std::string conflictTag = subject_key + "\x1f" + std::to_string(impl_->currentScope);
@@ -820,10 +819,7 @@ static R2RMLMapping buildMappingFromTriples(TripleStore &triples, SerdEnv *env, 
 
 	// Identify TriplesMap subjects: any non-blank named resource carrying at
 	// least one characteristic R2RML TriplesMap predicate.
-	for (const auto &entry : triples) {
-		const std::string &subj = entry.first;
-		const TripleStore::PredMap &preds = entry.second;
-
+	for (const auto &[subj, preds] : triples) {
 		// Skip blank nodes – they appear only as parts of maps, not TM subjects.
 		if (subj.size() >= 2 && subj[0] == '_' && subj[1] == ':') {
 			continue;
@@ -871,17 +867,17 @@ static R2RMLMapping buildMappingFromTriples(TripleStore &triples, SerdEnv *env, 
 	// -----------------------------------------------------------------------
 	// Phase 3 – resolve parentTriplesMap back-references
 	// -----------------------------------------------------------------------
-	for (auto &ref : ctx.parentRefs) {
+	for (auto &[refMap, parentId] : ctx.parentRefs) {
 		bool found = false;
 		for (const auto &tm : mapping.triplesMaps) {
-			if (tm->id == ref.second) {
-				ref.first->parentTriplesMap = tm.get();
+			if (tm->id == parentId) {
+				refMap->parentTriplesMap = tm.get();
 				found = true;
 				break;
 			}
 		}
 		if (!found) {
-			ctx.errors.push_back("R2RML parser: unresolved parentTriplesMap <" + ref.second + ">");
+			ctx.errors.push_back("R2RML parser: unresolved parentTriplesMap <" + parentId + ">");
 		}
 	}
 

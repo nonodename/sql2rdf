@@ -38,14 +38,14 @@ public:
 	void processRow(const SQLRow &row, const rdf::Term &subject, SerdWriter &rdfWriter, const R2RMLMapping &mapping,
 	                SQLConnection &dbConnection, const std::vector<std::unique_ptr<GraphMap>> &subjectGraphMaps) const;
 
-	bool isValid() const;
+	[[nodiscard]] bool isValid() const;
 
 	/**
 	 * Return true if this PredicateObjectMap is valid for inside-out execution.
 	 * rr:refObjectMap (ReferencingObjectMap) and therefore rr:JoinCondition are
 	 * not permitted; all other maps must satisfy their own isValid() checks.
 	 */
-	bool isValidInsideOut() const;
+	[[nodiscard]] bool isValidInsideOut() const;
 
 	std::ostream &print(std::ostream &os) const override;
 

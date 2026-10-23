@@ -1,12 +1,13 @@
 #include "sql2rdf/TypeCatalogLoader.h"
 
 #include <cctype>
-#include <cstring>
 #include <exception>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -25,9 +26,9 @@ namespace {
 // Resolve a result column by name, case-insensitively: backends report result
 // column names in their own case (DuckDB upper-cases them). Returns nullptr if
 // absent.
-const std::string *findResultColumn(const std::vector<std::string> &names, const char *wanted) {
+const std::string *findResultColumn(const std::vector<std::string> &names, std::string_view wanted) {
 	for (const auto &n : names) {
-		if (n.size() != std::strlen(wanted)) {
+		if (n.size() != wanted.size()) {
 			continue;
 		}
 		bool same = true;
@@ -47,47 +48,44 @@ const std::string *findResultColumn(const std::vector<std::string> &names, const
 // Read a (name, type) pair out of one catalog/DESCRIBE row, resolving both
 // columns by NAME rather than position: SQLRow holds its columns in a
 // std::map, so columnNames() comes back sorted alphabetically rather than in
-// SELECT order. Returns false if either is missing or NULL.
-bool readPair(const r2rml::SQLRow &row, const char *nameColumn, const char *typeColumn, std::string &nameOut,
-              std::string &typeOut) {
+// SELECT order. Returns nullopt if either is missing or NULL.
+std::optional<std::pair<std::string, std::string>> readPair(const r2rml::SQLRow &row, std::string_view nameColumn,
+                                                            std::string_view typeColumn) {
 	std::vector<std::string> names = row.columnNames();
 	const std::string *nameCol = findResultColumn(names, nameColumn);
 	const std::string *typeCol = findResultColumn(names, typeColumn);
 	if (nameCol == nullptr || typeCol == nullptr) {
-		return false;
+		return std::nullopt;
 	}
 	std::unique_ptr<r2rml::SQLValue> name = row.getValue(*nameCol);
 	std::unique_ptr<r2rml::SQLValue> type = row.getValue(*typeCol);
 	if (name->isNull() || type->isNull()) {
-		return false;
+		return std::nullopt;
 	}
-	nameOut = name->asString();
-	typeOut = type->asString();
-	return true;
+	return std::make_pair(name->asString(), type->asString());
 }
 
 // Read one named result column as a string. Resolved by name,
-// case-insensitively, for the same reason readPair is. Returns false when the
-// column is absent from the result or NULL in this row.
-bool readColumn(const r2rml::SQLRow &row, const char *wanted, std::string &out) {
+// case-insensitively, for the same reason readPair is. Returns nullopt when
+// the column is absent from the result or NULL in this row.
+std::optional<std::string> readColumn(const r2rml::SQLRow &row, std::string_view wanted) {
 	std::vector<std::string> names = row.columnNames();
 	const std::string *col = findResultColumn(names, wanted);
 	if (col == nullptr) {
-		return false;
+		return std::nullopt;
 	}
 	std::unique_ptr<r2rml::SQLValue> value = row.getValue(*col);
 	if (value->isNull()) {
-		return false;
+		return std::nullopt;
 	}
-	out = value->asString();
-	return true;
+	return value->asString();
 }
 
 // True for information_schema's 'NO' spelling of is_nullable, case-insensitively
 // and ignoring surrounding whitespace. Anything else - 'YES', an unexpected
 // spelling, an absent column - reads as "not known to be non-nullable", which is
 // the conservative direction: a guard we would have emitted anyway stays.
-bool isNoNullable(const std::string &raw) {
+bool isNoNullable(std::string_view raw) {
 	std::string trimmed;
 	for (char c : raw) {
 		if (c != ' ' && c != '\t') {
@@ -104,16 +102,14 @@ void loadBaseTableTypes(r2rml::SQLConnection &conn, sparql2sql::TypeCatalog &cat
 	    conn.execute("SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns");
 	while (rs->next()) {
 		const r2rml::SQLRow &row = rs->getCurrentRow();
-		std::string table;
-		std::string column;
-		std::string type;
-		if (!readColumn(row, "table_name", table) || !readPair(row, "column_name", "data_type", column, type)) {
+		auto table = readColumn(row, "table_name");
+		auto colType = readPair(row, "column_name", "data_type");
+		if (!table || !colType) {
 			continue;
 		}
-		catalog.columnTypes[table][column] = type;
-		std::string nullable;
-		if (readColumn(row, "is_nullable", nullable) && isNoNullable(nullable)) {
-			catalog.notNullColumns[table].insert(column);
+		catalog.columnTypes[*table][colType->first] = colType->second;
+		if (auto nullable = readColumn(row, "is_nullable"); nullable && isNoNullable(*nullable)) {
+			catalog.notNullColumns[*table].insert(colType->first);
 		}
 	}
 }
@@ -136,17 +132,16 @@ void loadUniqueKeys(r2rml::SQLConnection &conn, sparql2sql::TypeCatalog &catalog
 	std::map<std::pair<std::string, std::string>, std::set<std::string>> keys;
 	while (rs->next()) {
 		const r2rml::SQLRow &row = rs->getCurrentRow();
-		std::string table;
-		std::string constraint;
-		std::string column;
-		if (!readColumn(row, "table_name", table) || !readColumn(row, "constraint_name", constraint) ||
-		    !readColumn(row, "column_name", column)) {
+		auto table = readColumn(row, "table_name");
+		auto constraint = readColumn(row, "constraint_name");
+		auto column = readColumn(row, "column_name");
+		if (!table || !constraint || !column) {
 			continue;
 		}
-		keys[std::make_pair(table, constraint)].insert(column);
+		keys[std::make_pair(*table, *constraint)].insert(*column);
 	}
-	for (const auto &entry : keys) {
-		catalog.uniqueKeys[entry.first.first].push_back(entry.second);
+	for (const auto &[tableConstraint, cols] : keys) {
+		catalog.uniqueKeys[tableConstraint.first].push_back(cols);
 	}
 }
 
@@ -158,20 +153,19 @@ void loadViewTypes(r2rml::SQLConnection &conn, const sparql2sql::ViewSource &vie
 	std::unique_ptr<r2rml::SQLResultSet> rs = conn.execute("DESCRIBE SELECT * FROM (" + view.sql + ") AS sql2rdf_view");
 	std::map<std::string, std::string> columnTypes;
 	while (rs->next()) {
-		std::string column;
-		std::string type;
-		if (!readPair(rs->getCurrentRow(), "column_name", "column_type", column, type)) {
+		auto colType = readPair(rs->getCurrentRow(), "column_name", "column_type");
+		if (!colType) {
 			continue;
 		}
-		columnTypes[column] = type;
+		columnTypes[colType->first] = colType->second;
 	}
 	if (columnTypes.empty()) {
 		return;
 	}
 	// Merge rather than assign: a description that came back partial must not
 	// wipe types an earlier pass already established for the same identity.
-	for (const auto &entry : columnTypes) {
-		catalog.columnTypes[view.identity][entry.first] = entry.second;
+	for (const auto &[column, type] : columnTypes) {
+		catalog.columnTypes[view.identity][column] = type;
 	}
 }
 

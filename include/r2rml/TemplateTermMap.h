@@ -19,7 +19,7 @@ public:
 
 	void generateRDFTerm(const SQLRow &row, rdf::Term &out) const override;
 
-	bool isValid() const override {
+	[[nodiscard]] bool isValid() const override {
 		// templateString must not be empty
 		return !templateString.empty();
 	}

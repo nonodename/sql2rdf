@@ -9,8 +9,13 @@ namespace r2rml {
 /**
  * Concrete SQLConnection implementation backed by DuckDB.
  *
- * Uses the PIMPL idiom so consumers of this header do not need duckdb.hpp
+ * Uses the PIMPL idiom so consumers of this header do not need duckdb.h
  * on their include path.
+ *
+ * Implemented against DuckDB's stable C API (duckdb.h), not the internal,
+ * unstable C++ API (duckdb.hpp) - DuckDB 2.0 stopped bundling duckdb.hpp
+ * in its prebuilt release packages, so the C API is the only portable way
+ * to link a prebuilt DuckDB from CI.
  *
  * Usage:
  *   DuckDBConnection conn("path/to/database.db");
@@ -29,7 +34,7 @@ public:
 	std::unique_ptr<SQLResultSet> execute(const std::string &sqlQuery) override;
 
 	/** Returns "main", DuckDB's default schema name. */
-	std::string getDefaultSchema() override;
+	[[nodiscard]] std::string getDefaultSchema() override;
 
 private:
 	struct Impl;

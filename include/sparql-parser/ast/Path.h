@@ -5,8 +5,7 @@
 
 #include "sparql-parser/ast/Term.h"
 
-namespace sparql {
-namespace ast {
+namespace sparql::ast {
 
 enum class PathKind {
 	Predicate,
@@ -125,5 +124,4 @@ public:
 	std::vector<std::unique_ptr<Iri>> inverse; // ^iri_j+1 .. ^iri_n
 };
 
-} // namespace ast
-} // namespace sparql
+} // namespace sparql::ast

@@ -64,10 +64,10 @@ public:
 	std::unique_ptr<SQLResultSet> execute(const std::string &query) override {
 		const std::vector<MapSQLRow> *best = nullptr;
 		size_t bestLen = 0;
-		for (const auto &kv : results_) {
-			if (query.find(kv.first) != std::string::npos && kv.first.size() > bestLen) {
-				bestLen = kv.first.size();
-				best = &kv.second;
+		for (const auto &[fragment, rows] : results_) {
+			if (query.find(fragment) != std::string::npos && fragment.size() > bestLen) {
+				bestLen = fragment.size();
+				best = &rows;
 			}
 		}
 		if (best) {

@@ -35,14 +35,14 @@ public:
 	void generateTriples(const SQLRow &row, SerdWriter &rdfWriter, const R2RMLMapping &mapping,
 	                     SQLConnection &dbConnection) const;
 
-	bool isValid() const;
+	[[nodiscard]] bool isValid() const;
 
 	/**
 	 * Return true if this TriplesMap is valid for inside-out (SQL-export)
 	 * execution.  Requires no logicalTable, a valid subjectMap, and all
 	 * predicate-object maps to also be valid inside-out.
 	 */
-	bool isValidInsideOut() const;
+	[[nodiscard]] bool isValidInsideOut() const;
 
 	std::ostream &print(std::ostream &os) const override;
 

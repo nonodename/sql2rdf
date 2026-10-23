@@ -23,7 +23,7 @@ public:
 
 	void generateRDFTerm(const SQLRow &row, rdf::Term &out) const override;
 
-	bool isValid() const override {
+	[[nodiscard]] bool isValid() const override {
 		// An absent term means there was no usable rr:constant. Note this also
 		// rejects an EMPTY constant: the SerdNode constructor refuses a
 		// zero-length node, preserving the long-standing behaviour that

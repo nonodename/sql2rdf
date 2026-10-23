@@ -18,7 +18,7 @@ public:
 
 	std::string computeDatatypeIRI(const SQLRow &row) const override;
 
-	bool isValid() const override {
+	[[nodiscard]] bool isValid() const override {
 		// columnName must not be empty
 		return !columnName.empty();
 	}

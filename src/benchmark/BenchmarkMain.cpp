@@ -55,7 +55,7 @@ namespace {
 // with a clear error, so a malformed queries file fails loudly rather than
 // silently.
 // -----------------------------------------------------------------------------
-std::vector<std::pair<std::string, std::string>> loadQueries(const std::string &path) {
+[[nodiscard]] std::vector<std::pair<std::string, std::string>> loadQueries(const std::string &path) {
 	YAML::Node root;
 	try {
 		root = YAML::LoadFile(path);
@@ -92,7 +92,7 @@ struct Stats {
 	double max = 0.0;
 };
 
-Stats summarize(std::vector<double> samples) {
+[[nodiscard]] Stats summarize(std::vector<double> samples) {
 	Stats s;
 	if (samples.empty()) {
 		return s;
@@ -133,7 +133,7 @@ void printHelp(const char *programName) {
 	          << "  -h, --help       Show this help message.\n";
 }
 
-int parseCount(const char *arg, const char *flag) {
+[[nodiscard]] int parseCount(const char *arg, const char *flag) {
 	char *end;
 	int64_t value = std::strtol(arg, &end, 10);
 	if (*end != '\0') {
@@ -251,9 +251,9 @@ int main(int argc, char *argv[]) {
 	}
 	if (queryName) {
 		std::vector<std::pair<std::string, std::string>> filtered;
-		for (std::size_t i = 0; i < queries.size(); ++i) {
-			if (queries[i].first == queryName) {
-				filtered.push_back(queries[i]);
+		for (const auto &[name, text] : queries) {
+			if (name == queryName) {
+				filtered.emplace_back(name, text);
 				break;
 			}
 		}

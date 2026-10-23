@@ -69,8 +69,7 @@ std::vector<EquiKey> buildKeys(const RelNode &left, const RelNode &right) {
 
 } // namespace
 
-RelNodePtr identityRelation(TranslationContext &ctx) {
-	(void)ctx;
+RelNodePtr identityRelation([[maybe_unused]] TranslationContext &ctx) {
 	return RelNodePtr(new SingleRowNode());
 }
 
@@ -179,8 +178,7 @@ RelNodePtr translateInlineData(const sparql::ast::InlineData &values, Translatio
 	return node;
 }
 
-RelNodePtr innerJoin(RelNodePtr left, RelNodePtr right, TranslationContext &ctx) {
-	(void)ctx;
+RelNodePtr innerJoin(RelNodePtr left, RelNodePtr right, [[maybe_unused]] TranslationContext &ctx) {
 	if (left->kind() == RelKind::SingleRow) {
 		return right;
 	}
@@ -223,8 +221,7 @@ RelNodePtr innerJoin(RelNodePtr left, RelNodePtr right, TranslationContext &ctx)
 	return node;
 }
 
-RelNodePtr leftOuterJoin(RelNodePtr left, RelNodePtr right, TranslationContext &ctx) {
-	(void)ctx;
+RelNodePtr leftOuterJoin(RelNodePtr left, RelNodePtr right, [[maybe_unused]] TranslationContext &ctx) {
 	if (right->kind() == RelKind::SingleRow) {
 		return left;
 	}
@@ -265,8 +262,7 @@ RelNodePtr leftOuterJoin(RelNodePtr left, RelNodePtr right, TranslationContext &
 	return node;
 }
 
-RelNodePtr antiJoin(RelNodePtr left, RelNodePtr right, TranslationContext &ctx) {
-	(void)ctx;
+RelNodePtr antiJoin(RelNodePtr left, RelNodePtr right, [[maybe_unused]] TranslationContext &ctx) {
 	std::set<std::string> shared = setIntersect(left->allVars(), right->allVars());
 	if (shared.empty()) {
 		// SPARQL 1.1 Section 18.2: MINUS with zero shared variables can never

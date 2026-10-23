@@ -10,7 +10,7 @@ The repo also includes `sql2rdf_sparql`, a standalone SPARQL 1.1 Query grammar p
 
 `sql2rdf_sparql2sql` (`namespace sparql2sql::`) is the one deliberate bridge between the two: it uses an R2RML mapping *in reverse* to translate a SPARQL query into a SQL query that a relational engine can run directly, without ever materializing the RDF graph. `sql2rdf_sparql` and `sql2rdf_r2rml` themselves remain mutually independent — only `sql2rdf_sparql2sql` depends on both. The CLI exposes it via `-T <file.rq>` (see "Architecture" and `doc/api.md` for the supported SPARQL subset and known limitations).
 
-Language standard is C++11 (`CMAKE_CXX_STANDARD 11` in CMakeLists.txt). Do not use C++14+ features in library or test code.
+Language standard is C++17 (`CMAKE_CXX_STANDARD 17` in CMakeLists.txt). Do not use features beyond C++17 in library or test code.
 
 ## Setup and build
 

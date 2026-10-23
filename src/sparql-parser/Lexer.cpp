@@ -126,9 +126,9 @@ bool Lexer::match(char expected) {
 	return true;
 }
 
-void Lexer::error(const std::string &message) {
+void Lexer::error(std::string_view message) {
 	std::string near = source_.substr(pos_, 16);
-	throw ParseError(message, line_, column_, near);
+	throw ParseError(std::string(message), line_, column_, near);
 }
 
 Token Lexer::makeToken(TokenType type, std::string text, std::size_t startLine, std::size_t startColumn) {

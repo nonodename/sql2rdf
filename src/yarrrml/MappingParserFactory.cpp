@@ -3,15 +3,14 @@
 #include "r2rml/R2RMLParser.h"
 #include "yarrrml/YARRRMLParser.h"
 
+#include <filesystem>
 #include <stdexcept>
 
 namespace r2rml {
 
 namespace {
-bool hasTtlExtension(const std::string &mappingFilePath) {
-	static const std::string ttlExt = ".ttl";
-	return mappingFilePath.size() >= ttlExt.size() &&
-	       mappingFilePath.compare(mappingFilePath.size() - ttlExt.size(), ttlExt.size(), ttlExt) == 0;
+[[nodiscard]] bool hasTtlExtension(const std::string &mappingFilePath) {
+	return std::filesystem::path(mappingFilePath).extension() == ".ttl";
 }
 } // namespace
 

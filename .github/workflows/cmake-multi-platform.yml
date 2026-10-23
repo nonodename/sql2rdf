@@ -47,11 +47,10 @@ jobs:
 
     - name: Install DuckDB
       run: |
-        wget -nv https://install.duckdb.org/v1.4.4/libduckdb-linux-amd64.zip
-        unzip libduckdb-linux-amd64.zip -d duckdb
-        sudo mv duckdb/libduckdb.so /usr/local/lib/libduckdb.so
-        sudo mv duckdb/duckdb.h /usr/local/include/duckdb.h
-        sudo mv duckdb/duckdb.hpp /usr/local/include/duckdb.hpp
+        wget -nv https://install.duckdb.org/v2.0.0/duckdb-shared-libs-linux-amd64.tar.gz
+        tar -xzf duckdb-shared-libs-linux-amd64.tar.gz
+        sudo mv libduckdb.so /usr/local/lib/libduckdb.so
+        sudo mv duckdb.h /usr/local/include/duckdb.h
         sudo ldconfig /usr/local/lib
 
     - name: Configure CMake
@@ -155,22 +154,21 @@ jobs:
     - name: Install DuckDB
       run: |
         if [ "$RUNNER_OS" == "Linux" ]; then
-          wget -nv https://install.duckdb.org/v1.4.4/libduckdb-linux-amd64.zip
-          unzip libduckdb-linux-amd64.zip -d duckdb
-          sudo mv duckdb/libduckdb.so /usr/local/lib/libduckdb.so
-          sudo mv duckdb/duckdb.h /usr/local/include/duckdb.h
-          sudo mv duckdb/duckdb.hpp /usr/local/include/duckdb.hpp
+          wget -nv https://install.duckdb.org/v2.0.0/duckdb-shared-libs-linux-amd64.tar.gz
+          tar -xzf duckdb-shared-libs-linux-amd64.tar.gz
+          sudo mv libduckdb.so /usr/local/lib/libduckdb.so
+          sudo mv duckdb.h /usr/local/include/duckdb.h
           sudo ldconfig /usr/local/lib
         elif [ "$RUNNER_OS" == "macOS" ]; then
           brew install duckdb
         elif [ "$RUNNER_OS" == "Windows" ]; then
-          curl -LO  https://install.duckdb.org/v1.4.4/libduckdb-windows-amd64.zip
-          unzip libduckdb-windows-amd64.zip -d duckdb
+          curl -LO  https://install.duckdb.org/v2.0.0/duckdb-shared-libs-windows-amd64.tar.gz
+          tar -xzf duckdb-shared-libs-windows-amd64.tar.gz
           mkdir -p "C:/duckdb/include"
           mkdir -p "C:/duckdb/lib"
-          mv duckdb/*.h* "C:/duckdb/include/"
-          mv duckdb/*.lib "C:/duckdb/lib/"
-          mv duckdb/*.dll "C:/duckdb/lib/"
+          mv *.h* "C:/duckdb/include/"
+          mv *.lib "C:/duckdb/lib/"
+          mv *.dll "C:/duckdb/lib/"
           
           # Add the DLL to PATH so tests can run later
           echo "C:\duckdb\lib" >> $GITHUB_PATH

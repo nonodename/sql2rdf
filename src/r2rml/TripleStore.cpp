@@ -7,15 +7,13 @@ void TripleStore::insert(const std::string &subj, const std::string &pred, rdf::
 }
 
 const std::vector<rdf::Term> *TripleStore::getObjects(const std::string &subj, const std::string &pred) const {
-	auto si = data_.find(subj);
-	if (si == data_.end()) {
+	if (auto si = data_.find(subj); si == data_.end()) {
 		return nullptr;
-	}
-	auto pi = si->second.find(pred);
-	if (pi == si->second.end()) {
+	} else if (auto pi = si->second.find(pred); pi == si->second.end()) {
 		return nullptr;
+	} else {
+		return &pi->second;
 	}
-	return &pi->second;
 }
 
 const rdf::Term *TripleStore::getFirstOfKind(const std::string &subj, const std::string &pred,

@@ -2,6 +2,7 @@
 
 #include <ostream>
 #include <string>
+#include <string_view>
 
 #include <serd/serd.h>
 
@@ -24,7 +25,7 @@ public:
 protected:
 	/// Percent-encode a string per RFC 3986 unreserved-character rules
 	/// (encodes all bytes that are not A-Z a-z 0-9 - _ . ~).
-	static std::string percentEncode(const std::string &value);
+	static std::string percentEncode(std::string_view value);
 
 	/// Throw std::runtime_error if writing an RDF statement via Serd failed.
 	static void checkWriteStatus(SerdStatus status);

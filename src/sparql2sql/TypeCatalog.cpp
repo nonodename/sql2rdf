@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <string_view>
 
 #include "sparql2sql/TermInfo.h"
 
@@ -51,7 +52,7 @@ TypeCategory categoryOf(const std::string &normalized) {
 	return TypeCategory::Other;
 }
 
-bool iequals(const std::string &a, const std::string &b) {
+bool iequals(std::string_view a, std::string_view b) {
 	if (a.size() != b.size()) {
 		return false;
 	}
@@ -70,13 +71,13 @@ std::string TypeCatalog::typeOf(const std::string &table, const std::string &col
 	// mapping's declared table/column names (e.g. "COMPANY") often differ in
 	// case from what a backend's information_schema reports (DuckDB folds
 	// unquoted identifiers to lowercase).
-	for (const auto &t : columnTypes) {
-		if (!iequals(t.first, table)) {
+	for (const auto &[tableName, cols] : columnTypes) {
+		if (!iequals(tableName, table)) {
 			continue;
 		}
-		for (const auto &c : t.second) {
-			if (iequals(c.first, column)) {
-				return c.second;
+		for (const auto &[colName, type] : cols) {
+			if (iequals(colName, column)) {
+				return type;
 			}
 		}
 	}
@@ -85,11 +86,11 @@ std::string TypeCatalog::typeOf(const std::string &table, const std::string &col
 
 bool TypeCatalog::isNotNull(const std::string &table, const std::string &column) const {
 	// Case-insensitive on both levels, for the same reason typeOf is.
-	for (const auto &t : notNullColumns) {
-		if (!iequals(t.first, table)) {
+	for (const auto &[tableName, cols] : notNullColumns) {
+		if (!iequals(tableName, table)) {
 			continue;
 		}
-		for (const auto &c : t.second) {
+		for (const auto &c : cols) {
 			if (iequals(c, column)) {
 				return true;
 			}
@@ -99,11 +100,11 @@ bool TypeCatalog::isNotNull(const std::string &table, const std::string &column)
 }
 
 bool TypeCatalog::coversUniqueKey(const std::string &table, const std::set<std::string> &columns) const {
-	for (const auto &t : uniqueKeys) {
-		if (!iequals(t.first, table)) {
+	for (const auto &[tableName, keys] : uniqueKeys) {
+		if (!iequals(tableName, table)) {
 			continue;
 		}
-		for (const auto &key : t.second) {
+		for (const auto &key : keys) {
 			// An empty constraint column list proves nothing - it would otherwise
 			// vacuously "cover" every projection.
 			if (key.empty()) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 #include "sparql-parser/Token.h"
 
@@ -29,7 +30,7 @@ private:
 	/// (reach a '>' before any excluded character); used to disambiguate
 	/// IRIREF from the '<'/'<=' relational operators, which share a prefix.
 	bool looksLikeIriref() const;
-	[[noreturn]] void error(const std::string &message);
+	[[noreturn]] void error(std::string_view message);
 
 	Token makeToken(TokenType type, std::string text, std::size_t startLine, std::size_t startColumn);
 

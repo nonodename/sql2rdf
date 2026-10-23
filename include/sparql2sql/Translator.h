@@ -33,8 +33,9 @@ struct TypeCatalog;
 /// is laid out with newlines, indentation and one-column-per-line formatting
 /// instead of the default single-line form. It has no effect on the SQL's
 /// meaning or on execution performance once handed to the engine.
-std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMapping &mapping,
-                           const SqlDialect &dialect, const TypeCatalog *catalog = nullptr, bool prettyPrint = false);
+[[nodiscard]] std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMapping &mapping,
+                                         const SqlDialect &dialect, const TypeCatalog *catalog = nullptr,
+                                         bool prettyPrint = false);
 
 /// Translate a Query (top-level or a `{ SELECT ... }` subquery) against an
 /// existing TranslationContext, applying its own SELECT projection/
@@ -53,7 +54,8 @@ std::string translateQuery(const sparql::ast::Query &query, const r2rml::R2RMLMa
 /// is a constant the outer renderer can synthesise on demand. The top-level call
 /// leaves them off so an ordinary query's result columns stay exactly the
 /// variables it projected.
-TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, TranslationContext &ctx, bool nested = false);
+[[nodiscard]] TranslatedPattern translateQueryPattern(const sparql::ast::Query &query, TranslationContext &ctx,
+                                                      bool nested = false);
 
 /// Close `body` - a rendered relation, valid apart from its CTE references -
 /// over the WITH-clause entries `ctx` accumulated while producing it: the

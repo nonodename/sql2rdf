@@ -179,16 +179,16 @@ void Parser::expectKeyword(const char *kw) {
 	advance();
 }
 
-void Parser::error(const std::string &message) const {
+void Parser::error(std::string_view message) const {
 	std::string near = current_.text.empty() ? current_.keyword : current_.text;
-	throw ParseError(message, current_.line, current_.column, near);
+	throw ParseError(std::string(message), current_.line, current_.column, near);
 }
 
 // ---------------------------------------------------------------------------
 // IRIs / prologue
 // ---------------------------------------------------------------------------
 
-std::string Parser::lookupPrefix(const std::string &prefix) const {
+std::string Parser::lookupPrefix(std::string_view prefix) const {
 	if (prologue_) {
 		for (const auto &p : prologue_->prefixes) {
 			if (p.prefix == prefix) {
@@ -196,17 +196,17 @@ std::string Parser::lookupPrefix(const std::string &prefix) const {
 			}
 		}
 	}
-	error("unknown prefix '" + prefix + ":'");
+	error("unknown prefix '" + std::string(prefix) + ":'");
 	return std::string();
 }
 
-std::string Parser::resolveIriValue(TokenType type, const std::string &lexicalForm) const {
+std::string Parser::resolveIriValue(TokenType type, std::string_view lexicalForm) const {
 	if (type == TokenType::Iriref) {
-		return resolveRelativeIri(prologue_ ? prologue_->baseIri : std::string(), lexicalForm);
+		return resolveRelativeIri(prologue_ ? prologue_->baseIri : std::string(), std::string(lexicalForm));
 	}
 	std::size_t colon = lexicalForm.find(':');
-	std::string prefix = lexicalForm.substr(0, colon);
-	std::string local = (colon == std::string::npos) ? std::string() : lexicalForm.substr(colon + 1);
+	std::string_view prefix = lexicalForm.substr(0, colon);
+	std::string local = (colon == std::string_view::npos) ? std::string() : std::string(lexicalForm.substr(colon + 1));
 	return lookupPrefix(prefix) + local;
 }
 

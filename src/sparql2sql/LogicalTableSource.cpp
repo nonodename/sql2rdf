@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cstring>
 #include <set>
+#include <string_view>
 
 #include "r2rml/BaseTableOrView.h"
 #include "r2rml/LogicalTable.h"
@@ -50,12 +51,11 @@ bool matchKeywordAt(const std::string &s, std::size_t pos, const char *keyword) 
 	return true;
 }
 
-bool iequalsWord(const std::string &s, const char *word) {
-	std::size_t len = std::strlen(word);
-	if (s.size() != len) {
+bool iequalsWord(std::string_view s, std::string_view word) {
+	if (s.size() != word.size()) {
 		return false;
 	}
-	for (std::size_t i = 0; i < len; ++i) {
+	for (std::size_t i = 0; i < word.size(); ++i) {
 		if (std::tolower(static_cast<unsigned char>(s[i])) != std::tolower(static_cast<unsigned char>(word[i]))) {
 			return false;
 		}
