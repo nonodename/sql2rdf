@@ -273,8 +273,8 @@ TEST_CASE("processDatabase Example4 - EMP2DEPT many-to-many produces link triple
 	conn.addResult(
 	    "EMP2DEPT",
 	    {makeRow({{"EMPNO", StringSQLValue(std::string("7369"))}, {"DEPTNO", StringSQLValue(std::string("10"))}}),
-		 makeRow({{"EMPNO", StringSQLValue(std::string("7369"))}, {"DEPTNO", StringSQLValue(std::string("20"))}}),
-		 makeRow({{"EMPNO", StringSQLValue(std::string("7400"))}, {"DEPTNO", StringSQLValue(std::string("10"))}})});
+	     makeRow({{"EMPNO", StringSQLValue(std::string("7369"))}, {"DEPTNO", StringSQLValue(std::string("20"))}}),
+	     makeRow({{"EMPNO", StringSQLValue(std::string("7400"))}, {"DEPTNO", StringSQLValue(std::string("10"))}})});
 
 	std::string out = runProcessDatabase(mapping, conn);
 

@@ -269,7 +269,7 @@ TEST_CASE("GRAPH: an EXISTS inside a GRAPH block is evaluated against that graph
 	// folded against.
 	std::string sql =
 	    translateWith("sparql2sql_graphs.ttl", "SELECT ?d WHERE { GRAPH <http://example.com/graph/g1> {\n"
-		                                       "  ?d ex:location ?l . FILTER(EXISTS { ?d ex:name ?n . }) } }");
+	                                           "  ?d ex:location ?l . FILTER(EXISTS { ?d ex:name ?n . }) } }");
 	CHECK(has(sql, "EXISTS"));
 	CHECK(has(sql, "\"ENAME\""));       // g1's ex:name - correct
 	CHECK_FALSE(has(sql, "\"DNAME\"")); // default graph's - would mean the capture was lost

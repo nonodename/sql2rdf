@@ -195,8 +195,8 @@ TEST_CASE("golden example4 - junction table emits exactly two links per row") {
 	conn.addResult(
 	    "EMP2DEPT",
 	    {makeRow({{"EMPNO", StringSQLValue(std::string("7369"))}, {"DEPTNO", StringSQLValue(std::string("10"))}}),
-		 makeRow({{"EMPNO", StringSQLValue(std::string("7369"))}, {"DEPTNO", StringSQLValue(std::string("20"))}}),
-		 makeRow({{"EMPNO", StringSQLValue(std::string("7400"))}, {"DEPTNO", StringSQLValue(std::string("10"))}})});
+	     makeRow({{"EMPNO", StringSQLValue(std::string("7369"))}, {"DEPTNO", StringSQLValue(std::string("20"))}}),
+	     makeRow({{"EMPNO", StringSQLValue(std::string("7400"))}, {"DEPTNO", StringSQLValue(std::string("10"))}})});
 	const std::string expected =
 	    R"GOLD(<http://data.example.com/employee=7369/department=10> <http://example.com/ns#department> <http://data.example.com/department/10> .
 <http://data.example.com/employee=7369/department=10> <http://example.com/ns#employee> <http://data.example.com/employee/7369> .

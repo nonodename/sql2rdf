@@ -411,7 +411,7 @@ TEST_CASE("optimize: self-join elimination collapses same-table same-subject sca
 	std::vector<ColumnInfo> rightCols = {templateSubjectCol("p", "t2"), pureCol("b", "t2", "B", "people", true)};
 	RelNodePtr join =
 	    makeJoin(JoinKind::Inner, makeSubjectSpj("t1", "people", "p", "tmpl:person/{ID}", leftCols, true),
-		         makeSubjectSpj("t2", "people", "p", "tmpl:person/{ID}", rightCols, true), "p", /*nullSafe=*/false);
+	             makeSubjectSpj("t2", "people", "p", "tmpl:person/{ID}", rightCols, true), "p", /*nullSafe=*/false);
 
 	OptimizerOptions opts;
 	RelNodePtr result = optimize(std::move(join), opts);
@@ -636,10 +636,10 @@ TEST_CASE("optimize: an inner join distributes across an un-pruned union, exposi
 	// each arm into its own merged block, exposing that self-join.
 	RelNodePtr empArm =
 	    makeSubjectSpj("t1", "EMP", "p", "col:ID",
-		               {pureCol("p", "t1", "ID", "EMP", true), pureCol("label", "t1", "LABEL", "EMP", true)}, false);
+	                   {pureCol("p", "t1", "ID", "EMP", true), pureCol("label", "t1", "LABEL", "EMP", true)}, false);
 	RelNodePtr deptArm =
 	    makeSpj("t2", "DEPT",
-		        {pureCol("p", "t2", "MGRID", "DEPT", true), pureCol("label", "t2", "DNAME", "DEPT", true)}, false);
+	            {pureCol("p", "t2", "MGRID", "DEPT", true), pureCol("label", "t2", "DNAME", "DEPT", true)}, false);
 	std::vector<RelNodePtr> arms;
 	arms.push_back(std::move(empArm));
 	arms.push_back(std::move(deptArm));
@@ -647,7 +647,7 @@ TEST_CASE("optimize: an inner join distributes across an un-pruned union, exposi
 
 	RelNodePtr onlyEmp =
 	    makeSubjectSpj("t3", "EMP", "p", "col:ID",
-		               {pureCol("p", "t3", "ID", "EMP", true), pureCol("name", "t3", "NAME", "EMP", true)}, false);
+	                   {pureCol("p", "t3", "ID", "EMP", true), pureCol("name", "t3", "NAME", "EMP", true)}, false);
 
 	RelNodePtr join = makeJoin(JoinKind::Inner, std::move(ambiguousUnion), std::move(onlyEmp), "p", /*nullSafe=*/false);
 

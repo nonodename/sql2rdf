@@ -440,7 +440,7 @@ int main(int argc, char *argv[]) {
 	try {
 		std::unique_ptr<r2rml::MappingParser> parser =
 		    forceYarrrml ? std::unique_ptr<r2rml::MappingParser>(new yarrrml::YARRRMLParser())
-			             : r2rml::MappingParser::create(mappingFile);
+		                 : r2rml::MappingParser::create(mappingFile);
 		mapping = parser->parse(mappingFile);
 	} catch (const std::exception &e) {
 		std::cerr << "Error: failed to parse mapping '" << mappingFile << "': " << e.what() << "\n";
@@ -636,7 +636,8 @@ int main(int argc, char *argv[]) {
 	          << "translate ms (min/med/max)" << std::setw(colWidth) << "prepare ms (min/med/max)"
 	          << std::setw(colWidth) << "exec+drain ms (min/med/max)" << std::setw(colWidth)
 	          << "execute ms (min/med/max)" << std::setw(10) << "rows" << std::setw(12) << "sql bytes" << std::setw(11)
-	          << "union all" << "\n";
+	          << "union all"
+	          << "\n";
 	std::cout << std::string(nameWidth + 4 * colWidth + 10 + 12 + 11, '-') << "\n";
 
 	for (std::size_t i = 0; i < results.size(); ++i) {

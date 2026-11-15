@@ -126,7 +126,7 @@ TEST_CASE("parseMultiple conflict resolution is order-driven, not IRI-driven") {
 TEST_CASE("parseMultiple conflict warnings are emitted even in strict mode") {
 	R2RMLMapping mapping =
 	    MappingParser::parseMultiple({SOURCE_R2RML_DIR "multi_conflict_a.ttl", SOURCE_R2RML_DIR "multi_conflict_b.ttl"},
-		                             /*ignoreNonFatalErrors=*/false);
+	                                 /*ignoreNonFatalErrors=*/false);
 
 	REQUIRE(mapping.triplesMaps.size() == 1);
 	REQUIRE(mapping.mergeWarnings.size() == 1);
