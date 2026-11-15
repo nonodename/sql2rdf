@@ -341,6 +341,10 @@ struct DuckDBConnection::Impl {
 // ---------------------------------------------------------------------------
 // DuckDBConnection
 // ---------------------------------------------------------------------------
+void *DuckDBConnection::nativeConnection() const {
+	return impl_->con;
+}
+
 DuckDBConnection::DuckDBConnection(const std::string &path) : impl_(new Impl(path)) {
 }
 
