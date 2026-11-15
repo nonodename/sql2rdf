@@ -14,7 +14,7 @@
  * relative mapping paths against the current working directory first.
  */
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 
 #include <serd/serd.h>
 

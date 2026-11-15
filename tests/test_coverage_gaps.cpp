@@ -7,7 +7,7 @@
  * code was changed to accommodate them.
  */
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 
 #include <serd/serd.h>
 

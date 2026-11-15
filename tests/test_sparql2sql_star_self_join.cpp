@@ -8,7 +8,7 @@
  * Uses the full translateQuery pipeline against example_emp_dept.ttl.
  */
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 
 #include <string>
 
