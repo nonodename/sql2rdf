@@ -20,15 +20,15 @@ std::string AbstractMap::percentEncode(std::string_view value) {
 	    /* 32-47: Space to / */
 	    false, false, false, false, false, false, false, false, false, false, false, false, false, true, true,
 	    false, // '-' is 45, '.' is 46
-	    /* 48-63: 0-9 and symbols */
+		/* 48-63: 0-9 and symbols */
 	    true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false,
 	    /* 64-95: @ and A-Z, [\]^_ */
 	    false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
 	    true, true, true, true, true, true, true, true, true, false, false, false, false, true, // '_' is 95
-	    /* 96-127: ` and a-z, {|}~ */
+		/* 96-127: ` and a-z, {|}~ */
 	    false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
 	    true, true, true, true, true, true, true, true, true, false, false, false, true, false, // '~' is 126
-	    /* 128-255: Extended ASCII / UTF-8 bytes (always encoded) */
+		/* 128-255: Extended ASCII / UTF-8 bytes (always encoded) */
 	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
 	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
 	    false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
