@@ -36,6 +36,14 @@ public:
 	/** Returns "main", DuckDB's default schema name. */
 	[[nodiscard]] std::string getDefaultSchema() override;
 
+	/**
+	 * The underlying `duckdb_connection` handle, type-erased so this header
+	 * stays free of duckdb.h. Intended for dev tooling (the benchmark harness)
+	 * that needs the C API's prepared-statement and PRAGMA surface; the pointer
+	 * is owned by this object and valid only for its lifetime.
+	 */
+	[[nodiscard]] void *nativeConnection() const;
+
 private:
 	struct Impl;
 	std::unique_ptr<Impl> impl_;

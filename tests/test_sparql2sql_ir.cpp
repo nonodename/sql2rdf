@@ -334,10 +334,10 @@ TypeCatalog comparableCatalog() {
 	return cat;
 }
 
-RelNodePtr templateJoin(std::vector<ColumnInfo> leftCols, std::vector<ColumnInfo> rightCols) {
+const auto templateJoin = [](std::vector<ColumnInfo> leftCols, std::vector<ColumnInfo> rightCols) -> RelNodePtr {
 	return makeJoin(JoinKind::Inner, makeSpj("t1", "company", std::move(leftCols), true),
 	                makeSpj("t2", "relations", std::move(rightCols), true), "k", /*nullSafe=*/false);
-}
+};
 
 } // namespace
 
@@ -518,7 +518,7 @@ namespace {
 
 // A UnionByNameNode of `arms`, with a schema built the same way
 // translateAtomicPattern builds it (meetAcrossArms per variable).
-RelNodePtr makeUnion(std::vector<RelNodePtr> arms, const std::vector<std::string> &vars) {
+const auto makeUnion = [](std::vector<RelNodePtr> arms, const std::vector<std::string> &vars) -> RelNodePtr {
 	RelNodePtr node(new sparql2sql::UnionByNameNode());
 	sparql2sql::UnionByNameNode &u = static_cast<sparql2sql::UnionByNameNode &>(*node);
 	u.all = false;
@@ -531,7 +531,7 @@ RelNodePtr makeUnion(std::vector<RelNodePtr> arms, const std::vector<std::string
 	}
 	u.arms = std::move(arms);
 	return node;
-}
+};
 
 } // namespace
 

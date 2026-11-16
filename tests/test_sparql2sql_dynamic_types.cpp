@@ -95,7 +95,7 @@ std::string withoutAliasNumbers(const std::string &sql) {
 			++j;
 		}
 		if (startsWord && sql[i] == 't' && j > i + 1 && j < sql.size() && sql[j] == '.') {
-			out += "T";
+			out += 'T';
 			i = j - 1;
 			continue;
 		}

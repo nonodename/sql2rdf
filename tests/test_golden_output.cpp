@@ -113,7 +113,7 @@ std::string goldenNQuads(const std::string &fixture, MockSQLConnection &conn) {
 	std::string joined;
 	for (std::size_t i = 0; i < lines.size(); ++i) {
 		if (i) {
-			joined += "\n";
+			joined += '\n';
 		}
 		joined += lines[i];
 	}

@@ -730,9 +730,9 @@ void tryAddCandidate(std::vector<RelNodePtr> &branches, const std::string &fromS
 		}
 	}
 	spj.sources.push_back(source);
-	spj.whereConds = whereConditions;
+	spj.whereConds = std::move(whereConditions);
 	spj.distinct = true;
-	spj.schema() = projections;
+	spj.schema() = std::move(projections);
 	branches.push_back(std::move(node));
 }
 

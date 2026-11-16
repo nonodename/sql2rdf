@@ -27,17 +27,17 @@ void appendUtf8(std::string &out, uint64_t codepoint) {
 	if (codepoint <= 0x7F) {
 		out.push_back(static_cast<char>(codepoint));
 	} else if (codepoint <= 0x7FF) {
-		out.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
-		out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+		out.push_back(static_cast<char>(0xC0u | (codepoint >> 6u)));
+		out.push_back(static_cast<char>(0x80u | (codepoint & 0x3Fu)));
 	} else if (codepoint <= 0xFFFF) {
-		out.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
-		out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
-		out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+		out.push_back(static_cast<char>(0xE0u | (codepoint >> 12u)));
+		out.push_back(static_cast<char>(0x80u | ((codepoint >> 6u) & 0x3Fu)));
+		out.push_back(static_cast<char>(0x80u | (codepoint & 0x3Fu)));
 	} else {
-		out.push_back(static_cast<char>(0xF0 | (codepoint >> 18)));
-		out.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
-		out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
-		out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+		out.push_back(static_cast<char>(0xF0u | (codepoint >> 18u)));
+		out.push_back(static_cast<char>(0x80u | ((codepoint >> 12u) & 0x3Fu)));
+		out.push_back(static_cast<char>(0x80u | ((codepoint >> 6u) & 0x3Fu)));
+		out.push_back(static_cast<char>(0x80u | (codepoint & 0x3Fu)));
 	}
 }
 
@@ -82,7 +82,7 @@ std::string preprocessCodepointEscapes(const std::string &input) {
 				if (allHex) {
 					uint64_t codepoint = 0;
 					for (std::size_t d = 0; d < digits; ++d) {
-						codepoint = (codepoint << 4) | static_cast<uint64_t>(hexValue(input[i + 2 + d]));
+						codepoint = (codepoint << 4u) | static_cast<uint64_t>(hexValue(input[i + 2 + d]));
 					}
 					appendUtf8(out, codepoint);
 					i += 2 + digits;

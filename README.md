@@ -124,7 +124,17 @@ Standalone builds get the CLI and test suite by default. Pass `-DSQL2RDF_BUILD_T
 
 ### Code quality
 
-Requires `clang-format` and `clang-tidy` on `PATH` (e.g. `brew install llvm` or `apt install clang-format clang-tidy`):
+Requires `clang-format` and `clang-tidy` on `PATH`. Note that you need the 11 version of clang-format for compatibility with Duck. Getting that with latest python builds on Arm Macs seems problematic. The easiest way found is to clone llvm and build them:
+
+```sh
+git clone --depth 1 --branch llvmorg-11.1.0 https://github.com/llvm/llvm-project.git llvm-11
+cmake -S llvm-11/llvm -B llvm-11/build -G Ninja \
+  -DLLVM_ENABLE_PROJECTS=clang \ -DLLVM_TARGETS_TO_BUILD=AArch64 \
+  -DCMAKE_BUILD_TYPE=Release \ -DLLVM_ENABLE_ASSERTIONS=OFF \ -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build llvm-11/build --target clang-format
+```
+
+Use homebrew llvm for clang-tidy (compatible with MacOS headers) and point to right clang-format by putting it on the path first. Something like `export PATH="~/Code/llvm-11/build/bin:/opt/homebrew/opt/llvm/bin:$PATH"`
 
 ```sh
 cmake --build build --target format        # apply formatting in-place

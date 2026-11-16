@@ -20,7 +20,7 @@ std::string AbstractMap::percentEncode(std::string_view value) {
 	    /* 32-47: Space to / */
 	    false, false, false, false, false, false, false, false, false, false, false, false, false, true, true,
 	    false, // '-' is 45, '.' is 46
-	    /* 48-63: 0-9 and symbols */
+	           /* 48-63: 0-9 and symbols */
 	    true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false,
 	    /* 64-95: @ and A-Z, [\]^_ */
 	    false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
@@ -58,8 +58,8 @@ std::string AbstractMap::percentEncode(std::string_view value) {
 			out.push_back(static_cast<char>(c));
 		} else {
 			out.push_back('%');
-			out.push_back(hexDigits[c >> 4]);   // Upper nibble
-			out.push_back(hexDigits[c & 0x0F]); // Lower nibble
+			out.push_back(hexDigits[c >> 4u]);   // Upper nibble
+			out.push_back(hexDigits[c & 0x0Fu]); // Lower nibble
 		}
 	}
 

@@ -82,15 +82,15 @@ std::string unsignedHugeintToDigits(uint64_t hi, uint64_t lo) {
 	if (hi == 0 && lo == 0) {
 		return "0";
 	}
-	uint32_t limb[4] = {static_cast<uint32_t>(lo), static_cast<uint32_t>(lo >> 32), static_cast<uint32_t>(hi),
-	                    static_cast<uint32_t>(hi >> 32)};
+	uint32_t limb[4] = {static_cast<uint32_t>(lo), static_cast<uint32_t>(lo >> 32u), static_cast<uint32_t>(hi),
+	                    static_cast<uint32_t>(hi >> 32u)};
 	std::string digits;
 	bool nonzero = true;
 	while (nonzero) {
 		uint64_t remainder = 0;
 		nonzero = false;
 		for (int i = 3; i >= 0; --i) {
-			uint64_t cur = (remainder << 32) | limb[i];
+			uint64_t cur = (remainder << 32u) | limb[i];
 			limb[i] = static_cast<uint32_t>(cur / 10);
 			remainder = cur % 10;
 			if (limb[i] != 0) {
@@ -341,6 +341,10 @@ struct DuckDBConnection::Impl {
 // ---------------------------------------------------------------------------
 // DuckDBConnection
 // ---------------------------------------------------------------------------
+void *DuckDBConnection::nativeConnection() const {
+	return impl_->con;
+}
+
 DuckDBConnection::DuckDBConnection(const std::string &path) : impl_(new Impl(path)) {
 }
 
