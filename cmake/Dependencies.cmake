@@ -4,7 +4,7 @@
 
 # SHA256 hashes for FetchContent dependencies
 # To update: download the release tarball and run: shasum -a 256 <file>
-set(CATCH2_SHA256 "be23a52b85cf04cd9587612147a10b023d59ed9757fa1843cc99e615d6c0893c")
+set(CATCH2_SHA256 "11ea72af859bb4f7ef948f1515eef2d56c65a8111b66d27bb8069bd2304243fb")
 set(YAML_CPP_SHA256 "25cb043240f828a8c51beb830569634bc7ac603978e0f69d6b63558dadefd49a")
 set(DUCKDB_SHA256 "43645e15419c6539bae6915ba397de6569e4a7ca0d502be95d653a78fdb0bece")
 

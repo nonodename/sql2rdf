@@ -11,7 +11,7 @@
  * W3C R2RML specification examples used by tests/sourceR2RML/.
  */
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 
 #include <serd/serd.h>
 

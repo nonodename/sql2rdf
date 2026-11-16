@@ -6,7 +6,7 @@
  * built forwards and joined on. Plus the cases that must NOT fold.
  */
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 
 #include <string>
 

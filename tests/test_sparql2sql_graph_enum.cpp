@@ -12,7 +12,7 @@
  * each triples map is there to exercise.
  */
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 
 #include <string>
 

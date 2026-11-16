@@ -3,7 +3,7 @@
  * GROUP BY/HAVING/aggregates, ORDER BY, LIMIT/OFFSET, and ASK.
  */
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 
 #include <string>
 

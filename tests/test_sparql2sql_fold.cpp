@@ -6,7 +6,7 @@
  * AND/OPTIONAL/UNION/MINUS/VALUES/SubSelect/GRAPH.
  */
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 
 #include <initializer_list>
 #include <string>
