@@ -221,7 +221,7 @@ std::string sortKeys(const TermSql &key, const SqlDialect &dialect, bool descend
 	if (isFullyDetermined(key.staticInfo) || key.tag.empty()) {
 		return typedSortKey(key.value, key.staticInfo, dialect) + direction;
 	}
-	const std::vector<std::string> keys = {tagKindRank(key.tag, dialect), tagValueSpace(key.tag, dialect),
+	const std::vector<std::string> keys = {dialect.termKindRank(key.tag), dialect.termValueSpace(key.tag),
 	                                       dialect.tryCastToDouble(key.value), dialect.tryCastToTimestamp(key.value),
 	                                       key.value};
 	std::string sql;

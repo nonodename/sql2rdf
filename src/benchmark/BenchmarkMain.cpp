@@ -337,7 +337,7 @@ void printHelp(const char *programName) {
 	          << "Options:\n"
 	          << "  --repeat N       Measured iterations per query (default 5).\n"
 	          << "  --warmup N       Unrecorded warmup iterations per query (default 1).\n"
-	          << "  --dialect NAME   SQL dialect to translate for (default: duckdb).\n"
+	          << "  --dialect NAME   SQL dialect to translate for (default: duckdb; or duckdb-udf).\n"
 	          << "  --query NAME     Only benchmark the named query (default: all).\n"
 	          << "  -y               Force the mapping to be parsed as YARRRML.\n"
 	          << "  --print-sql      Echo each query's translated SQL to stderr.\n"
@@ -490,6 +490,9 @@ int main(int argc, char *argv[]) {
 	std::unique_ptr<r2rml::DuckDBConnection> dbConn;
 	try {
 		dbConn.reset(new r2rml::DuckDBConnection(databaseFile));
+		// Registered for every dialect, so the two dialects are timed on
+		// identically set-up connections.
+		dbConn->registerRdfFunctions();
 	} catch (const std::exception &e) {
 		std::cerr << "Error: cannot open database '" << databaseFile << "': " << e.what() << "\n";
 		return 1;
@@ -636,8 +639,7 @@ int main(int argc, char *argv[]) {
 	          << "translate ms (min/med/max)" << std::setw(colWidth) << "prepare ms (min/med/max)"
 	          << std::setw(colWidth) << "exec+drain ms (min/med/max)" << std::setw(colWidth)
 	          << "execute ms (min/med/max)" << std::setw(10) << "rows" << std::setw(12) << "sql bytes" << std::setw(11)
-	          << "union all"
-	          << "\n";
+	          << "union all" << "\n";
 	std::cout << std::string(nameWidth + 4 * colWidth + 10 + 12 + 11, '-') << "\n";
 
 	for (std::size_t i = 0; i < results.size(); ++i) {

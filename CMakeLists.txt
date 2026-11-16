@@ -251,6 +251,7 @@ set(SPARQL2SQL_SOURCES
   src/sparql2sql/ExprAnalysis.cpp
   src/sparql2sql/SqlDialect.cpp
   src/sparql2sql/DuckDbDialect.cpp
+  src/sparql2sql/DuckDbUdfDialect.cpp
   src/sparql2sql/DialectFactory.cpp
   src/sparql2sql/LogicalTableSource.cpp
   src/sparql2sql/TemplateUtil.cpp

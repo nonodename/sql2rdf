@@ -32,6 +32,11 @@ struct SqlExpr {
 	std::string expr;
 	std::vector<std::string> requiredNonNullColumns;
 
+	/// SELECT-list-only alternative to `expr` from the dialect's
+	/// iriTemplateProjection hook (rr:IRI templates only); empty when the hook
+	/// renders the same text as `expr`. Copied to ColumnInfo::projectionExpr.
+	std::string projectionExpr;
+
 	/// What the term map statically declares about the RDF term `expr` builds,
 	/// from its own rr:termType/rr:datatype/rr:language plus (for a plain
 	/// rr:column literal) the optional TypeCatalog. Copied onto the ColumnInfo

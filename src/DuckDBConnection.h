@@ -44,9 +44,18 @@ public:
 	 */
 	[[nodiscard]] void *nativeConnection() const;
 
+	/**
+	 * Register the sql2rdf_* scalar functions that SQL translated for the
+	 * "duckdb-udf" dialect (sparql2sql::DuckDbUdfDialect) calls. Idempotent;
+	 * must run on this connection before executing any such SQL. Throws
+	 * std::runtime_error if DuckDB refuses a registration.
+	 */
+	void registerRdfFunctions();
+
 private:
 	struct Impl;
 	std::unique_ptr<Impl> impl_;
+	bool rdfFunctionsRegistered_ = false;
 };
 
 } // namespace r2rml

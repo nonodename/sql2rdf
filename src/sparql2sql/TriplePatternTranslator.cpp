@@ -50,6 +50,7 @@ struct TermSource {
 // provenance the optimizer passes need.
 struct Resolved {
 	std::string expr;
+	std::string projectionExpr;
 	std::vector<std::string> requiredNonNull;
 	Provenance prov = Provenance::Computed;
 	std::string columnName;
@@ -86,6 +87,7 @@ Resolved resolveSource(const TermSource &src, const SqlDialect &dialect, const T
 	}
 	SqlExpr e = termMapToSqlExpr(*src.termMap, src.alias, dialect, catalog, src.tableIdentity);
 	r.expr = e.expr;
+	r.projectionExpr = e.projectionExpr;
 	r.requiredNonNull = e.requiredNonNullColumns;
 	r.prov = provenanceOf(*src.termMap, r.columnName, r.templateString);
 	r.sourceAlias = src.alias;
@@ -492,6 +494,7 @@ std::vector<GraphBranch> graphBranchesFor(const std::vector<std::unique_ptr<r2rm
 // Copy a resolved position's structured provenance onto a projected column.
 void fillColumnFromResolved(ColumnInfo &col, const Resolved &r, const SqlDialect &dialect) {
 	col.renderedExpr = r.expr;
+	col.projectionExpr = r.projectionExpr;
 	col.prov = r.prov;
 	col.sourceAlias = r.sourceAlias;
 	col.columnName = r.columnName;

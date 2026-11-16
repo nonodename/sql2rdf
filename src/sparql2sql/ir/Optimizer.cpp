@@ -249,6 +249,7 @@ RelNodePtr foldBindIntoSpj(RelNodePtr node, TranslationContext *ctx) {
 	// column claims to be, only where it's computed.
 	ColumnInfo col = b.schema().back();
 	col.renderedExpr = value;
+	col.projectionExpr.clear();
 	col.prov = Provenance::Computed;
 	col.tagExpr = tag;
 	spj.schema().push_back(col);
@@ -491,6 +492,7 @@ void eliminateSelfJoinsInSpj(SpjRelation &spj) {
 	for (auto &c : spj.schema()) {
 		c.sourceAlias = renameAlias(c.sourceAlias, rename);
 		c.renderedExpr = applyRename(c.renderedExpr, rename);
+		c.projectionExpr = applyRename(c.projectionExpr, rename);
 		// Usually a constant string literal with no alias in it at all, but
 		// mergeInner's null-tolerant form embeds both sides' renderedExpr to pick
 		// the tag COALESCE would have picked - so it has to be renamed too.
@@ -1792,6 +1794,11 @@ bool isIdentityProjection(const std::vector<ColumnInfo> &schema, const std::vect
 }
 
 RelNodePtr optimize(RelNodePtr root, const OptimizerOptions &opts) {
+	// Everything this pipeline renders - folded FILTER conjuncts, folded BIND
+	// columns, merged join keys - lands in an SPJ block's WHERE list or is
+	// reused as a join key, so it must stay native SQL the engine can push into
+	// its scans, never a dialect UDF. See TranslationContext::dialect().
+	TranslationContext::NativeSqlGuard nativeSql(opts.ctx);
 	// Empty-relation folding before anything else: every later pass then walks a
 	// tree with no provably-dead subtrees in it, which is both less work and
 	// strictly more precise (a union that loses an empty arm may sharpen a

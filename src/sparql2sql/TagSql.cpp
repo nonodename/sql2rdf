@@ -45,8 +45,15 @@ std::string tagLiteral(const TermInfo &info, const SqlDialect &dialect) {
 
 std::string coalescedTag(const std::string &leftValueSql, const std::string &leftTagSql,
                          const std::string &rightValueSql, const std::string &rightTagSql) {
-	return "(CASE WHEN " + leftValueSql + " IS NOT NULL THEN " + leftTagSql + " WHEN " + rightValueSql +
-	       " IS NOT NULL THEN " + rightTagSql + " ELSE NULL END)";
+	return inlineCoalesceTag({{leftValueSql, leftTagSql}, {rightValueSql, rightTagSql}});
+}
+
+std::string inlineCoalesceTag(const std::vector<std::pair<std::string, std::string>> &valueTagPairs) {
+	std::string sql = "(CASE";
+	for (const auto &p : valueTagPairs) {
+		sql += " WHEN " + p.first + " IS NOT NULL THEN " + p.second;
+	}
+	return sql + " ELSE NULL END)";
 }
 
 std::string tagDimensionsCompatible(const std::string &leftTag, const std::string &rightTag,
@@ -113,7 +120,7 @@ std::string tagLang(const std::string &tagSql, const SqlDialect &dialect) {
 }
 
 std::string tagIsNumeric(const std::string &tagSql, const SqlDialect &dialect) {
-	return "(" + tagValueSpace(tagSql, dialect) + " = " + intLiteral(kValueSpaceNumeric) + ")";
+	return "(" + dialect.termValueSpace(tagSql) + " = " + intLiteral(kValueSpaceNumeric) + ")";
 }
 
 std::string tagKindRank(const std::string &tagSql, const SqlDialect &dialect) {

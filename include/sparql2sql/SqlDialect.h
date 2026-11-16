@@ -2,9 +2,12 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sparql2sql {
+
+struct TemplateSegment;
 
 /// Abstracts the handful of SQL syntax points that genuinely vary across
 /// relational engines and are actually exercised by the translator.
@@ -104,6 +107,65 @@ public:
 	/// the padding itself. `all=false` also deduplicates the combined
 	/// result (SQL UNION's usual behavior).
 	virtual std::string combineByName(bool all, const std::vector<std::string> &armSqls) const = 0;
+
+	// ---------------------------------------------------------------------
+	// RDF term-logic hooks.
+	//
+	// Each one renders a piece of RDF term logic the translator otherwise
+	// spells as inline (often deeply nested CASE) SQL. The defaults return that
+	// inline SQL byte for byte, so a dialect that overrides none of them emits
+	// exactly what the translator always emitted. A dialect may override them to
+	// call engine-registered scalar functions instead (see DuckDbUdfDialect).
+	//
+	// An override must be *result-identical* to the default, and the translator
+	// only ever calls an override where an opaque function call cannot cost the
+	// engine a pushdown: never for a join key, and never while the optimizer is
+	// building an SPJ block's WHERE list. In those places it calls
+	// nativeDialect()'s version instead (see TranslationContext::dialect()).
+	// ---------------------------------------------------------------------
+
+	/// The dialect whose hooks are guaranteed to render native SQL. The
+	/// translator switches to it wherever a UDF would be unsafe (join keys and
+	/// optimizer-folded WHERE conjuncts). Default: this dialect, which is
+	/// already native unless it overrides a hook below.
+	virtual const SqlDialect &nativeDialect() const;
+
+	/// The lexical form of an rr:IRI rr:template term, built from the
+	/// template's segments over `sourceAlias`'s columns, with every substituted
+	/// value percent-encoded. Used for an SPJ block's SELECT list only - the
+	/// same term's join-key/WHERE spelling always comes from buildProjectionSql.
+	/// Default: buildProjectionSql(segments, sourceAlias, *this, true).
+	virtual std::string iriTemplateProjection(const std::vector<TemplateSegment> &segments,
+	                                          const std::string &sourceAlias) const;
+
+	/// The type tag of whichever term a `COALESCE(v1, v2, ...)` returns:
+	/// `t_i` for the first `v_i` that is non-NULL, else NULL. Each pair is
+	/// (value SQL, tag SQL). Default: TagSql.h's CASE form (see coalescedTag).
+	virtual std::string coalesceTag(const std::vector<std::pair<std::string, std::string>> &valueTagPairs) const;
+
+	/// A tag's value-space id (TagSql.h's kValueSpace*), NULL for a NULL tag.
+	/// Default: tagValueSpace().
+	virtual std::string termValueSpace(const std::string &tagSql) const;
+
+	/// SPARQL 1.1 Section 15.1's kind rank of a tag. Default: tagKindRank().
+	virtual std::string termKindRank(const std::string &tagSql) const;
+
+	/// RDF term / SPARQL value (in)equality dispatched on both tags at run time.
+	/// Default: dynamicEquality() with untypedComparison() as its fallback.
+	virtual std::string termEquality(const std::string &leftSql, const std::string &leftTag,
+	                                 const std::string &rightSql, const std::string &rightTag, bool negated) const;
+
+	/// SPARQL ordering comparison (`op` one of < > <= >=) dispatched on both tags
+	/// at run time. Default: dynamicOrdering() with untypedComparison() as its
+	/// fallback.
+	virtual std::string termOrdering(const std::string &leftSql, const std::string &leftTag,
+	                                 const std::string &rightSql, const std::string &rightTag,
+	                                 const std::string &op) const;
+
+	/// The numeric-aware untyped comparison used when neither tag is available
+	/// (`op` one of = <> < > <= >=). Default: untypedComparison().
+	virtual std::string untypedCompare(const std::string &leftSql, const std::string &rightSql,
+	                                   const std::string &op) const;
 };
 
 } // namespace sparql2sql

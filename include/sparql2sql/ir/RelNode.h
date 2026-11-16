@@ -44,6 +44,16 @@ struct ColumnInfo {
 	/// populated, so any node can be rendered standalone.
 	std::string renderedExpr;
 
+	/// An optional, result-identical alternative to `renderedExpr` used **only**
+	/// in the SELECT list of the SpjRelation that produces this column (see
+	/// SqlDialect::iriTemplateProjection). Empty means "project renderedExpr".
+	///
+	/// Kept separate because `renderedExpr` is also the spelling of this term in
+	/// join keys and in FILTER conjuncts the optimizer folds into WHERE, which
+	/// must stay native SQL; this one may be an opaque engine UDF. Any code that
+	/// rewrites `renderedExpr` must rewrite or clear this too.
+	std::string projectionExpr;
+
 	Provenance prov = Provenance::Computed;
 	std::string sourceAlias;     ///< FROM-source alias owning the column (PureColumn/TemplateExpr).
 	std::string columnName;      ///< raw column name (PureColumn) - for native-key rewrite + catalog lookup.

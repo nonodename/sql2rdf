@@ -1,6 +1,7 @@
 #include "sparql2sql/TermMapSql.h"
 
 #include <stdexcept>
+#include <utility>
 
 #include "r2rml/ColumnTermMap.h"
 #include "r2rml/ConstantTermMap.h"
@@ -209,7 +210,14 @@ SqlExpr termMapToSqlExpr(const r2rml::TermMap &termMap, const std::string &sourc
 	if (const auto *tmpl = dynamic_cast<const r2rml::TemplateTermMap *>(&termMap)) {
 		std::vector<TemplateSegment> segments = parseTemplate(tmpl->templateString);
 		SqlExpr result;
-		result.expr = buildProjectionSql(segments, sourceAlias, dialect, tmpl->termType == r2rml::TermType::IRI);
+		const bool isIri = tmpl->termType == r2rml::TermType::IRI;
+		result.expr = buildProjectionSql(segments, sourceAlias, dialect, isIri);
+		if (isIri) {
+			std::string projection = dialect.iriTemplateProjection(segments, sourceAlias);
+			if (projection != result.expr) {
+				result.projectionExpr = std::move(projection);
+			}
+		}
 		result.requiredNonNullColumns =
 		    requiredNonNullRefs(referencedColumns(segments), sourceAlias, dialect, catalog, tableIdentity);
 		result.term = annotate(termMap, std::string(), catalog, tableIdentity);

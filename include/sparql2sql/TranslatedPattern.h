@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "sparql2sql/GraphConstraint.h"
+#include "sparql2sql/SqlDialect.h"
 #include "sparql2sql/TermInfo.h"
 
 namespace r2rml {
@@ -23,7 +24,6 @@ class Term;
 
 namespace sparql2sql {
 
-class SqlDialect;
 struct TypeCatalog;
 
 /// Variables a VALUES block pins to one and the same constant term in every
@@ -100,9 +100,50 @@ public:
 		return mapping_;
 	}
 
+	/// The dialect every SQL builder should render with *at this point*.
+	///
+	/// Normally the dialect translateQuery() was given. Inside a
+	/// NativeSqlGuard (held by ir::optimize() for its whole run) it is that
+	/// dialect's nativeDialect() instead, so a dialect that renders RDF term
+	/// logic as engine UDFs never puts one into SQL the optimizer builds: every
+	/// FILTER conjunct folded into an SPJ block's WHERE list, every folded BIND
+	/// column, and every merged join-key comparison stays a native expression
+	/// the engine can push into its scans. UDFs are reachable only from the late
+	/// render path - residual FILTER/BIND, SELECT list, HAVING, ORDER BY.
 	const SqlDialect &dialect() const {
+		return nativeDepth_ > 0 ? dialect_.nativeDialect() : dialect_;
+	}
+
+	/// The dialect as given, regardless of any NativeSqlGuard - for SQL that is
+	/// only ever *projected* (never compared, joined or filtered on), such as
+	/// ColumnInfo::projectionExpr.
+	const SqlDialect &projectionDialect() const {
 		return dialect_;
 	}
+
+	/// Scoped switch of dialect() to the native dialect (see dialect()).
+	/// Nestable; a null context is accepted and ignored, for optimizer callers
+	/// that run without one.
+	class NativeSqlGuard {
+	public:
+		explicit NativeSqlGuard(TranslationContext *ctx) : ctx_(ctx) {
+			if (ctx_ != nullptr) {
+				++ctx_->nativeDepth_;
+			}
+		}
+		~NativeSqlGuard() {
+			if (ctx_ != nullptr) {
+				--ctx_->nativeDepth_;
+			}
+		}
+		NativeSqlGuard(const NativeSqlGuard &) = delete;
+		NativeSqlGuard &operator=(const NativeSqlGuard &) = delete;
+		NativeSqlGuard(NativeSqlGuard &&) = delete;
+		NativeSqlGuard &operator=(NativeSqlGuard &&) = delete;
+
+	private:
+		TranslationContext *ctx_;
+	};
 
 	/// Optional column-type catalog (nullptr if none supplied).
 	const TypeCatalog *catalog() const {
@@ -397,6 +438,7 @@ public:
 private:
 	const r2rml::R2RMLMapping &mapping_;
 	const SqlDialect &dialect_;
+	std::size_t nativeDepth_ = 0;
 	const TypeCatalog *catalog_;
 	std::size_t aliasCounter_;
 	std::size_t internalVarCounter_ = 0;

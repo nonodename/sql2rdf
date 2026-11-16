@@ -158,7 +158,8 @@ std::string renderSpj(const SpjRelation &rel, TranslationContext &ctx, const Ext
 	} else {
 		std::vector<std::string> cols;
 		for (const auto &c : rel.schema()) {
-			cols.push_back(c.renderedExpr + " AS " + mangleVar(c.var, dialect));
+			cols.push_back((c.projectionExpr.empty() ? c.renderedExpr : c.projectionExpr) + " AS " +
+			               mangleVar(c.var, dialect));
 			if (ctx.needsTag(c.var)) {
 				cols.push_back(producedTag(c, "this select-project-join block") + " AS " +
 				               mangleVarTag(c.var, dialect));

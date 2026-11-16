@@ -150,12 +150,15 @@ std::string comparison(const TermSql &lhs, const TermSql &rhs, const std::string
 	    leftInfo.lang == rightInfo.lang) {
 		return "(" + left + " " + op + " " + right + ")";
 	}
-	std::string fallback = untypedComparison(left, right, op, dialect);
+	// Routed through the dialect's term-logic hooks, which default to TagSql.h's
+	// inline CASE forms (dynamicEquality/dynamicOrdering/untypedComparison). A
+	// UDF dialect only reaches these outside the optimizer - see
+	// TranslationContext::dialect().
 	if (!lhs.tag.empty() && !rhs.tag.empty()) {
-		return equality ? dynamicEquality(left, lhs.tag, right, rhs.tag, op == "<>", fallback, dialect)
-		                : dynamicOrdering(left, lhs.tag, right, rhs.tag, op, fallback, dialect);
+		return equality ? dialect.termEquality(left, lhs.tag, right, rhs.tag, op == "<>")
+		                : dialect.termOrdering(left, lhs.tag, right, rhs.tag, op);
 	}
-	return fallback;
+	return dialect.untypedCompare(left, right, op);
 }
 
 // Arithmetic, staying integral when the mapping proves both operands are.
@@ -819,15 +822,16 @@ std::string dynamicTagOf(const Expression &expr, const TranslatedPattern &scope,
 		}
 		case BuiltinFunction::Coalesce: {
 			// The tag has to follow whichever argument COALESCE actually returned.
-			std::string sql = "(CASE";
+			std::vector<std::pair<std::string, std::string>> pairs;
+			pairs.reserve(call.args.size());
 			for (const auto &arg : call.args) {
 				const TermSql a = trTerm(*arg, scope, alias, ctx);
 				if (a.tag.empty()) {
 					return std::string();
 				}
-				sql += " WHEN " + a.value + " IS NOT NULL THEN " + a.tag;
+				pairs.emplace_back(a.value, a.tag);
 			}
-			return sql + " ELSE NULL END)";
+			return dialect.coalesceTag(pairs);
 		}
 		case BuiltinFunction::If: {
 			if (call.args.size() < 3) {

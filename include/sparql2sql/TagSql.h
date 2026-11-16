@@ -1,6 +1,8 @@
 #pragma once
 
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "sparql2sql/TermInfo.h"
 
@@ -59,6 +61,11 @@ std::string tagLiteral(const TermInfo &info, const SqlDialect &dialect);
 std::string coalescedTag(const std::string &leftValueSql, const std::string &leftTagSql,
                          const std::string &rightValueSql, const std::string &rightTagSql);
 
+/// The n-ary inline form behind coalescedTag and the COALESCE() builtin's tag:
+/// `(CASE WHEN v1 IS NOT NULL THEN t1 WHEN v2 IS NOT NULL THEN t2 ... ELSE NULL
+/// END)` over (value, tag) pairs. SqlDialect::coalesceTag's default.
+std::string inlineCoalesceTag(const std::vector<std::pair<std::string, std::string>> &valueTagPairs);
+
 /// A boolean expression testing whether two tags may denote terms of the same
 /// RDF dimension - the tag half of RDF term equality on a join key, to be
 /// AND'ed with the ordinary lexical-form comparison.
@@ -98,7 +105,8 @@ std::string tagDatatypeIri(const std::string &tagSql, const SqlDialect &dialect)
 std::string tagLang(const std::string &tagSql, const SqlDialect &dialect);
 
 /// A boolean expression testing whether `tagSql` is a literal in the numeric
-/// value space - the runtime half of isNUMERIC().
+/// value space - the runtime half of isNUMERIC(). Reads the value space
+/// through SqlDialect::termValueSpace, so a UDF dialect's override applies.
 std::string tagIsNumeric(const std::string &tagSql, const SqlDialect &dialect);
 
 /// SPARQL 1.1 Section 15.1's ordering rank across term kinds: unbound (0) <
