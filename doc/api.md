@@ -191,6 +191,7 @@ DuckDBConnection db(":memory:");
 |--------|---------|
 | `execute(sql)` | `unique_ptr<SQLResultSet>` |
 | `getDefaultSchema()` | `"main"` |
+| `registerRdfFunctions()` | `void` — registers the `sql2rdf_*` scalar functions the `duckdb-udf` dialects call (idempotent; see [RDF term-logic hooks](#rdf-term-logic-hooks-and-the-duckdb-udf-dialect)) |
 
 ---
 
@@ -783,7 +784,9 @@ just the DuckDB-backed CLI.
 #include "sparql2sql/DialectFactory.h"
 
 std::unique_ptr<sparql2sql::SqlDialect> sparql2sql::createDialect(const std::string& name);
-// "duckdb" -> DuckDbDialect; anything else throws std::runtime_error naming the supported set.
+// "duckdb" -> DuckDbDialect; "duckdb-udf" / "duckdb-udf-all" -> DuckDbUdfDialect (Measured / All
+// coverage, see "RDF term-logic hooks" below); anything else throws std::runtime_error naming the
+// supported set.
 ```
 
 ```cpp
@@ -1207,8 +1210,88 @@ schema-extending union). `tryCastToBigInt` is the seam that keeps statically int
 integral — without it `?a + 1` would round-trip through `DOUBLE` and render `"10.0"`. Constructs
 close enough to universal
 across engines are emitted directly rather than routed through the dialect. `DuckDbDialect` is
-currently the only implementation; add a new one by implementing `SqlDialect` and registering it
-in `createDialect()` (`src/sparql2sql/DialectFactory.cpp`).
+the base implementation (`DuckDbUdfDialect`, below, derives from it); add a new one by implementing
+`SqlDialect` and registering it in `createDialect()` (`src/sparql2sql/DialectFactory.cpp`).
+
+### RDF term-logic hooks and the `duckdb-udf` dialect
+
+`SqlDialect` also has a set of **non-pure** virtual hooks for the RDF term logic the translator
+otherwise spells as inline, often deeply nested, `CASE` SQL. Each default returns that inline SQL
+byte for byte (from `TagSql.h` / `TemplateUtil.h`), so a dialect overriding none of them is
+unchanged:
+
+| Hook | Default (inline) | Replaces |
+|------|------------------|----------|
+| `iriTemplateProjection(segments, alias)` | `buildProjectionSql(..., true)` — `'pre' \|\| url_encode(CAST(c AS VARCHAR)) \|\| ...` | an `rr:IRI` template in an SPJ block's SELECT list |
+| `coalesceTag(pairs)` | `(CASE WHEN v1 IS NOT NULL THEN t1 ... ELSE NULL END)` | the type tag of `COALESCE()` |
+| `termValueSpace(tag)` | `tagValueSpace` — a 9-branch CASE | value-space id (also used by `isNUMERIC`) |
+| `termKindRank(tag)` | `tagKindRank` | §15.1 ORDER BY first key |
+| `termEquality(l, lt, r, rt, negated)` | `dynamicEquality` + `untypedComparison` fallback | tag-dispatched `=` / `!=` |
+| `termOrdering(l, lt, r, rt, op)` | `dynamicOrdering` + `untypedComparison` fallback | tag-dispatched `<` `>` `<=` `>=` |
+| `untypedCompare(l, r, op)` | `untypedComparison` | numeric-or-text comparison when no tag exists |
+| `nativeDialect()` | `*this` | the dialect to fall back to where a UDF is unsafe (below) |
+
+The tag-dispatched comparisons are the bulky ones: `tagValueSpace` is inlined about ten times per
+comparison, so a single `FILTER(?p < ?q)` over two runtime-tagged variables renders to ~9.7 KB.
+
+**Where a hook may emit a UDF.** A function call is opaque to the engine, so it must never appear
+where DuckDB would otherwise push a predicate into a scan or use it as a join key.
+`TranslationContext::dialect()` therefore returns `nativeDialect()` for the whole of
+`ir::optimize()` (a `NativeSqlGuard` held by that function). Everything the optimizer builds —
+FILTER conjuncts folded into an SPJ `WHERE` list, folded BIND columns, merged join-key and
+term-dimension comparisons — stays native. UDFs come only from the late render path: residual
+`FILTER`/`BIND`, the SELECT list, `HAVING` and `ORDER BY`. Join `ON` clauses never use a hook at all
+(`tagDimensionsCompatible` has none). The template hook is further confined to a projection-only
+field, `ColumnInfo::projectionExpr`, rendered only in the producing SPJ block's SELECT list. Join
+keys, inversion conditions and folded filters keep reading `renderedExpr`, which is always native.
+
+**`DuckDbUdfDialect`** (`include/sparql2sql/DuckDbUdfDialect.h`) overrides these hooks to call
+scalar functions that `DuckDBConnection::registerRdfFunctions()` registers through DuckDB's C API.
+The functions live in `src/DuckDBConnection.cpp`, so the core library stays DuckDB-free. All
+arguments are `VARCHAR`:
+
+| Function | Returns |
+|----------|---------|
+| `sql2rdf_iri(lit0, v1, lit1, ..., vn, litn)` | the template with each `v_i` percent-encoded; NULL if any `v_i` is NULL |
+| `sql2rdf_tag_coalesce(v1, t1, ..., vn, tn)` | `t_i` of the first non-NULL `v_i`, else NULL |
+| `sql2rdf_value_space(tag)` / `sql2rdf_kind_rank(tag)` | `INTEGER`, as `tagValueSpace` / `tagKindRank` |
+| `sql2rdf_{eq,ne,lt,gt,le,ge}(l, ltag, r, rtag)` | `BOOLEAN`, as `dynamicEquality` / `dynamicOrdering` |
+| `sql2rdf_untyped_{eq,ne,lt,gt,le,ge}(l, r)` | `BOOLEAN`, as `untypedComparison` |
+
+The inline SQL they replace relies on DuckDB's own `TRY_CAST(VARCHAR AS DOUBLE/TIMESTAMP/BOOLEAN)`,
+which the C API does not expose, so the functions re-implement those casts as observed on DuckDB
+1.5. That includes: `_` digit separators; `inf`/`nan(...)`; four date separators; a `(BC)` suffix;
+the `infinity`/`epoch` keywords; and UTC offsets, which a `TIMESTAMP` cast parses but **ignores**.
+Three-valued logic and DuckDB's NaN ordering are preserved. `tests/duckdb`'s "duckdb-udf:"
+differential cases run each function against the inline SQL its hook would emit, over cross joins
+of ~250 edge-case lexical forms and every tag kind, and require zero rows where the two are
+`IS DISTINCT FROM`. **Re-run them after upgrading DuckDB**, since a change to its cast rules would
+silently diverge otherwise.
+
+**Coverage, decided by measured time.** Prepare time favoured the UDFs in every category, but
+execution time did not. The synthetic workload was 2M `MEASURES` + 1M `NOTES` rows against
+`sparql2sql_terms.ttl`, on 4 cores, median exec+drain in ms:
+
+| Query shape | inline | all hooks as UDFs |
+|-------------|--------|-------------------|
+| residual tag-dispatched `FILTER(?p < 500)` over a mixed-datatype union | 374–390 | 129–147 |
+| residual tag-dispatched `FILTER(?p = 9)` | 369–384 | 125–150 |
+| `ORDER BY` over a mixed-kind variable (§15.1 keys) | 665–681 | 682–738 (noise) |
+| 2M templated IRIs projected | 207–224 | 228–234 |
+| 3M templated IRIs projected (UNION) | 346–395 | 377–409 |
+| `isIRI(COALESCE(?x, ?m))` (COALESCE tag) | 262–321 | 389–449 |
+
+DuckDB's native `url_encode`/`||` are already vectorised, and its optimizer simplifies a CASE over
+constant tags, which an opaque call blocks. So the dialect has two coverage levels:
+
+- `duckdb-udf` (`Coverage::Measured`) emits UDFs only for the comparisons, the untyped fallback
+  and the ORDER BY keys; templates and the COALESCE tag stay inline.
+- `duckdb-udf-all` (`Coverage::All`) emits every hook as a UDF, for re-measuring on a real workload
+  or a newer DuckDB.
+
+Both dialects return the same rows as `duckdb`. Every `sparql2sql_duckdb_tests` case cross-checks
+its query under all three dialects, and CTest also registers the whole suite a second time with
+`SQL2RDF_TEST_DIALECT=duckdb-udf`.
 
 ---
 

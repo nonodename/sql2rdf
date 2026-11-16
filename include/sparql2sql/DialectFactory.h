@@ -7,7 +7,8 @@
 
 namespace sparql2sql {
 
-/// Create a SqlDialect by name (currently only "duckdb"). Throws
+/// Create a SqlDialect by name: "duckdb", "duckdb-udf" or "duckdb-udf-all"
+/// (see DuckDbUdfDialect). Throws
 /// std::runtime_error naming the supported set for any other name. This is
 /// the single seam future dialects (Postgres, ANSI, ...) plug into.
 std::unique_ptr<SqlDialect> createDialect(const std::string &name);

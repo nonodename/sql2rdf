@@ -411,6 +411,12 @@ if(SQL2RDF_BUILD_TESTS AND SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_D
   )
   add_dependencies(sparql2sql_duckdb_tests serd)
   catch_discover_tests(sparql2sql_duckdb_tests)
+  # The same suite again with every query translated for the UDF dialect
+  # (each case also cross-checks both dialects' rows; see testDialect()).
+  catch_discover_tests(sparql2sql_duckdb_tests
+    TEST_PREFIX "duckdb-udf: "
+    PROPERTIES ENVIRONMENT "SQL2RDF_TEST_DIALECT=duckdb-udf"
+  )
 endif()
 
 if(SQL2RDF_IS_TOP_LEVEL)

@@ -12,9 +12,12 @@ std::unique_ptr<SqlDialect> createDialect(const std::string &name) {
 		return std::unique_ptr<SqlDialect>(new DuckDbDialect());
 	}
 	if (name == "duckdb-udf") {
-		return std::unique_ptr<SqlDialect>(new DuckDbUdfDialect());
+		return std::unique_ptr<SqlDialect>(new DuckDbUdfDialect(DuckDbUdfDialect::Coverage::Measured));
 	}
-	throw std::runtime_error("unknown SQL dialect: '" + name + "' (supported: duckdb, duckdb-udf)");
+	if (name == "duckdb-udf-all") {
+		return std::unique_ptr<SqlDialect>(new DuckDbUdfDialect(DuckDbUdfDialect::Coverage::All));
+	}
+	throw std::runtime_error("unknown SQL dialect: '" + name + "' (supported: duckdb, duckdb-udf, duckdb-udf-all)");
 }
 
 } // namespace sparql2sql

@@ -6,8 +6,11 @@
 
 namespace sparql2sql {
 
+DuckDbUdfDialect::DuckDbUdfDialect(Coverage coverage) : coverage_(coverage) {
+}
+
 std::string DuckDbUdfDialect::name() const {
-	return "duckdb-udf";
+	return coverage_ == Coverage::All ? "duckdb-udf-all" : "duckdb-udf";
 }
 
 const SqlDialect &DuckDbUdfDialect::nativeDialect() const {
@@ -20,6 +23,9 @@ std::string DuckDbUdfDialect::iriTemplateProjection(const std::vector<TemplateSe
 	// literal (possibly ''), so the function never has to be told which
 	// argument is which. A template without placeholders is already a constant
 	// and gains nothing from a call.
+	if (coverage_ != Coverage::All) {
+		return native_.iriTemplateProjection(segments, sourceAlias);
+	}
 	bool anyPlaceholder = false;
 	for (const auto &seg : segments) {
 		anyPlaceholder = anyPlaceholder || seg.isPlaceholder;
@@ -55,6 +61,9 @@ std::string DuckDbUdfDialect::iriTemplateProjection(const std::vector<TemplateSe
 }
 
 std::string DuckDbUdfDialect::coalesceTag(const std::vector<std::pair<std::string, std::string>> &valueTagPairs) const {
+	if (coverage_ != Coverage::All) {
+		return native_.coalesceTag(valueTagPairs);
+	}
 	std::string sql = "sql2rdf_tag_coalesce(";
 	for (std::size_t i = 0; i < valueTagPairs.size(); ++i) {
 		sql += (i > 0 ? ", " : "");

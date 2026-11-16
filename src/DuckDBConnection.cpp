@@ -365,7 +365,11 @@ bool hasWordAt(std::string_view s, std::size_t pos, std::string_view word) {
 // --- tag classification (TagSql.h tagValueSpace / tagKindRank) -------------
 
 int valueSpace(std::string_view tag) {
-	using namespace sparql2sql;
+	using sparql2sql::kTagBlankNode;
+	using sparql2sql::kTagDatatypePrefix;
+	using sparql2sql::kTagIri;
+	using sparql2sql::kTagLangPrefix;
+	namespace xsd = sparql2sql::xsd;
 	if (tag == kTagIri) {
 		return kValueSpaceIri;
 	}
@@ -469,16 +473,16 @@ bool tryCastDouble(std::string_view s, double &result) {
 		// locale-dependent radix character.
 		std::string digits;
 		i = digitRun(s, i, digits);
-		long long scale = 0;
+		int64_t scale = 0;
 		if (i < n && s[i] == '.') {
 			const std::size_t before = digits.size();
 			i = digitRun(s, i + 1, digits);
-			scale = -static_cast<long long>(digits.size() - before);
+			scale = -static_cast<int64_t>(digits.size() - before);
 		}
 		if (digits.empty()) {
 			return false;
 		}
-		long long exponent = 0;
+		int64_t exponent = 0;
 		if (i < n && (s[i] == 'e' || s[i] == 'E')) {
 			std::size_t j = i + 1;
 			bool expNegative = false;
@@ -636,7 +640,11 @@ bool tryCastTimestamp(std::string_view s, int64_t &result) {
 	}
 	int month = 0;
 	int day = 0;
-	if (!parseDoubleDigit(s, pos, month) || pos >= n || s[pos++] != sep || pos >= n || !parseDoubleDigit(s, pos, day)) {
+	if (!parseDoubleDigit(s, pos, month) || pos >= n || s[pos] != sep) {
+		return false;
+	}
+	++pos;
+	if (pos >= n || !parseDoubleDigit(s, pos, day)) {
 		return false;
 	}
 	if (n - pos >= 5 && isSpace(s[pos]) && s[pos + 1] == '(' && lower(s[pos + 2]) == 'b' && lower(s[pos + 3]) == 'c' &&
@@ -678,17 +686,23 @@ bool tryCastTimestamp(std::string_view s, int64_t &result) {
 		}
 		int minute = 0;
 		int second = 0;
-		if (pos >= n || s[pos++] != ':' || !parseDoubleDigit(s, pos, minute) || minute >= 60) {
+		if (pos >= n || s[pos] != ':') {
 			return false;
 		}
+		++pos;
+		if (!parseDoubleDigit(s, pos, minute) || minute >= 60) {
+			return false;
+		}
+		bool hasSeconds = false;
 		if (pos < n && s[pos] == ':') {
 			++pos;
-			if (parseDoubleDigit(s, pos, second) && second >= 60) {
+			hasSeconds = parseDoubleDigit(s, pos, second);
+			if (hasSeconds && second >= 60) {
 				return false;
 			}
 		}
 		int64_t fraction = 0;
-		if (pos < n && s[pos] == '.') {
+		if (hasSeconds && pos < n && s[pos] == '.') { // no fraction without seconds
 			++pos;
 			for (int64_t mult = 100000; pos < n && isDigit(s[pos]); ++pos, mult /= 10) {
 				fraction += (s[pos] - '0') * mult;
@@ -777,7 +791,8 @@ bool compareDouble(Op op, double l, double r) {
 
 template <class T>
 bool compareOrdered(Op op, const T &l, const T &r) {
-	return applyOp(op, [&](bool swapped) { return swapped ? r < l : l < r; }, [&] { return l == r; });
+	return applyOp(
+	    op, [&](bool swapped) { return swapped ? r < l : l < r; }, [&] { return l == r; });
 }
 
 /// One operand of a comparison: a lexical form that may be NULL.
@@ -1018,7 +1033,7 @@ struct LogicalType {
 };
 
 void registerOne(duckdb_connection con, const std::string &name, std::size_t fixedVarcharArgs, bool varargs,
-                 duckdb_type returnType, duckdb_scalar_function_t fn, const Op *op, bool specialNullHandling) {
+                 duckdb_type returnType, duckdb_scalar_function_t fn, Op *op, bool specialNullHandling) {
 	const LogicalType varchar(DUCKDB_TYPE_VARCHAR);
 	const LogicalType ret(returnType);
 	duckdb_scalar_function f = duckdb_create_scalar_function();
@@ -1035,7 +1050,7 @@ void registerOne(duckdb_connection con, const std::string &name, std::size_t fix
 		duckdb_scalar_function_set_special_handling(f);
 	}
 	if (op != nullptr) {
-		duckdb_scalar_function_set_extra_info(f, const_cast<Op *>(op), nullptr);
+		duckdb_scalar_function_set_extra_info(f, op, nullptr);
 	}
 	duckdb_scalar_function_set_function(f, fn);
 	const duckdb_state state = duckdb_register_scalar_function(con, f);
@@ -1046,7 +1061,9 @@ void registerOne(duckdb_connection con, const std::string &name, std::size_t fix
 }
 
 void registerAll(duckdb_connection con) {
-	static const Op kOps[] = {Op::Eq, Op::Ne, Op::Lt, Op::Gt, Op::Le, Op::Ge};
+	// Non-const only because duckdb_scalar_function_set_extra_info takes a
+	// void*; the functions never write through it.
+	static Op kOps[] = {Op::Eq, Op::Ne, Op::Lt, Op::Gt, Op::Le, Op::Ge};
 	static const char *const kOpSql[] = {"=", "<>", "<", ">", "<=", ">="};
 	for (std::size_t i = 0; i < 6; ++i) {
 		const std::string suffix = sparql2sql::comparisonFunctionSuffix(kOpSql[i]);

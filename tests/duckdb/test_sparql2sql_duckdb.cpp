@@ -16,6 +16,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
+#include <memory>
 #include <map>
 #include <string>
 #include <vector>
@@ -34,7 +36,11 @@
 #include "r2rml/SQLRow.h"
 #include "r2rml/SQLValue.h"
 #include "sparql-parser/Parser.h"
+#include "sparql2sql/DialectFactory.h"
 #include "sparql2sql/DuckDbDialect.h"
+#include "sparql2sql/DuckDbUdfDialect.h"
+#include "sparql2sql/TagSql.h"
+#include "sparql2sql/TemplateUtil.h"
 #include "sparql2sql/TermInfo.h"
 #include "sparql2sql/TranslationError.h"
 #include "sparql2sql/Translator.h"
@@ -50,6 +56,19 @@ using sparql2sql::translateQuery;
 
 namespace {
 
+// The dialect every test in this file translates with: "duckdb" unless the
+// SQL2RDF_TEST_DIALECT environment variable names another (CTest registers
+// the whole suite a second time under "duckdb-udf"). Independently of that,
+// translateAndRun()/runWithCatalog() cross-check every query they run against
+// *both* dialects and require identical rows (see crossCheckDialects).
+const sparql2sql::SqlDialect &testDialect() {
+	static const std::unique_ptr<sparql2sql::SqlDialect> dialect = [] {
+		const char *name = std::getenv("SQL2RDF_TEST_DIALECT");
+		return sparql2sql::createDialect(name != nullptr && *name != '\0' ? name : "duckdb");
+	}();
+	return *dialect;
+}
+
 // A sentinel distinguishable from any real column value, used to represent
 // SQL NULL in the row maps built by collectRows() below.
 const char *const kNull = "\x01NULL\x01";
@@ -58,6 +77,7 @@ using Row = std::map<std::string, std::string>;
 
 std::unique_ptr<DuckDBConnection> makeSeededDatabase() {
 	std::unique_ptr<DuckDBConnection> conn(new DuckDBConnection(":memory:"));
+	conn->registerRdfFunctions();
 	// EMPNO is the declared key, so the catalog can prove a subject-keyed
 	// candidate arm needs no DISTINCT; MGR backs example_emp_dept.ttl's ex:knows
 	// edge, giving the +/* property-path closures a real relation to walk.
@@ -228,17 +248,54 @@ std::vector<Row> collectRows(r2rml::SQLResultSet &rs) {
 	return rows;
 }
 
+// Translate `query` with the inline ("duckdb") and both UDF ("duckdb-udf",
+// "duckdb-udf-all") dialects, run each, and require each to return `expected` -
+// the rows the test dialect produced. Row order is compared only for a query
+// with ORDER BY; otherwise as a multiset. A query using RAND()/UUID()/
+// STRUUID()/NOW() is compared on row count only, since its values legitimately
+// differ between two executions.
+void crossCheckDialects(DuckDBConnection &conn, const sparql::ast::Query &query, const R2RMLMapping &mapping,
+                        const sparql2sql::TypeCatalog *catalog, const std::vector<Row> &expected) {
+	static const DuckDbDialect inlineDialect;
+	static const sparql2sql::DuckDbUdfDialect udfDialect(sparql2sql::DuckDbUdfDialect::Coverage::Measured);
+	static const sparql2sql::DuckDbUdfDialect udfAllDialect(sparql2sql::DuckDbUdfDialect::Coverage::All);
+	for (const sparql2sql::SqlDialect *d : {static_cast<const sparql2sql::SqlDialect *>(&inlineDialect),
+	                                        static_cast<const sparql2sql::SqlDialect *>(&udfDialect),
+	                                        static_cast<const sparql2sql::SqlDialect *>(&udfAllDialect)}) {
+		const std::string sql = translateQuery(query, mapping, *d, catalog);
+		INFO("cross-check dialect " << d->name() << " SQL: " << sql);
+		std::unique_ptr<r2rml::SQLResultSet> rs = conn.execute(sql);
+		std::vector<Row> rows = collectRows(*rs);
+		const bool nondeterministic = sql.find("random()") != std::string::npos ||
+		                              sql.find("uuid()") != std::string::npos ||
+		                              sql.find("gen_random_uuid") != std::string::npos;
+		if (nondeterministic) {
+			CHECK(rows.size() == expected.size());
+		} else if (!query.solutionModifier.orderBy.empty()) {
+			CHECK(rows == expected);
+		} else {
+			std::vector<Row> a = rows;
+			std::vector<Row> b = expected;
+			std::sort(a.begin(), a.end());
+			std::sort(b.begin(), b.end());
+			CHECK(a == b);
+		}
+	}
+}
+
 std::vector<Row> translateAndRun(DuckDBConnection &conn, const std::string &rqFile, const std::string &ttlFile) {
 	Parser parser;
 	auto query = parser.parseFile(SOURCE_SPARQL2SQL_DIR + rqFile);
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR + ttlFile);
 	REQUIRE(mapping.isValid());
-	DuckDbDialect dialect;
+	const sparql2sql::SqlDialect &dialect = testDialect();
 	std::string sql = translateQuery(*query, mapping, dialect);
 	INFO("SQL: " << sql);
 	std::unique_ptr<r2rml::SQLResultSet> rs = conn.execute(sql);
-	return collectRows(*rs);
+	std::vector<Row> rows = collectRows(*rs);
+	crossCheckDialects(conn, *query, mapping, nullptr, rows);
+	return rows;
 }
 
 bool containsRow(const std::vector<Row> &rows, const Row &expected) {
@@ -646,7 +703,7 @@ TEST_CASE("sparql2sql_native_join.rq: a type catalog enables a native integer jo
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_native_join.ttl");
 	REQUIRE(mapping.isValid());
-	DuckDbDialect dialect;
+	const sparql2sql::SqlDialect &dialect = testDialect();
 
 	const Row expected = {{"V_CO", "http://ex.org/co/1"}, {"V_REL", "http://ex.org/rel/100-200"}, {"V_CHILD", "200"}};
 
@@ -702,7 +759,7 @@ TEST_CASE("sparql2sql_template_join.rq: two same-template subjects join on the n
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_template_join.ttl");
 	REQUIRE(mapping.isValid());
-	DuckDbDialect dialect;
+	const sparql2sql::SqlDialect &dialect = testDialect();
 
 	// Only PEOPLE.ID 1 has a matching WIDGETS row.
 	const Row expected = {{"V_T", "http://ex.org/thing/1"}, {"V_PN", "ALICE"}, {"V_WN", "GADGET"}};
@@ -742,7 +799,7 @@ TEST_CASE("sparql2sql_template_join_diff_placeholder.rq: same-shape templates wi
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_template_join_diff_placeholder.ttl");
 	REQUIRE(mapping.isValid());
-	DuckDbDialect dialect;
+	const sparql2sql::SqlDialect &dialect = testDialect();
 
 	// Only PRODUCTS.PROD_CODE 7 has a matching ITEMS row.
 	const Row expected = {{"V_T", "http://ex.org/data/PROD/7"}, {"V_PN", "WIDGET"}, {"V_D", "blue widget"}};
@@ -1475,7 +1532,7 @@ TEST_CASE("sparql2sql_view_types.rq: describing rr:sqlQuery views makes DATATYPE
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_view_types.ttl");
 	REQUIRE(mapping.isValid());
-	DuckDbDialect dialect;
+	const sparql2sql::SqlDialect &dialect = testDialect();
 
 	// The originally reported failure: a catalog read only from information_schema
 	// types EMP.ENAME but not the view's DNAME, and one untyped candidate arm
@@ -1532,7 +1589,7 @@ TEST_CASE("sparql2sql_view_types_computed.rq: a computed view column's datatype 
 	R2RMLParser mappingParser;
 	R2RMLMapping mapping = mappingParser.parse(SOURCE_R2RML_DIR "sparql2sql_view_types.ttl");
 	REQUIRE(mapping.isValid());
-	DuckDbDialect dialect;
+	const sparql2sql::SqlDialect &dialect = testDialect();
 
 	sparql2sql::TypeCatalog cat;
 	sql2rdf::loadTypeCatalog(*conn, &mapping, cat);
@@ -1779,6 +1836,7 @@ namespace {
 // in result rows rather than only in SQL text.
 std::unique_ptr<DuckDBConnection> makeKeyedDatabase() {
 	std::unique_ptr<DuckDBConnection> conn(new DuckDBConnection(":memory:"));
+	conn->registerRdfFunctions();
 	conn->execute("CREATE TABLE KEYED (ID INTEGER PRIMARY KEY, LABEL VARCHAR NOT NULL)");
 	conn->execute("INSERT INTO KEYED VALUES (1, 'DUP'), (2, 'DUP'), (3, 'UNIQUE')");
 	// No key, and two FULLY identical rows: R2RML forward generation yields a set
@@ -1801,11 +1859,13 @@ std::vector<Row> runWithCatalog(DuckDBConnection &conn, const std::string &query
                                 const sparql2sql::TypeCatalog *catalog) {
 	Parser parser;
 	auto query = parser.parseString(queryText);
-	DuckDbDialect dialect;
+	const sparql2sql::SqlDialect &dialect = testDialect();
 	std::string sql = translateQuery(*query, mapping, dialect, catalog);
 	INFO("SQL: " << sql);
 	std::unique_ptr<r2rml::SQLResultSet> rs = conn.execute(sql);
-	return collectRows(*rs);
+	std::vector<Row> rows = collectRows(*rs);
+	crossCheckDialects(conn, *query, mapping, catalog, rows);
+	return rows;
 }
 
 } // namespace
@@ -1862,7 +1922,7 @@ TEST_CASE("constraints: dropping a key-proven DISTINCT does not change the resul
 	// vacuous.
 	Parser parser;
 	auto query = parser.parseString(kQuery);
-	DuckDbDialect dialect;
+	const sparql2sql::SqlDialect &dialect = testDialect();
 	CHECK(translateQuery(*query, mapping, dialect, &cat).find("SELECT DISTINCT") == std::string::npos);
 	CHECK(translateQuery(*query, mapping, dialect, nullptr).find("SELECT DISTINCT") != std::string::npos);
 }
@@ -1886,7 +1946,7 @@ TEST_CASE("constraints: an unkeyed table keeps its DISTINCT, so duplicate rows s
 	                           "SELECT ?s ?l WHERE { ?s ex:label ?l }";
 	Parser parser;
 	auto query = parser.parseString(kQuery);
-	DuckDbDialect dialect;
+	const sparql2sql::SqlDialect &dialect = testDialect();
 	CHECK(translateQuery(*query, mapping, dialect, &cat).find("SELECT DISTINCT") != std::string::npos);
 
 	// Two fully identical rows denote ONE triple. If the rewrite ever over-fired
@@ -1909,7 +1969,7 @@ TEST_CASE("constraints: a NOT NULL column's guard is dropped without changing re
 	sql2rdf::loadTypeCatalog(*conn, &mapping, cat);
 	Parser parser;
 	auto query = parser.parseString(kQuery);
-	DuckDbDialect dialect;
+	const sparql2sql::SqlDialect &dialect = testDialect();
 	std::string sql = translateQuery(*query, mapping, dialect, &cat);
 	INFO("SQL: " << sql);
 	// KEYED.LABEL is declared NOT NULL, so the guard R2RML's null-column rule
@@ -1939,4 +1999,191 @@ TEST_CASE("DuckDBConnection::execute: a VARCHAR with an embedded NUL byte round-
 	CHECK(value->asString() == expected);
 	CHECK(value->asString().size() == 6);
 	CHECK_FALSE(rs->next());
+}
+
+// ---------------------------------------------------------------------------
+// duckdb-udf differential tests
+//
+// Every sql2rdf_* function must be result-identical to the inline SQL it
+// replaces. These run both spellings - each produced by the dialect hook
+// itself, so the comparison is against exactly what the translator emits -
+// over cross joins of edge-case lexical forms and type tags, and require zero
+// rows where they differ (`IS DISTINCT FROM`, so NULL vs FALSE counts as a
+// difference). The corpus is weighted towards what DuckDB's TRY_CAST accepts
+// or rejects, since the UDFs re-implement those casts.
+// ---------------------------------------------------------------------------
+namespace {
+
+const std::vector<std::string> &castCorpus() {
+	static const std::vector<std::string> corpus = {
+	    // numbers
+	    "0", "1", "-1", "+1", "+-1", "-+1", " 1 ", "\t2\t", "1.", ".1", ".", "-.5", "1e5", "1E-2", "1e", "1e+", "1e+05",
+	    "1e5.5", "1.e3", ".e3", "0x10", "1,5", "1_000", "1__0", "_1", "1_", "1._5", "1_.5", "1e3_0", "1_0e3", "1e_3",
+	    "5e-3_", "00012", "-0", "0.0", "10", "9", "10.0", "2.5", "1e400", "-1e400", "1e-400", "4.9e-324", "1e-322",
+	    "9007199254740993", "123456789012345678901234567890", "0.1000000000000000055511151231257827", "inf", "+inf",
+	    "-inf", "INF ", "Infinity", "-Infinity", "infinity1", "infini", "infx", "NaN", "-nan", "+nan", " NaN ",
+	    "nan(1)", "nan(", "nan()", "nan(a_b)", "nan(a-b)", "+-inf", "-+inf", "1 2", "+ 1", "1d",
+	    // booleans
+	    "true", "TRUE", "false", "t", "f", "T", "y", "Y", "n", "yes", "Yes", "no", "NO", "on", "off", " true", "false ",
+	    "tr",
+	    // temporals
+	    "2020-01-01", "2020-1-1", "2020/01/01", "2020 01 01", "2020\\01\\01", "2020-01-01T10:00:00", "2020-01-01 10:00",
+	    "2020-01-01T10", "2020-01-01T10:00:00Z", "2020-01-01T10:00:00+02:00", "2020-01-01T10:00:00-0530",
+	    "2020-01-01T10:00:00+02", "2020-01-01T10:00:00+02:", "2020-01-01T10:00:00+02:0", "2020-01-01T10:00:00+2:00",
+	    "2020-01-01T10:00:00+0", "2020-01-01T10:00:00+02:30:15", "2020-01-01T10:00:00+02:30:1",
+	    "2020-01-01T10:00:00+023015", "2020-01-01T10:00:00.123456789", "2020-01-01T10:00:00.5Z", "2020-01-01T10:00:00.",
+	    "2020-01-01T24:00:00", "2020-01-01T24:00:01", "2020-01-01T25:00:00", "2020-01-01T23:59:60", "2020-02-30",
+	    "2020-02-29", "2019-02-29", "1900-02-29", "2000-02-29", "2020-01-01 ", " 2020-01-01", "2020-01-01  10:00:00",
+	    "2020-01-01\t10:00:00", "2020-01-01T 10:00:00", "2020-01-01TT10:00", "2020-01-01T", "2020-01-01T10:00:00 UTC",
+	    "2020-01-01T10:00:00 utc", "2020-01-01T10:00:00 GMT", "2020-01-01T10:00:00 Etc/UTC",
+	    "2020-01-01T10:00:00 UTC+1", "2020-01-01T10:00:00 Europe/Paris", "2020-01-01 10:00:00  UTC",
+	    "2020-01-01 10:00:00 +02:00", "2020-01-01T10:00:00 Z", "2020-01-01T10:00:00Z ", "2020-01-01T10:00:00z",
+	    "2020-01-01T10:00:00Z+02", "2020-01-01T10:00:00 ", "2020-01-01 (BC)", "2020-01-01 (bc)", "2020-01-01(BC)",
+	    "2020-01-01 (BC)T10:00", "2020-01-01 (BC) ", "-2020-01-01", "-0001-01-01", "0-01-01", "1-01-01 (BC)",
+	    "20-01-01", "2020-001-01", "2020-13-01", "2020-00-01", "2020-01-011", "2020-01-01x", "2020-01-01T1:2:3",
+	    "2020-01-01T10:5", "2020-01-01T10:00:", "2020-01-01T10:00:5", "2020-01-01T10:00.5", "2020-01-01T10:00:.5",
+	    "2020-01-01T10:00:5.25", "2020-01-01T010:00:00", "2020-01-01T10:000:00", "2020-01-01T000000024:00:00",
+	    "2020-01-01T1234567890:00:00", "99999-01-01", "294247-01-10", "294248-01-01", "99999999-01-01",
+	    "294247-01-10T04:00:54.775806", "294247-01-10T04:00:54.775807", "-290308-12-21", "-290308-12-22", "epoch",
+	    "  epoch  ", "-epoch", "epochs", "infinity", "-infinity", "Infinity ", "infinity 10:00", " inf", "inf ",
+	    " -inf", "-inf ", "+infinity", "12:00:00", "20200101", "2021-06-15T08:30:00",
+	    // strings / IRIs
+	    "", " ", "a", "A", "b", "abc", "abd", "ab", "\xc3\xa9", "\xe2\x82\xac", "http://ex.org/a", "http://ex.org/b"};
+	return corpus;
+}
+
+const std::vector<std::string> &tagCorpus() {
+	static const std::vector<std::string> tags = []() {
+		std::vector<std::string> t = {"I", "B", "L", "@en", "@fr", "@", "", "D", "Dhttp://other.org/dt", "x"};
+		for (const char *iri : {sparql2sql::xsd::kInteger, sparql2sql::xsd::kLong, sparql2sql::xsd::kInt,
+		                        sparql2sql::xsd::kShort, sparql2sql::xsd::kByte, sparql2sql::xsd::kDecimal,
+		                        sparql2sql::xsd::kDouble, sparql2sql::xsd::kFloat, sparql2sql::xsd::kString,
+		                        sparql2sql::xsd::kBoolean, sparql2sql::xsd::kDate, sparql2sql::xsd::kDateTime}) {
+			t.push_back(std::string(1, sparql2sql::kTagDatatypePrefix) + iri);
+		}
+		return t;
+	}();
+	return tags;
+}
+
+/// A table `name(v VARCHAR)` holding `values` plus one NULL row.
+void createValueTable(DuckDBConnection &conn, const std::string &name, const std::vector<std::string> &values) {
+	const DuckDbDialect d;
+	conn.execute("CREATE TABLE " + name + " (v VARCHAR)");
+	std::string sql = "INSERT INTO " + name + " VALUES (NULL)";
+	for (const auto &v : values) {
+		sql += ", (" + d.stringLiteral(v) + ")";
+	}
+	conn.execute(sql);
+}
+
+std::unique_ptr<DuckDBConnection> makeDifferentialDatabase() {
+	std::unique_ptr<DuckDBConnection> conn(new DuckDBConnection(":memory:"));
+	conn->registerRdfFunctions();
+	createValueTable(*conn, "vals", castCorpus());
+	createValueTable(*conn, "tags", tagCorpus());
+	// A small value set for the all-tag-pairs sweep, and per-space tag pairs
+	// for the all-value-pairs sweep (where the casts are what is under test).
+	createValueTable(*conn, "few",
+	                 {"1", "10", "2.5", "abc", "true", "2020-01-01", "2020-01-01T10:00:00Z", "inf", "nan", "", "x y"});
+	return conn;
+}
+
+/// Rows of `fromWhere` where the inline and UDF spellings disagree, with a few
+/// examples rendered for the failure message.
+std::size_t countMismatches(DuckDBConnection &conn, const std::string &inlineSql, const std::string &udfSql,
+                            const std::string &from, const std::string &showCols, std::string &examples) {
+	const std::string where = " WHERE (" + inlineSql + ") IS DISTINCT FROM (" + udfSql + ")";
+	auto rs = conn.execute("SELECT count(*) AS n FROM " + from + where);
+	rs->next();
+	const std::size_t n = static_cast<std::size_t>(std::stoll(rs->getCurrentRow().getValue("N")->asString()));
+	if (n > 0) {
+		auto ex = conn.execute("SELECT " + showCols + ", CAST((" + inlineSql + ") AS VARCHAR) AS inline_result, " +
+		                       "CAST((" + udfSql + ") AS VARCHAR) AS udf_result FROM " + from + where + " LIMIT 8");
+		for (const auto &row : collectRows(*ex)) {
+			for (const auto &kv : row) {
+				examples += kv.first + "=[" + kv.second + "] ";
+			}
+			examples += "\n";
+		}
+		UNSCOPED_INFO("mismatches, e.g.:\n" << examples);
+	}
+	return n;
+}
+
+} // namespace
+
+TEST_CASE("duckdb-udf: term comparisons match the inline CASE SQL over every tag pair") {
+	auto conn = makeDifferentialDatabase();
+	const DuckDbDialect inl;
+	const sparql2sql::DuckDbUdfDialect udf(sparql2sql::DuckDbUdfDialect::Coverage::All);
+	const std::string from = "few a, tags ta, few b, tags tb";
+	const std::string show = "a.v AS l, ta.v AS lt, b.v AS r, tb.v AS rt";
+	for (bool negated : {false, true}) {
+		std::string ex;
+		INFO("negated=" << negated);
+		CHECK(countMismatches(*conn, inl.termEquality("a.v", "ta.v", "b.v", "tb.v", negated),
+		                      udf.termEquality("a.v", "ta.v", "b.v", "tb.v", negated), from, show, ex) == 0);
+	}
+	for (const char *op : {"<", ">", "<=", ">="}) {
+		std::string ex;
+		INFO("op=" << op);
+		CHECK(countMismatches(*conn, inl.termOrdering("a.v", "ta.v", "b.v", "tb.v", op),
+		                      udf.termOrdering("a.v", "ta.v", "b.v", "tb.v", op), from, show, ex) == 0);
+	}
+}
+
+TEST_CASE("duckdb-udf: typed and untyped comparisons match the inline SQL over every value pair") {
+	auto conn = makeDifferentialDatabase();
+	const DuckDbDialect inl;
+	const sparql2sql::DuckDbUdfDialect udf(sparql2sql::DuckDbUdfDialect::Coverage::All);
+	// One tag per value space whose comparison casts: numeric, temporal (date
+	// and dateTime mixed), boolean, xsd:string, untyped.
+	conn->execute("CREATE TABLE spaces (lt VARCHAR, rt VARCHAR)");
+	const std::string d(1, sparql2sql::kTagDatatypePrefix);
+	conn->execute("INSERT INTO spaces VALUES ('" + d + sparql2sql::xsd::kInteger + "', '" + d +
+	              sparql2sql::xsd::kDouble + "'), ('" + d + sparql2sql::xsd::kDate + "', '" + d +
+	              sparql2sql::xsd::kDateTime + "'), ('" + d + sparql2sql::xsd::kBoolean + "', '" + d +
+	              sparql2sql::xsd::kBoolean + "'), ('" + d + sparql2sql::xsd::kString + "', '" + d +
+	              sparql2sql::xsd::kString + "'), ('L', 'L')");
+	const std::string from = "vals a, vals b, spaces s";
+	const std::string show = "a.v AS l, s.lt AS lt, b.v AS r";
+	for (const char *op : {"=", "<>", "<", ">", "<=", ">="}) {
+		INFO("op=" << op);
+		const bool eq = std::string(op) == "=" || std::string(op) == "<>";
+		std::string ex;
+		const std::string inlineSql = eq ? inl.termEquality("a.v", "s.lt", "b.v", "s.rt", std::string(op) == "<>")
+		                                 : inl.termOrdering("a.v", "s.lt", "b.v", "s.rt", op);
+		const std::string udfSql = eq ? udf.termEquality("a.v", "s.lt", "b.v", "s.rt", std::string(op) == "<>")
+		                              : udf.termOrdering("a.v", "s.lt", "b.v", "s.rt", op);
+		CHECK(countMismatches(*conn, inlineSql, udfSql, from, show, ex) == 0);
+		std::string ex2;
+		CHECK(countMismatches(*conn, inl.untypedCompare("a.v", "b.v", op), udf.untypedCompare("a.v", "b.v", op),
+		                      "vals a, vals b", "a.v AS l, b.v AS r", ex2) == 0);
+	}
+}
+
+TEST_CASE("duckdb-udf: tag classification, tag COALESCE and IRI templates match the inline SQL") {
+	auto conn = makeDifferentialDatabase();
+	const DuckDbDialect inl;
+	const sparql2sql::DuckDbUdfDialect udf(sparql2sql::DuckDbUdfDialect::Coverage::All);
+	std::string ex;
+	CHECK(countMismatches(*conn, inl.termValueSpace("t.v"), udf.termValueSpace("t.v"), "tags t", "t.v AS tag", ex) ==
+	      0);
+	CHECK(countMismatches(*conn, inl.termKindRank("t.v"), udf.termKindRank("t.v"), "tags t", "t.v AS tag", ex) == 0);
+	CHECK(countMismatches(*conn, sparql2sql::tagIsNumeric("t.v", inl), sparql2sql::tagIsNumeric("t.v", udf), "tags t",
+	                      "t.v AS tag", ex) == 0);
+	const std::vector<std::pair<std::string, std::string>> pairs = {{"a.v", "ta.v"}, {"b.v", "tb.v"}};
+	CHECK(countMismatches(*conn, inl.coalesceTag(pairs), udf.coalesceTag(pairs), "few a, few ta, few b, few tb",
+	                      "a.v AS a, ta.v AS ta, b.v AS b, tb.v AS tb", ex) == 0);
+	// IRI templates: placeholder first/last/adjacent, over every corpus value
+	// (UTF-8, reserved characters, empty string, NULL).
+	conn->execute("CREATE TABLE src AS SELECT a.v AS \"X\", b.v AS \"Y\" FROM vals a, few b");
+	for (const char *tmpl : {"http://ex.org/{X}", "{X}/tail", "http://ex.org/{X}/{Y}#", "{X}{Y}", "pre{X}{Y}post",
+	                         "http://ex.org/{X}-{X}"}) {
+		INFO("template " << tmpl);
+		const auto segments = sparql2sql::parseTemplate(tmpl);
+		CHECK(countMismatches(*conn, inl.iriTemplateProjection(segments, "s"), udf.iriTemplateProjection(segments, "s"),
+		                      "src s", "s.\"X\" AS x, s.\"Y\" AS y", ex) == 0);
+	}
 }

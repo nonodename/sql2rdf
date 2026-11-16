@@ -6,7 +6,8 @@ namespace sparql2sql {
 
 /// DuckDB dialect that renders RDF term logic as calls to scalar functions
 /// registered on the connection, instead of DuckDbDialect's inline CASE SQL.
-/// Selected by name as "duckdb-udf".
+/// Selected by name as "duckdb-udf" (Coverage::Measured) or "duckdb-udf-all"
+/// (Coverage::All).
 ///
 /// This library only *emits* the calls - it has no DuckDB dependency. The
 /// functions themselves are implemented and registered by the DuckDB-backed
@@ -28,6 +29,19 @@ namespace sparql2sql {
 ///   sql2rdf_untyped_{eq,ne,lt,gt,le,ge}(l, r)     -> BOOLEAN  untyped fallback compare
 class DuckDbUdfDialect : public DuckDbDialect {
 public:
+	/// Which hooks render as UDF calls.
+	///  - Measured ("duckdb-udf"): only those that benchmarked no slower than
+	///    the inline SQL - tag-dispatched comparisons, the untyped comparison
+	///    fallback, and the ORDER BY tag keys. IRI templates and the COALESCE
+	///    tag stay inline, where DuckDB's own vectorised url_encode/|| and its
+	///    constant folding of CASE-over-constant-tags beat an opaque call (see
+	///    doc/api.md for the numbers).
+	///  - All ("duckdb-udf-all"): every hook, for re-measuring on a real
+	///    workload or a newer DuckDB.
+	enum class Coverage { Measured, All };
+
+	explicit DuckDbUdfDialect(Coverage coverage = Coverage::Measured);
+
 	std::string name() const override;
 
 	const SqlDialect &nativeDialect() const override;
@@ -45,6 +59,7 @@ public:
 
 private:
 	DuckDbDialect native_;
+	Coverage coverage_;
 };
 
 /// The suffix sql2rdf_<suffix> / sql2rdf_untyped_<suffix> uses for a SQL
