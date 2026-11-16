@@ -1290,7 +1290,7 @@ constant tags, which an opaque call blocks. So the dialect has two coverage leve
   or a newer DuckDB.
 
 Both dialects return the same rows as `duckdb`. Every `sparql2sql_duckdb_tests` case cross-checks
-its query under all three dialects, and CTest also registers the whole suite a second time with
+its query under all three dialects, and CTest also runs the whole binary once more as `sparql2sql_duckdb_tests_duckdb_udf`, with
 `SQL2RDF_TEST_DIALECT=duckdb-udf`.
 
 ---

@@ -411,11 +411,14 @@ if(SQL2RDF_BUILD_TESTS AND SQL2RDF_BUILD_CLI AND (DUCKDB_FOUND OR USE_EMBEDDED_D
   )
   add_dependencies(sparql2sql_duckdb_tests serd)
   catch_discover_tests(sparql2sql_duckdb_tests)
-  # The same suite again with every query translated for the UDF dialect
-  # (each case also cross-checks both dialects' rows; see testDialect()).
-  catch_discover_tests(sparql2sql_duckdb_tests
-    TEST_PREFIX "duckdb-udf: "
-    PROPERTIES ENVIRONMENT "SQL2RDF_TEST_DIALECT=duckdb-udf"
+  # The same suite again, as one CTest entry, with every query translated for
+  # the UDF dialect (each case also cross-checks all dialects' rows; see
+  # testDialect()). Deliberately not a second catch_discover_tests() call: its
+  # generated file name ignores TEST_PREFIX/PROPERTIES, so Ninja rejects two
+  # calls on one target as a duplicate output.
+  add_test(NAME sparql2sql_duckdb_tests_duckdb_udf COMMAND sparql2sql_duckdb_tests)
+  set_tests_properties(sparql2sql_duckdb_tests_duckdb_udf PROPERTIES
+    ENVIRONMENT "SQL2RDF_TEST_DIALECT=duckdb-udf"
   )
 endif()
 
