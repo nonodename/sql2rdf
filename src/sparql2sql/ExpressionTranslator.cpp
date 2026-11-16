@@ -498,7 +498,7 @@ std::string translateBuiltIn(const BuiltInCallExpr &call, const TranslatedPatter
 			}
 			sql += argSql(i);
 		}
-		sql += ")";
+		sql += ')';
 		return sql;
 	}
 	case BuiltinFunction::If:

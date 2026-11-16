@@ -38,14 +38,14 @@ std::string DuckDbDialect::concat(const std::vector<std::string> &parts) const {
 	}
 	std::string out;
 	out.reserve(parts.size() * 16); // rough guess to avoid too many reallocs
-	out = "(";
+	out = '(';
 	for (std::size_t i = 0; i < parts.size(); ++i) {
 		if (i > 0) {
 			out += " || ";
 		}
 		out += parts[i];
 	}
-	out += ")";
+	out += ')';
 	return out;
 }
 
@@ -114,7 +114,7 @@ std::string DuckDbDialect::regexMatch(const std::string &text, const std::string
 	if (!flags.empty()) {
 		call += ", " + stringLiteral(flags);
 	}
-	call += ")";
+	call += ')';
 	return negated ? "(NOT " + call + ")" : call;
 }
 

@@ -117,19 +117,19 @@ std::string pathStr(const PropertyPathExpr &p) {
 		bool first = true;
 		for (const auto &f : n.forward) {
 			if (!first) {
-				s += "|";
+				s += '|';
 			}
 			s += f->lexicalForm;
 			first = false;
 		}
 		for (const auto &inv : n.inverse) {
 			if (!first) {
-				s += "|";
+				s += '|';
 			}
-			s += "^" + inv->lexicalForm;
+			s += '^' + inv->lexicalForm;
 			first = false;
 		}
-		return s + ")";
+		return s + ')';
 	}
 	}
 	return "<?>";
@@ -363,14 +363,14 @@ std::string exprStr(const Expression &e) {
 			s += "DISTINCT ";
 		}
 		if (a.star) {
-			s += "*";
+			s += '*';
 		} else if (a.arg) {
 			s += exprStr(*a.arg);
 		}
 		if (a.hasSeparator) {
 			s += "; SEPARATOR=\"" + a.separator + "\"";
 		}
-		return s + ")";
+		return s + ')';
 	}
 	case ExprKind::Exists: {
 		const auto &ex = static_cast<const ExistsExpr &>(e);

@@ -58,8 +58,8 @@ std::string AbstractMap::percentEncode(std::string_view value) {
 			out.push_back(static_cast<char>(c));
 		} else {
 			out.push_back('%');
-			out.push_back(hexDigits[c >> 4]);   // Upper nibble
-			out.push_back(hexDigits[c & 0x0F]); // Lower nibble
+			out.push_back(hexDigits[c >> 4u]);   // Upper nibble
+			out.push_back(hexDigits[c & 0x0Fu]); // Lower nibble
 		}
 	}
 
